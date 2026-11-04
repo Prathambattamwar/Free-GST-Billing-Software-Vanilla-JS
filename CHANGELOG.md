@@ -1,3 +1,11 @@
+## 1.10.90 — 4 November 2026
+
+### Interface
+- Removed all contextual question-mark help icons and their external-guide tooltips/links across the entire application.
+- Kept normal information text, form descriptions, keyboard shortcuts and core application actions unchanged.
+- Replaced the generic confirmation fallback question icon with a neutral information icon.
+- Updated the service-worker cache key so GitHub Pages clients fetch the updated interface.
+
 ## 1.10.89 — 4 November 2026
 
 ### Interface

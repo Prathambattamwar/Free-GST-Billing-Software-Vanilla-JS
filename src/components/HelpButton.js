@@ -1,29 +1,5 @@
-import { h, Fragment } from '../vanilla/dom.js';
-import { HelpCircle } from '../vanilla/icons.js';
-import { docsLink } from '../utils.js';
-/*
- * v1.10.22 — Per-view help button.
- *
- * v1.10.83 - it opens that part of the online guide straight away, in the
- * browser (asked for: "all docs buttons should take the user to the same
- * module in the docs"). The small pop-up summary it used to show first is
- * gone; the guide is the one place help is kept up to date.
- *
- * `doc` is "page" or "page#section" of the documentation site. `title` names
- * what the guide is about (shown on hover and read out by screen readers).
- * Older callers still pass `body` / `children`; they are no longer shown.
- */
-export default function HelpButton({ title, doc, size = 18, style }) {
-    // The invoices documentation page is no longer part of the app's help UI.
-    // Hide every contextual help control that would open invoices.html, while
-    // keeping help links for unrelated screens (GST returns, reports, settings).
-    const docPage = String(doc || '').split('#')[0].trim().toLowerCase();
-    if (docPage === 'invoices') return null;
-
-    const label = `${title ? title.replace(/\s*[—-]\s*how to use$/i, '') : 'This screen'}: open the guide (opens in your browser)`;
-    // A small "?" sits inline after a card or section title: a compact box and a
-    // gap from the text, so it does not make the title row taller.
-    const inline = size < 18 ? { width: size + 8, height: size + 8, marginLeft: 6, flexShrink: 0 } : null;
-    return (h("a", { href: docsLink(doc || ''), target: "_blank", rel: "noopener noreferrer", className: "icon-btn", title: label, "aria-label": label, style: { color: 'var(--primary)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', verticalAlign: 'middle', ...inline, ...style } },
-        h(HelpCircle, { size: size })));
+// Contextual question-mark help controls are intentionally disabled app-wide.
+// Existing call-sites safely render nothing; core app features remain unchanged.
+export default function HelpButton() {
+    return null;
 }

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, h, Fragment } from '../vanilla/dom.js';
-import { AlertTriangle, Trash2, HelpCircle } from '../vanilla/icons.js';
+import { AlertTriangle, Trash2, Info } from '../vanilla/icons.js';
 // v1.10.34 — In-app replacement for `window.confirm()` and `window.prompt()`.
 // The native dialogs look like OS chrome (title bar with the URL, generic
 // OK/Cancel buttons, no branding, no icon), which broke the product's
@@ -133,7 +133,7 @@ export default function ConfirmModalContainer() {
     const tone = modal.tone || 'default';
     const isDanger = tone === 'danger';
     const isWarning = tone === 'warning';
-    const Icon = isDanger ? Trash2 : isWarning ? AlertTriangle : HelpCircle;
+    const Icon = isDanger ? Trash2 : isWarning ? AlertTriangle : Info;
     const iconColor = isDanger ? 'var(--danger)' : isWarning ? '#f59e0b' : 'var(--primary)';
     const iconBg = isDanger ? 'var(--danger-light)' : isWarning ? 'var(--warn-bg)' : 'var(--primary-light)';
     const primaryLabel = modal.confirmLabel || (modal.kind === 'prompt' ? 'OK' : (isDanger ? 'Delete' : 'Confirm'));
