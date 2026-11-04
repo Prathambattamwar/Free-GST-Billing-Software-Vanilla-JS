@@ -1,3 +1,10 @@
+## 1.10.89 — 4 November 2026
+
+### Interface
+- Removed all contextual help buttons that opened the external `invoices.html` documentation page, including invoice form, currency and compliance help links.
+- Kept unrelated contextual help links for settings, reports, GST returns and other screens.
+- Updated the service-worker cache key so GitHub Pages users receive the change.
+
 # GST Billing Software — Changelog
 
 ## 1.10.88 — 4 November 2026

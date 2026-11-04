@@ -14,6 +14,12 @@ import { docsLink } from '../utils.js';
  * Older callers still pass `body` / `children`; they are no longer shown.
  */
 export default function HelpButton({ title, doc, size = 18, style }) {
+    // The invoices documentation page is no longer part of the app's help UI.
+    // Hide every contextual help control that would open invoices.html, while
+    // keeping help links for unrelated screens (GST returns, reports, settings).
+    const docPage = String(doc || '').split('#')[0].trim().toLowerCase();
+    if (docPage === 'invoices') return null;
+
     const label = `${title ? title.replace(/\s*[—-]\s*how to use$/i, '') : 'This screen'}: open the guide (opens in your browser)`;
     // A small "?" sits inline after a card or section title: a compact box and a
     // gap from the text, so it does not make the title row taller.
