@@ -14,7 +14,6 @@ import ActionsMenu from './ActionsMenu.js';
 import BulkCsvImport from './BulkCsvImport.js';
 import PrintPreviewModal from './PrintPreviewModal.js';
 import SupportNudge from './SupportNudge.js';
-import WelcomeCard from './WelcomeCard.js';
 import { toast } from './Toast.js';
 import { confirmAction } from './ConfirmModal.js';
 import { useCostCentres } from './useCostCentres.js';
@@ -1517,7 +1516,6 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
             h("button", { className: "btn btn-primary", onClick: onNew },
                 h(Plus, { size: 18 }),
                 " New Invoice")),
-        onOpenSupport && h(WelcomeCard, { invoiceCount: bills.length, onOpenSupport: onOpenSupport }),
         startedSteps && (h("div", { className: "glass-panel p-6 mb-6" },
             h("div", { style: { display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.9rem' } },
                 h("span", { style: { fontSize: '1.15rem' } }, "\uD83D\uDC4B"),

@@ -3593,59 +3593,6 @@ html:not([data-theme="dark"]) .mobile-topbar .topbar-btn { background: rgba(15, 
 }
 .app-lock-help { font-size: 0.8rem; color: var(--text-muted); text-align: left; line-height: 1.5; }
 
-/* v1.10.81 - welcome note for new users (WelcomeCard.js). Dark first, as the
-   rest of this file; light below. */
-.welcome-card {
-  position: relative; margin-bottom: 1.5rem; padding: 1.5rem 1.75rem 1.35rem;
-  border-radius: 16px; border: 1px solid rgba(129, 140, 248, 0.35);
-  background: linear-gradient(135deg, rgba(37, 99, 235, 0.20) 0%, rgba(124, 58, 237, 0.16) 55%, rgba(225, 29, 72, 0.14) 100%);
-  color: #e2e8f0;
-}
-.welcome-card h2 { margin: 0 2rem 0.45rem 0; font-size: 1.45rem; font-weight: 800; letter-spacing: -0.01em; color: #fff; }
-.welcome-card-lead { margin: 0 0 0.9rem; max-width: 62ch; line-height: 1.55; color: #cbd5e1; }
-.welcome-card-points { list-style: none; margin: 0 0 1.15rem; padding: 0; display: grid; gap: 0.45rem; max-width: 70ch; }
-.welcome-card-points li { position: relative; padding-left: 1.4rem; line-height: 1.5; }
-.welcome-card-points li::before { content: '✓'; position: absolute; left: 0; top: 0; font-weight: 800; color: #4ade80; }
-.welcome-card-points strong { color: #fff; }
-.welcome-card-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
-.welcome-card-btn {
-  display: inline-flex; align-items: center; gap: 0.45rem; padding: 0.6rem 1.05rem; border-radius: 10px;
-  font: inherit; font-size: 0.9rem; font-weight: 600; text-decoration: none; cursor: pointer;
-  border: 1px solid rgba(255, 255, 255, 0.25); background: rgba(255, 255, 255, 0.08); color: #fff;
-}
-.welcome-card-btn:hover { background: rgba(255, 255, 255, 0.16); }
-.welcome-card-btn-primary { background: #e11d48; border-color: #e11d48; box-shadow: 0 6px 18px rgba(225, 29, 72, 0.35); }
-.welcome-card-btn-primary:hover { background: #be123c; }
-.welcome-card-btn-quiet { background: transparent; border-color: transparent; color: #cbd5e1; text-decoration: underline; text-underline-offset: 3px; }
-.welcome-card-btn-quiet:hover { background: transparent; color: #fff; }
-.welcome-card-btn:focus-visible, .welcome-card-close:focus-visible { outline: 2px solid #93c5fd; outline-offset: 2px; }
-.welcome-card-close {
-  position: absolute; top: 0.8rem; right: 0.8rem; width: 34px; height: 34px; border-radius: 8px;
-  display: flex; align-items: center; justify-content: center; cursor: pointer;
-  background: transparent; border: 0; color: #cbd5e1;
-}
-.welcome-card-close:hover { background: rgba(255, 255, 255, 0.1); color: #fff; }
-html:not([data-theme="dark"]) .welcome-card {
-  border-color: #c7d2fe; color: #334155;
-  background: linear-gradient(135deg, #eff6ff 0%, #f5f3ff 55%, #fff1f2 100%);
-}
-html:not([data-theme="dark"]) .welcome-card h2,
-html:not([data-theme="dark"]) .welcome-card-points strong { color: #0f172a; }
-html:not([data-theme="dark"]) .welcome-card-lead { color: #475569; }
-html:not([data-theme="dark"]) .welcome-card-points li::before { color: #16a34a; }
-html:not([data-theme="dark"]) .welcome-card-btn { background: #fff; border-color: #cbd5e1; color: #0f172a; }
-html:not([data-theme="dark"]) .welcome-card-btn:hover { background: #f1f5f9; }
-html:not([data-theme="dark"]) .welcome-card-btn-primary { background: #e11d48; border-color: #e11d48; color: #fff; }
-html:not([data-theme="dark"]) .welcome-card-btn-primary:hover { background: #be123c; }
-html:not([data-theme="dark"]) .welcome-card-btn-quiet { background: transparent; border-color: transparent; color: #475569; }
-html:not([data-theme="dark"]) .welcome-card-close { color: #64748b; }
-html:not([data-theme="dark"]) .welcome-card-close:hover { background: rgba(15, 23, 42, 0.06); color: #0f172a; }
-@media (max-width: 600px) {
-  .welcome-card { padding: 1.2rem 1.1rem 1.1rem; }
-  .welcome-card h2 { font-size: 1.2rem; }
-  .welcome-card-btn { flex: 1 1 100%; justify-content: center; }
-}
-
 /* v1.10.86 — Floating rounded navigation panel.
    The desktop menu sits slightly inset from the viewport so it reads as a
    separate floating surface instead of a full-height attached rail. */
