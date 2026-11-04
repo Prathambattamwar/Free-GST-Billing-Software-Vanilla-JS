@@ -626,7 +626,7 @@ async function handleApi(url, init = {}) {
 
   // These actions depend on controlling the user's local operating system or
   // reading arbitrary local folders. Browsers intentionally do not allow that.
-  if (parts[0] === 'control-panel') return errorResponse('This control-panel action is not available in the browser-only edition. Your records are stored in this browser's local database.', 501, { ok: false });
+  if (parts[0] === 'control-panel') return errorResponse("This control-panel action is not available in the browser-only edition. Your records are stored in this browser's local database.", 501, { ok: false });
   return errorResponse(`Unsupported browser API route: /api/${path}`, 404);
 }
 

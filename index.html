@@ -10,7 +10,7 @@
     <!-- Restrictive policy for the static browser app and pinned ESM/OCR CDNs. -->
 <meta http-equiv="Content-Security-Policy" content="
       default-src 'self';
-      script-src 'self' 'wasm-unsafe-eval' 'sha256-DnVQgMFxRrGv43m80dPaseAC1a8Av3nESN5gad92HEU=' https://esm.sh https://*.esm.sh https://cdn.jsdelivr.net;
+      script-src 'self' 'wasm-unsafe-eval' 'sha256-MDSOUMdPdupsjszwXE66lKn93vKsZaX5Y+9SaYhZUmI=' https://esm.sh https://*.esm.sh https://cdn.jsdelivr.net;
       worker-src 'self' blob: https://cdn.jsdelivr.net;
       style-src 'self' 'unsafe-inline';
       font-src 'self' data:;
@@ -105,6 +105,9 @@
       }
     }
     </script>
+    <style>
+      @keyframes fgsb-spin { to { transform: rotate(360deg); } }
+    </style>
   </head>
   <body>
     <!-- Static application entry. All source modules load directly in the browser. -->
@@ -115,7 +118,15 @@
       </div>
     </noscript>
 
-    <div id="root"></div>
+    <div id="root">
+      <main id="app-startup-fallback" role="status" aria-live="polite" style="min-height:100vh;display:grid;place-items:center;padding:24px;background:#f0f2f5;color:#111827;font-family:system-ui,sans-serif">
+        <section style="max-width:520px;padding:28px 32px;border:1px solid #e5e7eb;border-radius:16px;background:#fff;box-shadow:0 12px 36px rgba(15,23,42,.08);text-align:center">
+          <div style="width:34px;height:34px;margin:0 auto 16px;border:3px solid #dbeafe;border-top-color:#2563eb;border-radius:50%;animation:fgsb-spin .8s linear infinite"></div>
+          <h1 style="margin:0 0 8px;font-size:22px">Free GST Billing Software</h1>
+          <p style="margin:0;color:#64748b;line-height:1.6">Loading your billing workspace…</p>
+        </section>
+      </main>
+    </div>
     <script type="module" src="./src/main.js"></script>
   </body>
 </html>

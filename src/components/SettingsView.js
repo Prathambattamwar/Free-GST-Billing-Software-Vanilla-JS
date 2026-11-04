@@ -1547,7 +1547,7 @@ function BackupAndTrashPanel() {
     const handlePurgeTrash = async (id) => {
         if (!await confirmAction({
             title: 'Permanently delete this invoice?',
-            message: 'This bypasses the 30-day Trash grace period. The invoice record is removed from this browser's local data for good. Downloaded PDF copies saved outside the app are unaffected.',
+            message: "This bypasses the 30-day Trash grace period. The invoice record is removed from this browser's local data for good. Downloaded PDF copies saved outside the app are unaffected.",
             confirmLabel: 'Delete permanently',
             tone: 'danger',
         }))
