@@ -1,0 +1,1313 @@
+import { h, Fragment } from '../vanilla/dom.js';
+import FrameworkFree, { useState, useEffect, useMemo } from '../vanilla/dom.js';
+import QRCode from 'qrcode';
+import SignatureImages from './SignatureImages.js';
+import DOMPurify from 'dompurify';
+import { numberToWords, printedSubtotal, formatCurrency, INVOICE_TYPES, getCountryConfig, CURRENCY_NAMES, formatExchangeRateLine, getAccountById, getPaperSize, resolveLineDiscount, htmlHasText, splitNumberedTerms, invoiceOptionOn, DEFAULT_DECLARATION, filledOrderDetails, formatShortDate, isModuleEnabled, getStateCode, COUNTRIES } from '../utils.js';
+import { getEnabledModules } from '../store.js';
+import { getPrintSettings, getLabel, formatCurrencyEx, formatDate } from '../utils/printSettings.js';
+import InvoiceGridLayout, { HsnSummaryTable } from './InvoiceGridLayout.js';
+import { exportDeclaration } from '../utils/lut.js';
+import { purposeCodeText } from '../utils/purposeCodes.js';
+// v1.10.36 — Optional `previewOnly` prop suppresses the internal
+// `id="invoice-preview"`. The parent's on-screen preview keeps the id
+// (needed by the @media print CSS rules in index.css:1258 for the
+// A4 window.print fallback path); the PrintPreviewModal's *second*
+// instance renders with previewOnly=true so it doesn't create a
+// duplicate id on the page — HTML-invalid + could confuse getElementById
+// lookups.
+const InvoicePreview = FrameworkFree.forwardRef(({ profile: profileProp, client, details, items, totals, invoiceType = 'tax-invoice', customTerms, customNotes, extraSections = [], options = {}, previewOnly = false, cancelled = false, einvoice = null }, ref) => {
+    // v1.10.76 - the business profile can still be loading on the first render
+    // (a page refresh while editing an invoice), and reading a bank field from
+    // null blanked the whole app. Empty until it arrives.
+    const profile = profileProp || {};
+    // Interstate detection must match InvoiceGenerator.js — it honours
+    // details.placeOfSupply (POS override) and client.isSEZ (SEZ supplies
+    // are always interstate regardless of physical state). Without this
+    // the totals block could show IGST while the item table showed
+    // CGST+SGST for the same bill (POS override or SEZ client).
+    //
+    // Cheapest correct signal: totals.igst > 0 means the computation upstream
+    // routed the tax as IGST — so trust that, and fall back to the state
+    // comparison only if totals aren't populated (e.g. legacy JSON with no
+    // igst field).
+    const businessState = profile?.state?.trim().toLowerCase();
+    const clientState = client?.state?.trim().toLowerCase();
+    //
+    // v1.10.66 (#61) — the tax engine's own decision now wins. computeInvoiceTotals
+    // records `isInterstate` beside the amounts it produced, and every row below
+    // has to describe THOSE amounts. The name comparison further down could
+    // disagree with the engine — a Delhi client supplied in Punjab, say — and the
+    // invoice then printed "IGST ₹0.00" above a total that really held CGST +
+    // SGST. The comparison survives only for invoices saved before the flag.
+    const isInterstate = typeof totals?.isInterstate === 'boolean'
+        ? totals.isInterstate
+        : ((typeof totals?.igst === 'number' && totals.igst > 0)
+            || !!client?.isSEZ
+            || (details?.placeOfSupply && businessState && details.placeOfSupply.toLowerCase() !== businessState)
+            || (businessState && clientState && businessState !== clientState));
+    const typeConfig = INVOICE_TYPES[invoiceType] || INVOICE_TYPES['tax-invoice'];
+    // Seller's country drives tax label (GST / VAT / SST / MwSt etc.) and bank label.
+    const sellerCC = getCountryConfig(profile?.country);
+    const isIndia = (profile?.country || 'India') === 'India';
+    const taxLabel = sellerCC.taxLabel || 'GST';
+    // Resolve the payment account once per render. Falls back to the synthesised
+    // legacy account (built from flat profile bank fields) when no array exists,
+    // so v1.4.3 invoices render byte-identical with no `selectedAccountId`.
+    // v1.10.18 — Prefer options.paymentAccountSnapshot when present. That's the
+    // frozen-at-save-time copy of the account details, so editing a bank in
+    // Settings after the invoice was made no longer rewrites the invoice's
+    // displayed bank. Old invoices without the snapshot (pre-v1.10.18) fall
+    // through to the live profile lookup — legacy behaviour preserved.
+    const account = options.paymentAccountSnapshot || getAccountById(profile, options.selectedAccountId);
+    const showAccountLabel = options.showAccountLabel === true;
+    // Options with defaults. Each toggle defaults to ON so old invoices keep rendering as
+    // before; users opt INTO hiding fields via Customize.
+    const opt = (key, fallback = true) => options[key] !== undefined ? options[key] : fallback;
+    const showGST = opt('showGST', typeConfig.showGST);
+    const showState = opt('showState');
+    const showGSTIN = opt('showGSTIN');
+    const showPlaceOfSupply = opt('showPlaceOfSupply', showGST);
+    const showHSN = opt('showHSN');
+    const showDiscount = opt('showDiscount');
+    const showBankDetails = opt('showBankDetails');
+    // v1.10.83 - Settings → Features → UPI QR code off hides it on every invoice.
+    const showUPI = opt('showUPI') && isModuleEnabled('upiQr', getEnabledModules());
+    const showLogo = opt('showLogo');
+    const showSignature = opt('showSignature');
+    const showSignatoryText = opt('showSignatoryText');
+    const showTerms = opt('showTerms');
+    const showNotes = opt('showNotes');
+    // v1.10.70 - requested (#72, @sangwanmail-eng). OFF unless chosen: most
+    // invoices are signed, and this line would contradict a signature.
+    const showSystemGeneratedNote = opt('showSystemGeneratedNote', false);
+    const showAmountWords = opt('showAmountWords');
+    const showDueDate = opt('showDueDate');
+    const showItemQty = opt('showItemQty');
+    const showItemUnit = opt('showItemUnit');
+    const showRateColumn = opt('showRateColumn');
+    const showSubtotal = opt('showSubtotal');
+    // Header / client meta — default ON
+    const showBusinessName = opt('showBusinessName');
+    const showBusinessAddress = opt('showBusinessAddress');
+    const showBusinessPhone = opt('showBusinessPhone');
+    const showBusinessEmail = opt('showBusinessEmail');
+    const showClientAddress = opt('showClientAddress');
+    const showClientPhone = opt('showClientPhone');
+    const showClientEmail = opt('showClientEmail');
+    const showInvoiceNumber = opt('showInvoiceNumber');
+    const showInvoiceDate = opt('showInvoiceDate');
+    const customTitle = options.customTitle || typeConfig.title;
+    // v1.10.66 (#62) — Rule 46(p) of the CGST Rules: a tax invoice has to state
+    // whether tax is payable on reverse charge. The notice under the totals only
+    // appears for "Yes", so an ordinary invoice never said "No" at all. Credit
+    // notes carry the same flag, which GSTR-1 reports for them.
+    const showReverseChargeLine = isIndia && showGST && (invoiceType === 'tax-invoice' || invoiceType === 'credit-note');
+    const reverseChargeText = options.reverseCharge ? 'Yes' : 'No';
+    // v1.10.83 - Rule 46 endorsement on an export / SEZ invoice: under LUT
+    // (no IGST, with the LUT's ARN) or on payment of IGST. '' otherwise.
+    const exportDecl = exportDeclaration({ profile, client, details, totals, options, showGST });
+    const currencySymbol = options.currency || 'INR';
+    // v1.10.83 - a services invoice carries SAC codes only.
+    const hsnHeader = (options.invoiceMode || 'goods') === 'services' ? 'SAC' : 'HSN/SAC';
+    // v1.10.83 - a client abroad: their own tax ID label (VAT number, EIN...)
+    // and country are printed, and an export's place of supply is outside
+    // India (GST code 96), not the client's state.
+    const clientCountry = String(client?.country || '').trim();
+    const clientAbroad = !!clientCountry && clientCountry !== (profile?.country || 'India');
+    const clientTaxIdLabel = getCountryConfig(clientAbroad ? clientCountry : profile?.country).taxIdLabel;
+    const isExportSupply = isIndia && clientAbroad && !getStateCode(String(details?.placeOfSupply || '').trim());
+    const placeOfSupplyText = isExportSupply ? `Outside India (${clientCountry})` : (details?.placeOfSupply || client?.state || '');
+    // The invoice in the business's own currency: "1 USD = 84.1000 INR", plus the
+    // rupee total when Print Settings → Dual currency display is on.
+    const baseCurrency = sellerCC.currency;
+    const exchangeRateLine = options.exchangeRate && currencySymbol !== baseCurrency
+        ? formatExchangeRateLine(currencySymbol, options.exchangeRate, baseCurrency, getPrintSettings().dualCurrencyEnabled ? totals.total : null)
+        : '';
+    // A PayPal / Wise / Payoneer link on the payment account, printed on
+    // invoices in a foreign currency (UPI cannot take one).
+    const paymentLink = currencySymbol !== baseCurrency ? String(account?.paymentLink || '').trim() : '';
+    // The RBI purpose code a client abroad quotes on the transfer: the invoice's
+    // own, else the payment account's.
+    const purposeCode = clientAbroad || currencySymbol !== baseCurrency ? String(options.purposeCode || account?.purposeCode || '').trim() : '';
+    // v1.10.4 — Single read of print settings per render. Prior code
+    // called getPrintSettings() at 6 different points, each hitting
+    // localStorage.getItem + JSON.parse. Multiplied by every keystroke
+    // in InvoiceGenerator (which rerenders the preview), this was a
+    // measurable hot spot. Now: one lookup + downstream aliases keep
+    // JSX shape untouched.
+    const _ps = getPrintSettings();
+    // Print Settings -> Formatting (number grouping, decimals, symbol position,
+    // date format) was saved but never used on the invoice. The defaults keep
+    // the formatting the invoice always had.
+    const fmt = (amount) => {
+        if ((_ps.numberFormat && _ps.numberFormat !== 'indian') || Number(_ps.decimalPlaces ?? 2) !== 2 || _ps.currencyPosition === 'after') {
+            return formatCurrencyEx(amount, currencySymbol, _ps);
+        }
+        if (currencySymbol === 'INR')
+            return formatCurrency(amount);
+        return new Intl.NumberFormat('en-US', { style: 'currency', currency: currencySymbol, minimumFractionDigits: 2 }).format(amount || 0);
+    };
+    const fmtDate = (value) => formatDate(value, _ps);
+    // Aliases for the different callsites below; all point to the same
+    // object so they stay in sync.
+    const _ps_dc = _ps;
+    // v1.9.3 — same settings alias used by getLabel() calls throughout the JSX
+    const _ps_labels = _ps_dc;
+    // v1.10.74 - "Total Due" follows the label language; English keeps "Total Due" (preset says "Total").
+    const _totalLabel = getLabel(_ps_labels, 'total');
+    const totalDueLabel = _totalLabel === 'Total' ? 'Total Due' : _totalLabel;
+    const dualCurrencyOn = _ps_dc.dualCurrencyEnabled && currencySymbol === 'INR' && _ps_dc.dualCurrencyCode && Number(_ps_dc.dualCurrencyRate) > 0;
+    const fmtDualSecondary = (amount) => {
+        if (!dualCurrencyOn || _ps_dc.dualCurrencyPosition !== 'below')
+            return '';
+        const secondary = (Number(amount) || 0) / Number(_ps_dc.dualCurrencyRate);
+        return '≈ ' + new Intl.NumberFormat('en-US', { style: 'currency', currency: _ps_dc.dualCurrencyCode, minimumFractionDigits: 2 }).format(secondary);
+    };
+    const amountInWords = (num) => {
+        if (currencySymbol === 'INR')
+            return numberToWords(num);
+        const a = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+        const b = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+        const convert = (n) => {
+            if (n === 0)
+                return 'Zero';
+            let result = '';
+            if (n >= 1000000) {
+                result += convert(Math.floor(n / 1000000)) + ' Million ';
+                n %= 1000000;
+            }
+            if (n >= 1000) {
+                result += convert(Math.floor(n / 1000)) + ' Thousand ';
+                n %= 1000;
+            }
+            if (n >= 100) {
+                result += a[Math.floor(n / 100)] + ' Hundred ';
+                n %= 100;
+            }
+            if (n >= 20) {
+                result += b[Math.floor(n / 10)] + ' ';
+                if (n % 10)
+                    result += a[n % 10] + ' ';
+            }
+            else if (n > 0) {
+                result += a[n] + ' ';
+            }
+            return result.trim();
+        };
+        const names = CURRENCY_NAMES[currencySymbol] || { major: currencySymbol, minor: 'Cents' };
+        const rounded = Math.round(num * 100) / 100;
+        const whole = Math.floor(rounded);
+        const cents = Math.round((rounded - whole) * 100);
+        let result = convert(whole) + ' ' + names.major;
+        if (cents > 0)
+            result += ' and ' + convert(cents) + ' ' + names.minor;
+        return result + ' Only';
+    };
+    const [qrDataUrl, setQrDataUrl] = useState('');
+    // Generate UPI QR code. The VPA now comes from the selected payment account
+    // (so switching account swaps both bank block + QR), with fallback to the
+    // legacy flat profile.upiId for invoices that pre-date multi-account support.
+    const upiId = account?.upiId || profile?.upiId || '';
+    // The QR asks for what the client actually pays: the total less any TDS
+    // they deduct (Net Receivable), not the full total.
+    const upiAmount = Number(totals.netReceivable ?? totals.total) || 0;
+    useEffect(() => {
+        if (!showUPI || !upiId || !(upiAmount > 0) || currencySymbol !== 'INR') {
+            setQrDataUrl('');
+            return;
+        }
+        const upiUrl = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(profile?.businessName || '')}&am=${upiAmount.toFixed(2)}&cu=INR&tn=${encodeURIComponent(`Payment for ${details?.invoiceNumber || 'Invoice'}`)}`;
+        QRCode.toDataURL(upiUrl, { width: 120, margin: 1, errorCorrectionLevel: 'M' })
+            .then(setQrDataUrl)
+            .catch(() => setQrDataUrl(''));
+    }, [showUPI, upiId, profile?.businessName, upiAmount, details?.invoiceNumber, currencySymbol]);
+    // v1.10.83 (#111) - an invoice with an IRN prints the IRN, Ack No, Ack Date
+    // and a QR code of the portal's Signed QR Code: that is what makes the
+    // printed e-invoice valid. Made synchronously (the callback form of
+    // toDataURL runs at once), so a PDF captured right after render has it.
+    const einv = einvoice?.irn ? einvoice : null;
+    const irnQr = useMemo(() => {
+        let url = '';
+        if (einv?.signedQr)
+            QRCode.toDataURL(einv.signedQr, { errorCorrectionLevel: 'L', margin: 1, width: 360 }, (err, u) => { url = err ? '' : u; });
+        return url;
+    }, [einv?.signedQr]);
+    const accentColors = {
+        'tax-invoice': '#1e40af',
+        'proforma': '#7c3aed',
+        'bill-of-supply': '#0f766e',
+        'credit-note': '#be123c',
+    };
+    // v1.9.14 — When userColorsEnabled is on, pdfAccent MUST feed the
+    // header-block background too.
+    // v1.10.4 — reuses `_ps` from top of function (was a fresh
+    // getPrintSettings() call — one of 6 in this render).
+    const accent = options.accentColor
+        || (_ps.userColorsEnabled && _ps.pdfAccent)
+        || accentColors[invoiceType]
+        || accentColors['tax-invoice'];
+    // v1.9.1 — template style. Priority: per-invoice options.pdfStyle → app-wide
+    // printSettings.pdfTemplate → 'classic' fallback. Also accept the new
+    // "corporate" and "minimalist" values that map to existing render paths
+    // with slight tweaks (colour tint + spacing) applied via CSS class.
+    const pdfStyleRaw = options.pdfStyle || _ps.pdfTemplate || 'classic';
+    const pdfStyle = ['corporate', 'minimalist'].includes(pdfStyleRaw)
+        ? (pdfStyleRaw === 'corporate' ? 'classic' : 'minimal')
+        : pdfStyleRaw;
+    const pdfStyleVariant = pdfStyleRaw; // full value for CSS class targeting
+    // Check if any item has discount
+    const hasAnyDiscount = showDiscount && items.some(item => (item.discount || 0) > 0);
+    // v1.10.73 - one per-line calculation for every design, the item table and
+    // the HSN/SAC summary, so they can never disagree with each other.
+    // v1.10.29 - resolveLineDiscount respects discountType + discountBase, as
+    // computeInvoiceTotals does for the totals.
+    const lineCalc = (item) => {
+        const inclusive = totals.taxInclusive && showGST;
+        const discount = resolveLineDiscount(item, inclusive || !showGST);
+        const grossAfterDiscount = Math.max(0, (Number(item.quantity) || 0) * (Number(item.rate) || 0) - discount);
+        const rate = Number(item.taxPercent) || 0;
+        const taxable = inclusive ? grossAfterDiscount / (1 + rate / 100) : grossAfterDiscount;
+        // Zero-rated under a LUT: no tax, so the line prints 0% and no tax.
+        if (totals.lutZeroRated)
+            return { discount, taxable: grossAfterDiscount, tax: 0, rate: 0 };
+        const tax = !showGST ? 0 : (inclusive ? grossAfterDiscount - taxable : taxable * rate / 100);
+        return { discount, taxable, tax, rate };
+    };
+    // HSN/SAC-wise tax summary (Tally's table under the items). A line counts
+    // if it has an HSN/SAC or carries tax; untaxed reimbursements without a
+    // code (fuel, courier) are left out, as Tally does.
+    const hsnRows = (() => {
+        const map = new Map();
+        for (const item of items) {
+            const l = lineCalc(item);
+            if (!item.hsn && !(l.tax > 0))
+                continue;
+            const k = `${item.hsn || ''}|${l.rate}`;
+            const r = map.get(k) || { hsn: item.hsn || '', rate: l.rate, taxable: 0, tax: 0 };
+            r.taxable += l.taxable;
+            r.tax += l.tax;
+            map.set(k, r);
+        }
+        return [...map.values()];
+    })();
+    const pdfStyleForOptions = pdfStyleRaw;
+    const showHsnSummary = showGST && invoiceOptionOn(options, 'showHsnSummary', pdfStyleForOptions);
+    const showTaxInWords = showGST && invoiceOptionOn(options, 'showTaxInWords', pdfStyleForOptions);
+    const showDeclaration = invoiceOptionOn(options, 'showDeclaration', pdfStyleForOptions);
+    const showCustomerSeal = invoiceOptionOn(options, 'showCustomerSeal', pdfStyleForOptions);
+    const declarationText = options.declarationText ?? DEFAULT_DECLARATION;
+    const totalTax = Number(totals.totalTaxAmount) || ((totals.cgst || 0) + (totals.sgst || 0) + (totals.utgst || 0) + (totals.igst || 0) + (totals.cess || 0));
+    const orderDetails = filledOrderDetails(details || {});
+    // Header renderers per style
+    const renderModernHeader = () => (h(Fragment, null,
+        h("div", { style: { background: accent, padding: '1.5rem 2rem', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' } },
+            h("div", null,
+                showLogo && profile?.logo && (h("img", { src: profile.logo, alt: "Logo", style: { maxHeight: `${profile.logoHeight || 48}px`, maxWidth: '180px', objectFit: 'contain', marginBottom: '0.5rem', display: 'block', filter: 'brightness(0) invert(1)' } })),
+                h("h1", { style: { fontSize: '1.4rem', fontWeight: 800, margin: 0, letterSpacing: '0.08em' } }, customTitle),
+                invoiceType === 'proforma' && (h("p", { style: { fontSize: '0.7rem', color: 'rgba(255,255,255,0.7)', fontStyle: 'italic', margin: '0.25rem 0 0' } }, "For estimation purposes only"))),
+            h("div", { style: { textAlign: 'right' } },
+                showBusinessName && h("h2", { style: { fontSize: '1rem', fontWeight: 700, margin: '0 0 0.25rem' } }, profile?.businessName || 'Your Business'),
+                h("div", { style: { fontSize: '0.7rem', color: 'rgba(255,255,255,0.85)', lineHeight: 1.6 } },
+                    showBusinessAddress && profile?.address && h("p", { style: { margin: 0 } }, profile.address),
+                    showBusinessAddress && (profile?.city || profile?.pin) && h("p", { style: { margin: 0 } }, [profile.city, profile.pin].filter(Boolean).join(' - ')),
+                    showState && profile?.state && h("p", { style: { margin: 0 } }, profile.state),
+                    showGSTIN && profile?.gstin && h("p", { style: { margin: 0 } },
+                        getCountryConfig(profile?.country).taxIdLabel,
+                        ": ",
+                        profile.gstin),
+                    showBusinessEmail && profile?.email && h("p", { style: { margin: 0 } }, profile.email),
+                    showBusinessPhone && profile?.phone && h("p", { style: { margin: 0 } },
+                        "Ph: ",
+                        profile.phone)))),
+        h("div", { style: { display: 'flex', justifyContent: 'space-between', padding: '0.75rem 2rem', background: '#f8fafc', borderBottom: '1px solid #e2e8f0' } },
+            h("div", { style: { display: 'flex', gap: '1.5rem', fontSize: '0.78rem' } },
+                showInvoiceNumber && h("span", null,
+                    h("strong", { style: { color: '#64748b' } }, "No."),
+                    " ",
+                    details?.invoiceNumber),
+                showInvoiceDate && h("span", null,
+                    h("strong", { style: { color: '#64748b' } }, "Date"),
+                    " ",
+                    details?.invoiceDate ? fmtDate(details.invoiceDate) : ''),
+                showDueDate && details?.dueDate && h("span", null,
+                    h("strong", { style: { color: '#64748b' } }, "Due"),
+                    " ",
+                    fmtDate(details.dueDate)),
+                showReverseChargeLine && h("span", null,
+                    h("strong", { style: { color: '#64748b' } }, "Reverse Charge"),
+                    " ",
+                    reverseChargeText)),
+            invoiceType === 'credit-note' && details?.originalInvoiceRef && (h("span", { style: { fontSize: '0.75rem', color: '#64748b' } },
+                "Against: ",
+                h("strong", { style: { color: '#334155' } }, details.originalInvoiceRef))))));
+    const renderMinimalHeader = () => (h("div", { style: { padding: '2rem 2rem 1rem' } },
+        h("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.5rem' } },
+            h("div", null,
+                showLogo && profile?.logo && (h("img", { src: profile.logo, alt: "Logo", style: { maxHeight: `${profile.logoHeight || 48}px`, maxWidth: '180px', objectFit: 'contain', marginBottom: '0.5rem', display: 'block' } })),
+                showBusinessName && h("h2", { style: { fontSize: '0.95rem', fontWeight: 700, color: '#1e293b', margin: 0 } }, profile?.businessName || 'Your Business'),
+                h("div", { style: { fontSize: '0.7rem', color: '#475569', lineHeight: 1.6, marginTop: '0.25rem' } },
+                    showBusinessAddress && profile?.address && h("p", { style: { margin: 0 } }, profile.address),
+                    showBusinessAddress && (profile?.city || profile?.pin) && h("p", { style: { margin: 0 } }, [profile.city, profile.pin].filter(Boolean).join(' - ')),
+                    showState && profile?.state && h("p", { style: { margin: 0 } }, profile.state),
+                    showGSTIN && profile?.gstin && h("p", { style: { margin: 0 } },
+                        getCountryConfig(profile?.country).taxIdLabel,
+                        ": ",
+                        profile.gstin),
+                    showBusinessEmail && profile?.email && h("p", { style: { margin: 0 } }, profile.email),
+                    showBusinessPhone && profile?.phone && h("p", { style: { margin: 0 } },
+                        "Ph: ",
+                        profile.phone))),
+            h("div", { style: { textAlign: 'right' } },
+                h("h1", { style: { fontSize: '1.1rem', fontWeight: 700, color: accent, margin: '0 0 0.5rem', letterSpacing: '0.05em' } }, customTitle),
+                h("div", { style: { fontSize: '0.78rem', color: '#64748b', lineHeight: 1.8 } },
+                    showInvoiceNumber && h("p", { style: { margin: 0 } }, details?.invoiceNumber),
+                    showInvoiceDate && h("p", { style: { margin: 0 } }, details?.invoiceDate ? fmtDate(details.invoiceDate) : ''),
+                    showDueDate && details?.dueDate && h("p", { style: { margin: 0 } },
+                        "Due: ",
+                        fmtDate(details.dueDate)),
+                    showReverseChargeLine && h("p", { style: { margin: 0 } },
+                        "Reverse Charge: ",
+                        reverseChargeText),
+                    invoiceType === 'credit-note' && details?.originalInvoiceRef && h("p", { style: { margin: 0 } },
+                        "Against Invoice: ",
+                        details.originalInvoiceRef)))),
+        invoiceType === 'proforma' && (h("p", { style: { fontSize: '0.7rem', color: '#475569', fontStyle: 'italic', margin: '0 0 0.5rem' } }, "This is not a tax invoice. For estimation purposes only.")),
+        h("div", { style: { borderBottom: `1.5px solid ${accent}`, marginBottom: '0' } })));
+    const renderClassicHeader = () => (h(Fragment, null,
+        h("div", { style: { height: '6px', background: `linear-gradient(90deg, ${accent}, ${accent}cc, ${accent}88)` } }),
+        h("div", { className: "inv-header" },
+            h("div", { className: "inv-header-left" },
+                showLogo && profile?.logo && (h("img", { src: profile.logo, alt: "Logo", style: { maxHeight: `${profile.logoHeight || 48}px`, maxWidth: '180px', objectFit: 'contain', marginBottom: '0.75rem', display: 'block' } })),
+                h("h1", { className: "inv-title", style: { color: accent } }, customTitle),
+                invoiceType === 'proforma' && (h("p", { style: { fontSize: '0.7rem', color: '#475569', fontStyle: 'italic', marginBottom: '0.75rem' } }, "This is not a tax invoice. For estimation purposes only.")),
+                invoiceType === 'credit-note' && details?.originalInvoiceRef && (h("p", { style: { fontSize: '0.75rem', color: '#475569', marginBottom: '0.75rem' } },
+                    "Against Invoice: ",
+                    h("strong", { style: { color: '#334155' } }, details.originalInvoiceRef))),
+                h("div", { className: "inv-meta" },
+                    showInvoiceNumber && h("div", { className: "inv-meta-row" },
+                        h("span", { className: "inv-meta-label" }, "No."),
+                        h("span", { className: "inv-meta-value" }, details?.invoiceNumber)),
+                    showInvoiceDate && h("div", { className: "inv-meta-row" },
+                        h("span", { className: "inv-meta-label" }, "Date"),
+                        h("span", { className: "inv-meta-value" }, details?.invoiceDate ? fmtDate(details.invoiceDate) : '')),
+                    showDueDate && details?.dueDate && (h("div", { className: "inv-meta-row" },
+                        h("span", { className: "inv-meta-label" }, "Due Date"),
+                        h("span", { className: "inv-meta-value" }, fmtDate(details.dueDate)))),
+                    showReverseChargeLine && (h("div", { className: "inv-meta-row" },
+                        h("span", { className: "inv-meta-label" }, "Reverse Charge"),
+                        h("span", { className: "inv-meta-value" }, reverseChargeText))))),
+            h("div", { className: "inv-header-right" },
+                showBusinessName && h("h2", { className: "inv-business-name" }, profile?.businessName || 'Your Business'),
+                h("div", { className: "inv-business-details" },
+                    showBusinessAddress && profile?.address && h("p", null, profile.address),
+                    showBusinessAddress && (profile?.city || profile?.pin) && h("p", null, [profile.city, profile.pin].filter(Boolean).join(' - ')),
+                    showState && profile?.state && h("p", null, profile.state),
+                    showGSTIN && profile?.gstin && h("p", null,
+                        getCountryConfig(profile?.country).taxIdLabel,
+                        ": ",
+                        h("strong", null, profile.gstin)),
+                    showBusinessEmail && profile?.email && h("p", null, profile.email),
+                    showBusinessPhone && profile?.phone && h("p", null,
+                        "Ph: ",
+                        profile.phone))))));
+    // Billing parties section (shared but styled per variant)
+    const renderParties = () => {
+        const padStyle = pdfStyle === 'modern' ? { padding: '1rem 2rem' } : pdfStyle === 'minimal' ? { padding: '0 2rem 1rem', border: 'none' } : {};
+        // v1.10.11 — Ship To block. When the user unchecked "Ship to same as
+        // bill-to" in the invoice form, `details.shipToSameAsBilling === false`
+        // and shipping fields are populated. Renders as a third column in
+        // the parties row. When same-as-billing, we don't render it (bill-to
+        // covers both).
+        const shipDifferent = details?.shipToSameAsBilling === false &&
+            (details?.shippingAddress || details?.shippingCity || details?.shippingState);
+        return (h("div", { className: "inv-parties", style: padStyle },
+            h("div", { className: "inv-party" },
+                h("h4", { className: "inv-section-label" }, getLabel(_ps_labels, 'billTo')),
+                h("p", { className: "inv-party-name" }, client?.name || 'Client Name'),
+                h("div", { className: "inv-party-details" },
+                    showClientAddress && client?.address && h("p", null, client.address),
+                    showClientAddress && (client?.city || client?.pin) && h("p", null, [client.city, client.pin].filter(Boolean).join(' - ')),
+                    showState && client?.state && h("p", null, client.state),
+                    showClientAddress && clientAbroad && h("p", null, clientCountry),
+                    showGSTIN && client?.gstin && h("p", null,
+                        clientTaxIdLabel,
+                        ": ",
+                        h("strong", null, client.gstin)),
+                    showClientEmail && client?.email && h("p", null, client.email),
+                    showClientPhone && client?.phone && h("p", null,
+                        "Ph: ",
+                        client.phone))),
+            shipDifferent && (h("div", { className: "inv-party" },
+                h("h4", { className: "inv-section-label" }, getLabel(_ps_labels, 'shipTo')),
+                h("p", { className: "inv-party-name" }, client?.name || 'Client Name'),
+                h("div", { className: "inv-party-details" },
+                    details.shippingAddress && h("p", null, details.shippingAddress),
+                    (details.shippingCity || details.shippingPin) && h("p", null, [details.shippingCity, details.shippingPin].filter(Boolean).join(' - ')),
+                    details.shippingState && h("p", null, details.shippingState)))),
+            showPlaceOfSupply && (h("div", { className: "inv-party inv-party-right" },
+                h("h4", { className: "inv-section-label" }, getLabel(_ps_labels, 'placeOfSupply')),
+                h("p", { className: "inv-party-name" }, placeOfSupplyText || '-'),
+                showGST && isExportSupply && h("span", { className: "inv-tax-badge" }, totals.lutZeroRated ? 'Export under LUT' : 'Export (IGST)'),
+                showGST && isIndia && isInterstate && !isExportSupply && h("span", { className: "inv-tax-badge" }, "Interstate (IGST)"),
+                showGST && isIndia && !isInterstate && businessState && clientState && h("span", { className: "inv-tax-badge inv-tax-badge-green" }, totals.isIntraUT ? 'Intra-UT (CGST + UTGST)' : 'Intrastate (CGST + SGST)'),
+                showGST && !isIndia && h("span", { className: "inv-tax-badge inv-tax-badge-green" }, taxLabel)))));
+    };
+    // Paper-size class + width (v1.8.1 / adapted v1.8.2). Preview container
+    // adopts the target paper's width in mm so what-you-see matches
+    // what-you-print. For A4/A5 (sheets), the existing multi-column layout
+    // renders at scaled type. For thermal 80mm/58mm, we switch to a
+    // completely different template — see renderThermalReceipt below.
+    //
+    // The problem in v1.8.1 was: only the container width changed; the inline
+    // margins (`margin: '0 2rem'`) inside the items table + party blocks
+    // stayed at A4 sizes. On an 80mm roll, that meant the items were pushed
+    // off the right edge. v1.8.2 branches on `kind === 'thermal'` and
+    // renders a proper single-column receipt.
+    const paperCfg = getPaperSize(options.paperSize, options);
+    const isThermal = paperCfg.kind === 'thermal';
+    const containerStyle = {
+        width: `${paperCfg.widthMm}mm`,
+        minHeight: paperCfg.kind === 'sheet' ? `${paperCfg.heightMm}mm` : undefined,
+        ...(isThermal ? { fontFamily: '"Courier New", monospace', fontSize: paperCfg.widthMm >= 80 ? '10.5px' : '9px' } : {}),
+    };
+    // Thermal receipt render — single column, no colour panels, no margins.
+    // Used for both 80mm and 58mm; the CSS class (`paper-thermal-58` vs
+    // `paper-thermal-80`) further trims (hide QR at 58mm etc.). Inlined here
+    // rather than extracted to a helper because it needs access to all the
+    // opt() / totals / items closures. Escape-hatch: user can switch back to
+    // A4/A5 any time in Customize.
+    if (isThermal) {
+        // v1.8.4 thermal render — every user-configurable setting from
+        // PrintSettings component flows through here. Backward compat: fields
+        // fall back to sensible defaults if the bill was created pre-v1.8.4.
+        //
+        // The app-wide printSettings (localStorage) provides DEFAULTS. Each
+        // invoice's own invoiceOptions.thermal* fields OVERRIDE those defaults.
+        // Priority: options → printSettings → hardcoded fallback.
+        const printSettings = _ps; // v1.10.4 — reuse top-of-function read
+        const eff = {
+            thermalFontSize: options.thermalFontSize ?? printSettings.fontSize,
+            thermalFontFamily: options.thermalFontFamily ?? printSettings.fontFamily,
+            thermalFontWeight: options.thermalFontWeight ?? printSettings.fontWeight,
+            thermalAllCaps: options.thermalAllCaps ?? printSettings.allCaps,
+            thermalLineSpacing: options.thermalLineSpacing ?? printSettings.lineSpacing,
+            thermalContrast: options.thermalContrast ?? printSettings.contrast,
+            thermalHeaderAlign: options.thermalHeaderAlign ?? printSettings.headerAlign,
+            thermalHeaderCaps: options.thermalHeaderCaps ?? printSettings.headerCaps,
+            thermalShowLogo: options.thermalShowLogo ?? printSettings.showLogo,
+            thermalShowHSN: options.thermalShowHSN ?? printSettings.showHSN,
+            thermalShowRate: options.thermalShowRate ?? printSettings.showRateLine,
+            thermalQrSize: options.thermalQrSize ?? printSettings.qrSize,
+            thermalCutMark: options.thermalCutMark ?? printSettings.cutMark,
+            thermalFeedLines: options.thermalFeedLines ?? printSettings.feedLines,
+            thermalFooterMessage: options.thermalFooterMessage ?? printSettings.footerMessage,
+            thermalTagline: options.thermalTagline ?? (printSettings.showTagline ? printSettings.tagline : ''),
+            thermalCompact: options.thermalCompact ?? false,
+        };
+        const invoiceNum = details?.invoiceNumber || '';
+        // Receipts keep their short d/m/yyyy unless a date format was chosen.
+        const invoiceDate = !details?.invoiceDate ? ''
+            : ((_ps.dateFormat || 'dd-mon-yyyy') !== 'dd-mon-yyyy' ? fmtDate(details.invoiceDate) : new Date(details.invoiceDate).toLocaleDateString('en-IN'));
+        // v1.10.83 - the invoice's own currency (a USD bill printed "Rs.").
+        const receiptCurrency = options.currency || getCountryConfig(profile?.country).currency;
+        // A plain-ASCII symbol ($) where there is one: "USD1000.00" did not fit an 80mm line.
+        const asciiSymbol = COUNTRIES.find(c => c.currency === receiptCurrency)?.currencySymbol;
+        const currencySymbol = receiptCurrency === 'INR' ? 'Rs.' : (asciiSymbol && /^[ -~]{1,3}$/.test(asciiSymbol) && asciiSymbol !== receiptCurrency ? asciiSymbol : receiptCurrency);
+        const showRoundOff = opt('showRoundOff', false);
+        // v1.10.33 — Split the single "isNarrow" threshold into two.
+        // Prior code used `widthMm < 80` for everything, but thermal80 has
+        // widthMm=72 (printable area) and thermal76 has 68 — BOTH tripped
+        // the flag and silently:
+        //   (a) hid the HSN column even with showHSN=true
+        //   (b) rendered at the same tiny font as thermal58
+        // Now:
+        //   - isVeryNarrow (< 60mm) → thermal58 only, aggressive compaction
+        //     (smaller font, hide HSN inline, tighter "Amt" header)
+        //   - isNarrow (< 80mm) kept for column-width math where the
+        //     thermal80 receipt still needs slightly narrower columns than
+        //     thermal112 sheet-style rolls
+        const isVeryNarrow = paperCfg.widthMm < 60;
+        const isNarrow = paperCfg.widthMm < 80;
+        // -- Settings pulled from `eff` (merged options + printSettings) ---------
+        const fontSize = eff.thermalFontSize || 'medium';
+        const fontFamily = eff.thermalFontFamily || 'mono';
+        const fontWeight = eff.thermalFontWeight || 'bold';
+        const allCaps = eff.thermalAllCaps === true;
+        const lineSpacing = eff.thermalLineSpacing || 'normal';
+        const contrast = eff.thermalContrast || 'normal';
+        const headerAlign = eff.thermalHeaderAlign || 'center';
+        const headerCaps = eff.thermalHeaderCaps !== false;
+        const showLogo = eff.thermalShowLogo !== false;
+        const showHSN = eff.thermalShowHSN !== false;
+        const showRate = eff.thermalShowRate !== false;
+        const qrSizePx = eff.thermalQrSize === 'small' ? 60
+            : eff.thermalQrSize === 'large' ? 120 : 90;
+        const cutMark = eff.thermalCutMark !== false;
+        const feedLines = Number(eff.thermalFeedLines ?? 2);
+        const footerMessage = eff.thermalFooterMessage
+            || 'Thank you for your business!';
+        const tagline = eff.thermalTagline || '';
+        const thermalCompact = !!eff.thermalCompact;
+        // Base font-size in px based on paper width + user preference.
+        // Larger widths get slightly bigger base so 80mm reads bolder than 58mm.
+        // v1.10.30 — reported: "fix the font issue and print issue in thermal".
+        // Bumped every size ~10-15% so even 58mm at 'small' stays readable
+        // after the print driver's raster smoothing. Baseline print quality on
+        // low-DPI POS printers is what these numbers are tuned against.
+        const fontSizeMap = {
+            small: isVeryNarrow ? 9.5 : 11,
+            medium: isVeryNarrow ? 11 : 12.5,
+            large: isVeryNarrow ? 12.5 : 14.5,
+            xlarge: isVeryNarrow ? 14 : 16.5,
+        };
+        const fontSizeBase = (fontSizeMap[fontSize] || fontSizeMap.medium) + 'px';
+        // FontFamily: monospace prints crisper on thermal, but some printers
+        // handle sans-serif better with newer firmware.
+        const fontFamilyCss = fontFamily === 'sans'
+            ? '"Arial", "Helvetica", sans-serif'
+            : '"Courier New", "Consolas", monospace';
+        // FontWeight: baseline 500 (bold), or 800 (ultra) for the darkest print.
+        // Normal (400) is included for users on modern printers who want lighter.
+        const baseWeight = fontWeight === 'ultra' ? 800
+            : fontWeight === 'normal' ? 500
+                : 700; // bold (default)
+        // Bold multiplier for headers/totals — 100 heavier than baseline capped at 900
+        const strongWeight = Math.min(900, baseWeight + 200);
+        const contrastFilter = contrast === 'ultra' ? 'grayscale(1) contrast(3) brightness(0.85)'
+            : contrast === 'high' ? 'grayscale(1) contrast(2) brightness(0.95)'
+                : 'grayscale(1) contrast(1.4)';
+        // Line spacing → line-height multiplier
+        const lineHeight = lineSpacing === 'compact' ? 1.2
+            : lineSpacing === 'comfortable' ? 1.6 : 1.4;
+        // Section padding pulls from spacing preference
+        const secPad = lineSpacing === 'compact' ? '3px 4px'
+            : lineSpacing === 'comfortable' ? '8px 4px' : '5px 4px';
+        // Helper: apply ALL CAPS transformation if flag is on
+        const cap = (s) => allCaps ? String(s || '').toUpperCase() : String(s || '');
+        // Consistent divider styling (dashed lines don't print well; solid does)
+        const dashLine = { borderBottom: '1px solid #000', borderTop: 'none' };
+        // Root style — EVERY visual attribute set here so nothing accidentally
+        // inherits lighter/gray from parent CSS.
+        //
+        // v1.8.5 darkness fix: text-shadow with a 0.5px horizontal offset in the
+        // SAME colour effectively double-strokes each glyph, making thermal
+        // print noticeably darker without needing a heavier font. Combined with
+        // -webkit-text-stroke this makes even the lightest thermal printer
+        // produce crisp readable output. User can turn it OFF via Ultra weight
+        // setting if they don't need it.
+        // v1.10.30 — stronger double-strike for thermal readability. Prior
+        // 0.4px shadow was thin; bumping to 0.6px + adding a diagonal makes
+        // glyphs read darker on lightly-burning heads without needing a
+        // heavier font weight (which fattens columns and misaligns numbers).
+        const textDarkenShadow = fontWeight === 'normal' ? 'none'
+            : '0.6px 0 0 currentColor, 0 0.6px 0 currentColor, 0.4px 0.4px 0 currentColor';
+        const rootStyle = {
+            ...containerStyle,
+            color: '#000',
+            background: '#fff',
+            fontFamily: fontFamilyCss,
+            fontSize: fontSizeBase,
+            fontWeight: baseWeight,
+            lineHeight,
+            letterSpacing: allCaps ? '0.02em' : 0,
+            textShadow: textDarkenShadow,
+            // Prevent OS-level font smoothing from lightening glyphs at small sizes
+            WebkitFontSmoothing: 'antialiased',
+            MozOsxFontSmoothing: 'grayscale',
+        };
+        return (h("div", { className: `invoice-preview-container ${paperCfg.cssClass} paper-thermal`, ref: ref, ...(previewOnly ? {} : { id: 'invoice-preview' }), style: rootStyle },
+            h("div", { style: { padding: '8px 4px 6px', textAlign: headerAlign, ...dashLine, color: '#000' } },
+                showLogo && profile?.logo && (
+                /* v1.10.36 — Reverted the v1.10.33 formula
+                   `Math.min(45, widthMm * 3.78 * 0.4)` which shrank the
+                   logo on standard 58/80mm rolls (thermal80 → 45px cap
+                   vs the historical 45px, thermal58 → 40px). The historical
+                   45px cap worked on every preset roll. Custom-thermal is
+                   the only case where the logo can overshoot a narrow roll,
+                   and the .paper-thermal-custom CSS handles that via
+                   max-width. */
+                h("img", { src: profile.logo, alt: "", className: "thermal-logo", style: { maxHeight: 45, marginBottom: 4, filter: contrastFilter } })),
+                h("div", { style: { fontWeight: strongWeight, fontSize: '1.15em', letterSpacing: '0.02em' } }, (headerCaps || allCaps) ? (profile?.businessName || '').toUpperCase() : (profile?.businessName || '')),
+                tagline && h("div", { style: { fontSize: '0.85em', fontWeight: baseWeight, fontStyle: 'italic' } }, cap(tagline)),
+                profile?.address && h("div", { style: { fontSize: '0.9em', fontWeight: baseWeight } }, cap(profile.address)),
+                (profile?.city || profile?.state || profile?.pin) && (h("div", { style: { fontSize: '0.9em', fontWeight: baseWeight } }, cap([profile?.city, profile?.state, profile?.pin].filter(Boolean).join(', ')))),
+                profile?.gstin && (h("div", { style: { fontSize: '0.9em', fontWeight: strongWeight, marginTop: 2 } }, cap('GSTIN: ' + profile.gstin))),
+                profile?.phone && h("div", { style: { fontSize: '0.9em', fontWeight: baseWeight } }, cap('Ph: ' + profile.phone))),
+            h("div", { style: { padding: secPad, textAlign: 'center', fontWeight: strongWeight, textTransform: 'uppercase', fontSize: '1.05em', letterSpacing: '0.08em', ...dashLine } }, typeConfig?.label || 'Invoice'),
+            h("div", { style: { padding: secPad, fontSize: '0.95em', fontWeight: baseWeight, ...dashLine } },
+                h("div", null,
+                    h("strong", { style: { fontWeight: strongWeight } },
+                        cap('Invoice #'),
+                        ": "),
+                    cap(invoiceNum)),
+                showReverseChargeLine && h("div", null,
+                    h("strong", { style: { fontWeight: strongWeight } },
+                        cap('Reverse charge'),
+                        ": "),
+                    cap(reverseChargeText)),
+                exportDecl && h("div", { style: { fontSize: '0.85em', marginTop: 2 } }, cap(exportDecl)),
+                h("div", null,
+                    h("strong", { style: { fontWeight: strongWeight } },
+                        cap('Date'),
+                        ": "),
+                    cap(invoiceDate)),
+                client?.name && (h("div", { style: { marginTop: 3 } },
+                    h("strong", { style: { fontWeight: strongWeight } },
+                        cap('Bill to'),
+                        ": "),
+                    cap(client.name))),
+                client?.gstin && h("div", null, cap(`${clientTaxIdLabel}: ${client.gstin}`)),
+                client?.phone && h("div", null, cap('Ph: ' + client.phone))),
+            einv && (h("div", { style: { padding: secPad, fontSize: '0.85em', textAlign: 'center', wordBreak: 'break-all', ...dashLine } },
+                h("div", null,
+                    h("strong", { style: { fontWeight: strongWeight } }, "IRN: "),
+                    einv.irn),
+                h("div", null,
+                    h("strong", { style: { fontWeight: strongWeight } },
+                        cap('Ack No'),
+                        ": "),
+                    einv.ackNo),
+                h("div", null,
+                    h("strong", { style: { fontWeight: strongWeight } },
+                        cap('Ack Date'),
+                        ": "),
+                    einv.ackDate),
+                irnQr && h("img", { src: irnQr, alt: "E-invoice QR code", style: { width: 130, maxWidth: '100%', marginTop: 4 } }))),
+            (() => {
+                // Amount column width scales with paper: narrow rolls get less
+                // space; wider rolls give amounts more room.
+                const amountColMm = isNarrow ? 16 : paperCfg.widthMm < 100 ? 22 : 26;
+                const gridCols = `1fr ${amountColMm}mm`;
+                return (h("div", { style: { padding: secPad, ...dashLine } },
+                    h("div", { style: {
+                            display: 'grid', gridTemplateColumns: gridCols,
+                            fontWeight: strongWeight, paddingBottom: 3, marginBottom: 3,
+                            borderBottom: '1px solid #000', fontSize: '0.95em',
+                            textTransform: 'uppercase', gap: '4px',
+                        } },
+                        h("span", null, "Item"),
+                        h("span", { style: { textAlign: 'right' } }, isVeryNarrow ? 'Amt' : 'Amount')),
+                    (items || []).map((item, idx) => {
+                        const amount = (Number(item.quantity) || 0) * (Number(item.rate) || 0);
+                        const qty = Number(item.quantity) || 0;
+                        const rate = Number(item.rate) || 0;
+                        // v1.10.83 - no "+18%" on an export under LUT: no tax is charged.
+                        const tax = showGST && item.taxPercent > 0 && !totals?.lutZeroRated ? ` +${item.taxPercent}%` : '';
+                        const hsnBit = showHSN && item.hsn && !isVeryNarrow ? '  |  HSN ' + item.hsn : '';
+                        // v1.10.83 - the receipt follows Customize → Unit too.
+                        const unitBit = opt('showItemUnit') && item.unit ? ' ' + item.unit : '';
+                        return (h("div", { key: idx, style: { marginBottom: 5, fontSize: '0.95em' } },
+                            h("div", { style: { fontWeight: strongWeight, wordBreak: 'break-word' } }, (idx + 1) + '. ' + cap(item.name || item.description || 'Item')),
+                            h("div", { style: {
+                                    display: 'grid', gridTemplateColumns: gridCols, gap: '4px',
+                                    fontSize: '0.92em', paddingLeft: thermalCompact ? 0 : 8, fontWeight: baseWeight,
+                                } },
+                                h("span", { style: { wordBreak: 'break-word' } }, cap(showRate
+                                    ? `${qty}${unitBit} × ${currencySymbol}${rate.toFixed(2)}${tax}${hsnBit}`
+                                    : `${qty}${unitBit}${hsnBit}`)),
+                                h("span", { style: { textAlign: 'right', fontWeight: strongWeight } },
+                                    currencySymbol,
+                                    amount.toFixed(2)))));
+                    })));
+            })(),
+            (() => {
+                const totalsColMm = isNarrow ? 18 : paperCfg.widthMm < 100 ? 24 : 30;
+                const gridCols = `1fr ${totalsColMm}mm`;
+                const rowStyle = { display: 'grid', gridTemplateColumns: gridCols, gap: '4px' };
+                const amt = (n) => currencySymbol + (Number(n) || 0).toFixed(2);
+                return (h("div", { style: { padding: secPad, fontSize: '1em', fontWeight: baseWeight, ...dashLine } },
+                    h("div", { style: rowStyle },
+                        h("span", null, cap('Subtotal')),
+                        h("span", { style: { textAlign: 'right' } }, amt(printedSubtotal(totals)))),
+                    Number(totals?.totalDiscount) > 0 && (h("div", { style: rowStyle },
+                        h("span", null, cap('Discount')),
+                        h("span", { style: { textAlign: 'right' } },
+                            "-",
+                            amt(totals.totalDiscount)))),
+                    showGST && Number(totals?.cgst) > 0 && (h("div", { style: rowStyle },
+                        h("span", null, cap('CGST')),
+                        h("span", { style: { textAlign: 'right' } }, amt(totals.cgst)))),
+                    showGST && Number(totals?.sgst) > 0 && (h("div", { style: rowStyle },
+                        h("span", null, cap('SGST')),
+                        h("span", { style: { textAlign: 'right' } }, amt(totals.sgst)))),
+                    showGST && Number(totals?.utgst) > 0 && (h("div", { style: rowStyle },
+                        h("span", null, cap('UTGST')),
+                        h("span", { style: { textAlign: 'right' } }, amt(totals.utgst)))),
+                    showGST && Number(totals?.igst) > 0 && (h("div", { style: rowStyle },
+                        h("span", null, cap('IGST')),
+                        h("span", { style: { textAlign: 'right' } }, amt(totals.igst)))),
+                    Number(totals?.cess) > 0 && (h("div", { style: rowStyle },
+                        h("span", null, cap('Cess')),
+                        h("span", { style: { textAlign: 'right' } }, amt(totals.cess)))),
+                    Number(totals?.tcsAmount) > 0 && (h("div", { style: rowStyle },
+                        h("span", null, cap('TCS')),
+                        h("span", { style: { textAlign: 'right' } }, amt(totals.tcsAmount)))),
+                    Number(totals?.invoiceDiscountAmount) > 0 && (h("div", { style: rowStyle },
+                        h("span", null, cap('Discount on total')),
+                        h("span", { style: { textAlign: 'right' } },
+                            "-",
+                            amt(totals.invoiceDiscountAmount)))),
+                    showRoundOff && Number(totals?.roundOff) !== 0 && (h("div", { style: rowStyle },
+                        h("span", null, cap('Round-off')),
+                        h("span", { style: { textAlign: 'right' } },
+                            Number(totals.roundOff) > 0 ? '+' : '',
+                            amt(totals.roundOff)))),
+                    h("div", { style: {
+                            ...rowStyle,
+                            fontWeight: strongWeight, fontSize: '1.2em', marginTop: 4,
+                            paddingTop: 4, borderTop: '1px solid #000',
+                            borderBottom: '2px solid #000', paddingBottom: 4,
+                        } },
+                        h("span", null, cap('TOTAL')),
+                        h("span", { style: { textAlign: 'right' } }, amt(totals?.total))),
+                    Number(totals?.tdsAmount) > 0 && (h(Fragment, null,
+                        h("div", { style: { ...rowStyle, marginTop: 4 } },
+                            h("span", null, cap('Less: TDS')),
+                            h("span", { style: { textAlign: 'right' } },
+                                "-",
+                                amt(totals.tdsAmount))),
+                        h("div", { style: { ...rowStyle, fontWeight: strongWeight } },
+                            h("span", null, cap('Net Receivable')),
+                            h("span", { style: { textAlign: 'right' } }, amt(totals.netReceivable)))))));
+            })(),
+            showAmountWords && (h("div", { style: { padding: secPad, fontSize: '0.9em', textAlign: 'center', ...dashLine, fontStyle: 'italic', fontWeight: baseWeight } }, cap(amountInWords(totals?.total || 0)))),
+            showBankDetails && (account?.bankName || profile?.bankName) && (h("div", { style: { padding: secPad, fontSize: '0.9em', fontWeight: baseWeight, ...dashLine } },
+                h("div", { style: { fontWeight: strongWeight, textAlign: 'center', marginBottom: 3 } }, cap('BANK DETAILS')),
+                account?.accountHolderName && account.accountHolderName.trim() && (h("div", null, cap(account.accountHolderName))),
+                h("div", null, cap(account?.bankName || profile?.bankName)),
+                (account?.accountNumber || profile?.accountNumber) && (h("div", null,
+                    cap('A/c: ' + (account?.accountNumber || profile?.accountNumber)),
+                    account?.accountType ? ' · ' + cap(({ savings: 'Sav', current: 'Cur', cc: 'CC', od: 'OD', nre: 'NRE', nro: 'NRO' })[account.accountType] || account.accountType) : '')),
+                (account?.ifsc || profile?.ifsc) && h("div", null, cap('IFSC: ' + (account?.ifsc || profile?.ifsc))))),
+            paymentLink && (h("div", { style: { padding: secPad, fontSize: '0.9em', fontWeight: baseWeight, wordBreak: 'break-all', ...dashLine } },
+                cap('Pay online: '),
+                paymentLink)),
+            opt('showUPI') && qrDataUrl && (() => {
+                // v1.10.36 — Reverted to the pre-v1.10.33 QR sizing.
+                // Reported (Hinglish): "qr small ho gaya hai ... phele jaisa
+                // kar dijiye just custom me problem tha". The 50%-of-width
+                // formula introduced in v1.10.33 was too aggressive on
+                // standard rolls (thermal58/76/80 all shrank), and users had
+                // already tuned qrSizePx via the thermalQrSize picker
+                // (small=60/medium=90/large=120px). The ONLY roll that needed
+                // a defensive cap was the custom sub-100mm case — on a 40mm
+                // custom roll the fixed 90px QR spilled off the paper edge.
+                // Now: keep the historical behaviour on every preset roll,
+                // apply the width-based cap ONLY when paperSize === 'custom'.
+                const isCustomThermal = paperCfg.cssClass === 'paper-thermal-custom';
+                const size = isCustomThermal
+                    ? Math.min(qrSizePx, Math.round(paperCfg.widthMm * 3.78 * 0.55))
+                    : (isNarrow ? Math.min(qrSizePx, 90) : qrSizePx);
+                return (h("div", { style: { padding: secPad, textAlign: 'center', ...dashLine } },
+                    h("img", { src: qrDataUrl, alt: "UPI QR", className: "thermal-qr", style: { width: size, height: size, filter: contrastFilter } }),
+                    h("div", { style: { fontSize: '0.85em', fontWeight: strongWeight } }, cap('Scan to pay via UPI'))));
+            })(),
+            showNotes && customNotes && (h("div", { style: { padding: secPad, fontSize: '0.9em', fontWeight: baseWeight, ...dashLine }, dangerouslySetInnerHTML: { __html: DOMPurify.sanitize(customNotes) } })),
+            footerMessage && (h("div", { style: { padding: '6px 4px 6px', textAlign: 'center', fontSize: '0.95em', fontWeight: strongWeight } },
+                cap(`*** ${footerMessage} ***`),
+                profile?.email && h("div", { style: { fontWeight: baseWeight, marginTop: 2 } }, cap(profile.email)))),
+            cutMark && (h("div", { style: { padding: '10px 4px 4px', textAlign: 'center', fontSize: '0.85em', letterSpacing: '0.15em', color: '#000', fontFamily: 'monospace', fontWeight: strongWeight } }, '- - - - -  ✂  CUT HERE  ✂  - - - - -')),
+            feedLines > 0 && (h("div", { style: { height: `${feedLines * 8}px` } }))));
+    }
+    // v1.9.1 — company letterhead + template variant CSS class
+    // v1.9.2 — user-configurable colours via CSS custom properties + font scale
+    const _ps_final = _ps; // v1.10.4 — reuse top-of-function read
+    const letterheadOn = _ps_final.letterheadEnabled && _ps_final.letterheadImage;
+    const hideHeaderBecauseLetterhead = letterheadOn && _ps_final.letterheadHideHeader;
+    // v1.9.14 — Inline style typography wiring. Data-attribute CSS from
+    // v1.9.13 lost specificity wars against dark-mode overrides and
+    // template-* rules, so users saw the font stay put no matter what
+    // they picked. Inline styles beat every CSS class regardless of
+    // specificity — this is the reliable path.
+    //
+    // v1.10.9 — decoupled Typography settings from PDF. The Typography
+    // section explicitly says "Monospace prints crisper on most thermal
+    // printers" — users reasonably expect it to be thermal-only.
+    // Meanwhile the dedicated "PDF FONT FAMILY" dropdown (helvetica /
+    // times / courier) had NO consumer at all — clicking it did
+    // nothing. Now: Typography → thermal only. `pdfFontFamily` →
+    // actual PDF font. Font weight + ALL CAPS still bridge to PDF via
+    // Typography (they're layout-neutral choices).
+    const PDF_FAMILY_MAP = {
+        helvetica: 'Helvetica, Arial, "Segoe UI", sans-serif',
+        times: '"Times New Roman", Times, "Liberation Serif", serif',
+        courier: '"Courier New", Courier, "Liberation Mono", monospace',
+    };
+    const pdfFontFamilyCss = !isThermal
+        ? (PDF_FAMILY_MAP[_ps_final.pdfFontFamily] || PDF_FAMILY_MAP.helvetica)
+        : undefined;
+    // v1.10.10 — pdfFontScale REMOVED from the preview CSS layer.
+    // Previously we multiplied `basePct × pdfFontScale` here, but most
+    // child elements use `rem`/`px` (not `em`), so a container
+    // `font-size: 80%` only cascaded to a handful of nodes and neither
+    // the preview nor the real PDF actually shrank. The scale now applies
+    // at the PDF-placement layer in buildPDF — shrinking the whole image
+    // area on the page — which is both reliable and matches how MS Word
+    // "shrink to fit" works. Preview font-size stays base-preset only.
+    const PDF_FONT_SIZE_PCT = { small: 87, medium: 100, large: 112, xlarge: 122 };
+    const basePct = !isThermal ? (PDF_FONT_SIZE_PCT[_ps_final.fontSize] || 100) : 100;
+    const pdfFontSizeCss = !isThermal ? `${basePct}%` : undefined;
+    const PDF_FONT_WEIGHT = { normal: 400, bold: 600, ultra: 800 };
+    const pdfFontWeightCss = !isThermal ? (PDF_FONT_WEIGHT[_ps_final.fontWeight] || 400) : undefined;
+    const pdfCapsOn = !isThermal && _ps_final.allCaps === true;
+    // v1.10.37 — Terms & Notes rendering mode. Per-invoice option.termsFormatMode
+    // wins over the global printSettings.termsFormatMode. Falls back to
+    // 'compact' (historical) so old invoices keep the same PDF pixel-for-pixel.
+    //
+    // v1.10.38 — Smart default. If no explicit choice was made AND the
+    // invoice is services-only (freelancers / consultants / dev shops
+    // typically have B2B clients who actually read the terms), default
+    // to 'formatted'. Goods invoices stay on 'compact' because their
+    // terms are usually retail boilerplate the client never reads.
+    // Explicit user choice at either the per-invoice or global level
+    // always wins over this heuristic.
+    const explicitMode = options.termsFormatMode || _ps_final.termsFormatMode;
+    const isServicesInvoice = (options.invoiceMode || 'goods') === 'services';
+    const termsFormatMode = explicitMode || (isServicesInvoice ? 'formatted' : 'compact');
+    const termsClassMod = termsFormatMode === 'formatted' ? 'inv-terms-formatted' : '';
+    const finalContainerStyle = {
+        ...containerStyle,
+        ...(letterheadOn ? {
+            backgroundImage: `url(${_ps_final.letterheadImage})`,
+            backgroundSize: 'cover',
+            backgroundRepeat: 'no-repeat',
+            backgroundPosition: 'center top',
+        } : {}),
+        // v1.9.2 — CSS custom properties for user-controlled colours. Only
+        // applied when userColorsEnabled = true (data attribute gates the CSS).
+        // Each var falls back to a template default if the user doesn't set it.
+        ...(_ps_final.userColorsEnabled ? (() => {
+            const accent = _ps_final.pdfAccent || '#1e40af';
+            // v1.10.40 — Also compute an RGB channel string so CSS rules can
+            // build rgba(var(--pdf-accent-rgb), α) tints. Was using
+            // color-mix(in oklab, …) but html2canvas doesn't parse it and
+            // fails on Save & Download with "unsupported color function oklab".
+            const hex = accent.startsWith('#') ? accent.slice(1) : '';
+            const rgb = hex.length === 6
+                ? `${parseInt(hex.slice(0, 2), 16)}, ${parseInt(hex.slice(2, 4), 16)}, ${parseInt(hex.slice(4, 6), 16)}`
+                : '30, 64, 175'; // fallback to default blue
+            return {
+                '--pdf-primary-text': _ps_final.pdfPrimaryText || '#0f172a',
+                '--pdf-muted-text': _ps_final.pdfMutedText || '#334155',
+                '--pdf-accent': accent,
+                '--pdf-accent-rgb': rgb,
+                '--pdf-accent-text': _ps_final.pdfAccentText || '#ffffff',
+                '--pdf-header-bg': _ps_final.pdfHeaderBg || '#f8fafc',
+                '--pdf-divider': _ps_final.pdfDividerColor || '#334155',
+            };
+        })() : {}),
+        // v1.9.14/1.10.9 — inline typography. pdfFontSizeCss already folds
+        // in the pdfFontScale multiplier (see the compute above).
+        ...(pdfFontFamilyCss ? { fontFamily: pdfFontFamilyCss } : {}),
+        ...(pdfFontSizeCss ? { fontSize: pdfFontSizeCss } : {}),
+        ...(pdfFontWeightCss ? { fontWeight: pdfFontWeightCss } : {}),
+        ...(pdfCapsOn ? { textTransform: 'uppercase' } : {}),
+        // v1.10.67 (#66 item 12) — origin for the CANCELLED watermark below.
+        position: 'relative',
+    };
+    // v1.10.73 - Boxed grid / Tally style get everything already worked out
+    // above, so their numbers are the same as every other design's.
+    const isGrid = pdfStyle === 'boxed' || pdfStyle === 'tally';
+    const sanitizedTerms = customTerms ? splitNumberedTerms(DOMPurify.sanitize(customTerms)) : '';
+    const sanitizedNotes = customNotes ? splitNumberedTerms(DOMPurify.sanitize(customNotes)) : '';
+    const taxedRates = [...new Set(items.map((it) => lineCalc(it)).filter((l) => l.tax > 0).map((l) => l.rate))];
+    const gridSig = (() => {
+        const sigImg = profile?.signature || (_ps.signatureShow !== false ? _ps.signatureImage : null);
+        const stampImg = profile?.stamp || null;
+        return {
+            show: showSignature && !!(sigImg || stampImg), sigImg, stampImg,
+            sigHeight: Number(profile?.signatureHeight) || 60, stampHeight: Number(profile?.stampHeight) || 70,
+            layout: profile?.signLayout || 'side',
+        };
+    })();
+    const shipToParty = details?.shipToSameAsBilling === false
+        && (details?.shippingAddress || details?.shippingCity || details?.shippingState)
+        ? { name: client?.name, address: details.shippingAddress, city: details.shippingCity, pin: details.shippingPin, state: details.shippingState }
+        : null;
+    const gridNotices = (h(Fragment, null,
+        exportDecl && (h("div", { "data-pdf-page-boundary": "", style: { margin: '2px 0 6px', fontSize: '0.85em' } }, exportDecl)),
+        options.reverseCharge && isIndia && showGST && (h("div", { "data-pdf-page-boundary": "", style: { margin: '2px 0 6px', fontSize: '0.92em' } },
+            h("strong", null, "Reverse Charge applicable."),
+            " GST is payable by the recipient under Section 9(3)/9(4) of the CGST Act.")),
+        invoiceType === 'composition' && (h("div", { "data-pdf-page-boundary": "", style: { margin: '2px 0 6px', fontStyle: 'italic', fontSize: '0.92em' } }, "\"Composition taxable person, not eligible to collect tax on supplies.\" (Rule 46A, CGST Rules)")),
+        exchangeRateLine && (h("div", { "data-pdf-page-boundary": "", style: { margin: '2px 0 6px', fontSize: '0.92em' } }, exchangeRateLine))));
+    const gridCtx = isGrid ? {
+        style: pdfStyle, profile, client, details, items, totals, options, invoiceType, accent, fmt, lineCalc, hsnRows,
+        invoiceTitle: customTitle, isIndia, isInterstate, taxLabel, sellerCC, account,
+        showGST, hasAnyDiscount, showAmountWords, showBankDetails, showSignatoryText, showSystemGeneratedNote,
+        showReverseChargeLine, reverseChargeText, qrDataUrl, upiId,
+        showHsnSummary, showTaxInWords, showDeclaration, showCustomerSeal, declarationText, totalTax,
+        singleRate: taxedRates.length === 1 ? taxedRates[0] : null,
+        words: (n) => (currencySymbol === 'INR' ? `INR ${numberToWords(n)}` : amountInWords(n)),
+        shortDate: formatShortDate,
+        isServices: (options.invoiceMode || 'goods') === 'services',
+        docLabel: ({ quotation: 'Quotation', proforma: 'Proforma', 'credit-note': 'Credit Note', 'delivery-challan': 'Challan' })[invoiceType] || 'Invoice',
+        placeOfSupply: placeOfSupplyText, clientAbroad, clientCountry, clientTaxIdLabel, paymentLink, purposeCode,
+        shipTo: shipToParty,
+        sig: gridSig,
+        notices: gridNotices,
+        termsHtml: !_ps.termsSeparatePage && showTerms && htmlHasText(sanitizedTerms) ? sanitizedTerms : '',
+        notesHtml: !_ps.termsSeparatePage && showNotes && htmlHasText(sanitizedNotes) ? sanitizedNotes : '',
+        termsClassMod,
+        t: {
+            logo: showLogo, businessName: showBusinessName, businessAddress: showBusinessAddress,
+            businessPhone: showBusinessPhone, businessEmail: showBusinessEmail, gstin: showGSTIN, state: showState,
+            clientAddress: showClientAddress, clientPhone: showClientPhone, clientEmail: showClientEmail,
+            placeOfSupply: showPlaceOfSupply, invoiceNumber: showInvoiceNumber, invoiceDate: showInvoiceDate, dueDate: showDueDate,
+            hsn: showHSN, itemQty: showItemQty, itemUnit: showItemUnit, rate: showRateColumn,
+        },
+    } : null;
+    return (h("div", { className: `invoice-preview-container ${paperCfg.cssClass} template-${pdfStyleVariant}`, "data-user-colors": _ps_final.userColorsEnabled ? '1' : '0', "data-row-density": _ps_final.rowDensity || 'normal', "data-header-compact": _ps_final.headerCompact ? '1' : '0', ref: ref, ...(previewOnly ? {} : { id: 'invoice-preview' }), style: finalContainerStyle },
+        cancelled && (h("div", { "aria-hidden": "true", style: {
+                position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                pointerEvents: 'none', zIndex: 5,
+            } },
+            h("span", { style: {
+                    transform: 'rotate(-24deg)', whiteSpace: 'nowrap',
+                    fontSize: '3.6rem', fontWeight: 800, letterSpacing: '0.18em',
+                    color: 'rgba(220, 38, 38, 0.22)',
+                    border: '6px solid rgba(220, 38, 38, 0.22)', borderRadius: 14,
+                    padding: '0.3rem 1.6rem',
+                } }, "CANCELLED"))),
+        einv && (h("div", { "data-pdf-page-boundary": "", style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', padding: '0.6rem 1.25rem', borderBottom: '1px solid #cbd5e1', fontSize: '0.72rem', color: '#0f172a', lineHeight: 1.6 } },
+            h("div", { style: { minWidth: 0 } },
+                h("div", { style: { fontWeight: 700, letterSpacing: '0.04em', color: '#334155' } }, "E-INVOICE"),
+                h("div", null,
+                    h("strong", null, "IRN:"),
+                    " ",
+                    h("span", { style: { wordBreak: 'break-all' } }, einv.irn)),
+                h("div", null,
+                    h("strong", null, "Ack No:"),
+                    " ",
+                    einv.ackNo,
+                    h("span", { style: { marginLeft: '1.25rem' } },
+                        h("strong", null, "Ack Date:"),
+                        " ",
+                        einv.ackDate))),
+            irnQr && h("img", { src: irnQr, alt: "E-invoice QR code", style: { width: 120, height: 120, flexShrink: 0 } }))),
+        isGrid && h(InvoiceGridLayout, { ctx: gridCtx }),
+        isGrid && _ps.termsSeparatePage && (htmlHasText(sanitizedTerms) || htmlHasText(sanitizedNotes)) && (h("div", { "data-pdf-page": "terms", style: { padding: '2rem', pageBreakBefore: 'always', breakBefore: 'page' } },
+            showTerms && htmlHasText(sanitizedTerms) && (h("div", { className: "inv-footer-block" },
+                h("h4", { className: "inv-section-label" }, getLabel(_ps_labels, 'terms')),
+                h("div", { className: `inv-terms inv-rich ${termsClassMod}`, dangerouslySetInnerHTML: { __html: sanitizedTerms } }))),
+            showNotes && htmlHasText(sanitizedNotes) && (h("div", { className: "inv-footer-block", style: { marginTop: '2rem' } },
+                h("h4", { className: "inv-section-label" }, getLabel(_ps_labels, 'notes')),
+                h("div", { className: `inv-terms inv-rich ${termsClassMod}`, dangerouslySetInnerHTML: { __html: sanitizedNotes } }))))),
+        !isGrid && (h(Fragment, null,
+            !hideHeaderBecauseLetterhead && pdfStyle === 'modern' && renderModernHeader(),
+            !hideHeaderBecauseLetterhead && pdfStyle === 'minimal' && renderMinimalHeader(),
+            !hideHeaderBecauseLetterhead && pdfStyle === 'classic' && renderClassicHeader(),
+            renderParties(),
+            orderDetails.length > 0 && (h("div", { className: "inv-parties inv-order-details", "data-pdf-page-boundary": "", style: { margin: pdfStyle === 'classic' ? '0 0 0.75rem' : '0 2rem 0.75rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: '0.25rem 1rem', fontSize: '0.75rem' } }, orderDetails.map((f) => (h("div", { key: f.key, style: f.wide ? { gridColumn: '1 / -1' } : undefined },
+                h("span", { style: { color: '#475569' } },
+                    f.label,
+                    ": "),
+                h("strong", null, f.value)))))),
+            h("table", { className: "inv-table", style: { tableLayout: 'auto', ...(pdfStyle === 'modern' ? { margin: '0 2rem', width: 'calc(100% - 4rem)' } : pdfStyle === 'minimal' ? { margin: '0 2rem', width: 'calc(100% - 4rem)', borderTop: 'none' } : {}) } },
+                h("thead", null, showGST ? (isIndia && isInterstate ? (h(Fragment, null,
+                    h("tr", null,
+                        h("th", { className: "inv-th", rowSpan: "2" }, "#"),
+                        h("th", { className: "inv-th", rowSpan: "2" }, "Description"),
+                        showHSN && h("th", { className: "inv-th inv-th-center", rowSpan: "2" }, hsnHeader),
+                        showItemQty && h("th", { className: "inv-th inv-th-center", rowSpan: "2" }, "Qty"),
+                        showRateColumn && h("th", { className: "inv-th inv-th-right", rowSpan: "2" }, "Rate"),
+                        hasAnyDiscount && h("th", { className: "inv-th inv-th-right", rowSpan: "2" }, "Disc."),
+                        h("th", { className: "inv-th inv-th-center", colSpan: "2", style: { borderBottom: '1px solid #cbd5e1' } }, "IGST"),
+                        h("th", { className: "inv-th inv-th-right", rowSpan: "2" }, "Amount")),
+                    h("tr", null,
+                        h("th", { className: "inv-th inv-th-center" }, "%"),
+                        h("th", { className: "inv-th inv-th-right" }, "Amt")))) : isIndia ? (h(Fragment, null,
+                    h("tr", null,
+                        h("th", { className: "inv-th", rowSpan: "2" }, "#"),
+                        h("th", { className: "inv-th", rowSpan: "2" }, "Description"),
+                        showHSN && h("th", { className: "inv-th inv-th-center", rowSpan: "2" }, hsnHeader),
+                        showItemQty && h("th", { className: "inv-th inv-th-center", rowSpan: "2" }, "Qty"),
+                        showRateColumn && h("th", { className: "inv-th inv-th-right", rowSpan: "2" }, "Rate"),
+                        hasAnyDiscount && h("th", { className: "inv-th inv-th-right", rowSpan: "2" }, "Disc."),
+                        h("th", { className: "inv-th inv-th-center", colSpan: "2", style: { borderBottom: '1px solid #cbd5e1' } }, "CGST"),
+                        h("th", { className: "inv-th inv-th-center", colSpan: "2", style: { borderBottom: '1px solid #cbd5e1' } }, totals.isIntraUT ? 'UTGST' : 'SGST'),
+                        h("th", { className: "inv-th inv-th-right", rowSpan: "2" }, "Amount")),
+                    h("tr", null,
+                        h("th", { className: "inv-th inv-th-center" }, "%"),
+                        h("th", { className: "inv-th inv-th-right" }, "Amt"),
+                        h("th", { className: "inv-th inv-th-center" }, "%"),
+                        h("th", { className: "inv-th inv-th-right" }, "Amt")))) : (
+                // Foreign: single tax column (VAT/SST/etc.) — no CGST/SGST/IGST split
+                h(Fragment, null,
+                    h("tr", null,
+                        h("th", { className: "inv-th", rowSpan: "2" }, "#"),
+                        h("th", { className: "inv-th", rowSpan: "2" }, "Description"),
+                        showHSN && h("th", { className: "inv-th inv-th-center", rowSpan: "2" }, hsnHeader),
+                        showItemQty && h("th", { className: "inv-th inv-th-center", rowSpan: "2" }, "Qty"),
+                        showRateColumn && h("th", { className: "inv-th inv-th-right", rowSpan: "2" }, "Rate"),
+                        hasAnyDiscount && h("th", { className: "inv-th inv-th-right", rowSpan: "2" }, "Disc."),
+                        h("th", { className: "inv-th inv-th-center", colSpan: "2", style: { borderBottom: '1px solid #cbd5e1' } }, taxLabel),
+                        h("th", { className: "inv-th inv-th-right", rowSpan: "2" }, "Amount")),
+                    h("tr", null,
+                        h("th", { className: "inv-th inv-th-center" }, "%"),
+                        h("th", { className: "inv-th inv-th-right" }, "Amt"))))) : (h("tr", null,
+                    h("th", { className: "inv-th" }, "#"),
+                    h("th", { className: "inv-th" }, "Description"),
+                    showHSN && h("th", { className: "inv-th inv-th-center" }, hsnHeader),
+                    showItemQty && h("th", { className: "inv-th inv-th-center" }, "Qty"),
+                    showRateColumn && h("th", { className: "inv-th inv-th-right" }, "Rate"),
+                    hasAnyDiscount && h("th", { className: "inv-th inv-th-right" }, "Disc."),
+                    h("th", { className: "inv-th inv-th-right" }, "Amount")))),
+                h("tbody", null, items.map((item, index) => {
+                    // Shared with the grid designs and the HSN summary (lineCalc).
+                    const { discount, taxable: afterDiscount, tax: taxAmount, rate: taxRate } = lineCalc(item);
+                    const halfRate = taxRate / 2;
+                    const halfTax = taxAmount / 2;
+                    return (h("tr", { key: item.id, className: index % 2 === 0 ? 'inv-tr-even' : '' },
+                        h("td", { className: "inv-td inv-td-muted" }, index + 1),
+                        h("td", { className: "inv-td inv-td-name" },
+                            item.name || '-',
+                            item.description && (h("div", { style: { fontSize: '0.78em', color: '#475569', marginTop: 2, whiteSpace: 'pre-wrap' } }, item.description))),
+                        showHSN && h("td", { className: "inv-td inv-td-center inv-td-muted" }, item.hsn || '-'),
+                        showItemQty && h("td", { className: "inv-td inv-td-center" },
+                            item.quantity,
+                            showItemUnit && item.unit ? ` ${item.unit}` : ''),
+                        showRateColumn && h("td", { className: "inv-td inv-td-right" }, fmt(item.rate)),
+                        hasAnyDiscount && h("td", { className: "inv-td inv-td-right" }, discount > 0 ? fmt(discount) : '-'),
+                        showGST && (isIndia && isInterstate ? (h(Fragment, null,
+                            h("td", { className: "inv-td inv-td-center" },
+                                taxRate,
+                                "%"),
+                            h("td", { className: "inv-td inv-td-right" }, fmt(taxAmount)))) : isIndia ? (h(Fragment, null,
+                            h("td", { className: "inv-td inv-td-center" },
+                                halfRate,
+                                "%"),
+                            h("td", { className: "inv-td inv-td-right" }, fmt(halfTax)),
+                            h("td", { className: "inv-td inv-td-center" },
+                                halfRate,
+                                "%"),
+                            h("td", { className: "inv-td inv-td-right" }, fmt(halfTax)))) : (h(Fragment, null,
+                            h("td", { className: "inv-td inv-td-center" },
+                                taxRate,
+                                "%"),
+                            h("td", { className: "inv-td inv-td-right" }, fmt(taxAmount))))),
+                        h("td", { className: "inv-td inv-td-right inv-td-amount" }, fmt(afterDiscount))));
+                }))),
+            h("div", { className: "inv-totals-section", style: pdfStyle !== 'classic' ? { padding: '1rem 2rem' } : {} },
+                h("div", { className: "inv-words" },
+                    showAmountWords && (h(Fragment, null,
+                        h("h4", { className: "inv-section-label" }, getLabel(_ps_labels, 'amountInWords')),
+                        h("p", { className: "inv-words-text" }, amountInWords(totals.total)),
+                        dualCurrencyOn && (h("p", { style: { fontSize: '0.85em', color: '#555', fontStyle: 'italic', margin: '0.15rem 0 0' } },
+                            "Total: ",
+                            fmt(totals.total),
+                            " \u00B7 ",
+                            fmtDualSecondary(totals.total))))),
+                    qrDataUrl && (h("div", { style: { marginTop: '1.25rem' } },
+                        h("h4", { className: "inv-section-label" }, "SCAN TO PAY (UPI)"),
+                        h("div", { style: { display: 'flex', alignItems: 'center', gap: '0.75rem' } },
+                            h("img", { src: qrDataUrl, alt: "UPI QR", style: { width: '90px', height: '90px', borderRadius: '6px', border: '1px solid #e2e8f0' } }),
+                            h("div", { style: { fontSize: '0.7rem', color: '#475569', lineHeight: 1.5 } },
+                                h("p", { style: { margin: 0, color: '#475569' } }, "UPI ID:"),
+                                h("p", { style: { margin: 0, color: '#334155', fontWeight: 600, fontSize: '0.75rem' } }, upiId),
+                                h("p", { style: { margin: '0.25rem 0 0', color: '#475569' } }, fmt(totals.total))))))),
+                h("div", { className: "inv-totals" },
+                    showSubtotal && (h("div", { className: "inv-total-row" },
+                        h("span", null, getLabel(_ps_labels, 'subtotal')),
+                        h("span", null, fmt(printedSubtotal(totals))))),
+                    totals.totalDiscount > 0 && (h("div", { className: "inv-total-row", style: { color: '#dc2626' } },
+                        h("span", null, "Discount"),
+                        h("span", null,
+                            "- ",
+                            fmt(totals.totalDiscount)))),
+                    showGST && (isIndia && isInterstate ? (h("div", { className: "inv-total-row" },
+                        h("span", null, "IGST"),
+                        h("span", null, fmt(totals.igst)))) : isIndia ? (h(Fragment, null,
+                        h("div", { className: "inv-total-row" },
+                            h("span", null, "CGST"),
+                            h("span", null, fmt(totals.cgst))),
+                        h("div", { className: "inv-total-row" },
+                            h("span", null, totals.isIntraUT ? 'UTGST' : 'SGST'),
+                            h("span", null, fmt((totals.sgst || 0) + (totals.utgst || 0)))))) : (h("div", { className: "inv-total-row" },
+                        h("span", null, taxLabel),
+                        h("span", null, fmt((totals.cgst || 0) + (totals.sgst || 0) + (totals.igst || 0)))))),
+                    totals.cess > 0 && (h("div", { className: "inv-total-row" },
+                        h("span", null, "GST Cess"),
+                        h("span", null, fmt(totals.cess)))),
+                    totals.tcsAmount > 0 && (h("div", { className: "inv-total-row" },
+                        h("span", null,
+                            "TCS",
+                            options.tcsSection ? ` (${options.tcsSection} @ ${options.tcsRate}%)` : ''),
+                        h("span", null, fmt(totals.tcsAmount)))),
+                    totals.invoiceDiscountAmount > 0 && (h("div", { className: "inv-total-row", style: { color: '#dc2626' } },
+                        h("span", null,
+                            "Discount on total",
+                            totals.invoiceDiscountType === 'percent' && totals.invoiceDiscountValue > 0
+                                ? ` (${totals.invoiceDiscountValue}%)`
+                                : ''),
+                        h("span", null,
+                            "\u2212",
+                            fmt(totals.invoiceDiscountAmount)))),
+                    totals.roundOff !== undefined && totals.roundOff !== 0 && (h("div", { className: "inv-total-row", style: { color: '#64748b', fontStyle: 'italic' } },
+                        h("span", null, "Round-off"),
+                        h("span", null,
+                            totals.roundOff > 0 ? '+' : '',
+                            fmt(totals.roundOff)))),
+                    pdfStyle === 'modern' ? (h("div", { className: "inv-total-row inv-total-final inv-total-modern", style: { background: accent, color: '#fff', borderRadius: '6px', padding: '0.6rem 0.75rem', marginTop: '0.25rem' } },
+                        h("span", { style: { color: '#fff' } }, invoiceType === 'credit-note' ? 'Credit Amount' : totalDueLabel),
+                        h("span", { style: { color: '#fff' } }, fmt(totals.total)))) : (h("div", { className: "inv-total-row inv-total-final" },
+                        h("span", null, invoiceType === 'credit-note' ? 'Credit Amount' : totalDueLabel),
+                        h("span", { style: { color: accent } }, fmt(totals.total)))),
+                    totals.tdsAmount > 0 && (h(Fragment, null,
+                        h("div", { className: "inv-total-row", style: { color: '#64748b', fontSize: '0.75rem', marginTop: '0.25rem', borderTop: '1px dashed #e2e8f0', paddingTop: '0.4rem' } },
+                            h("span", null,
+                                "Less: TDS",
+                                options.tdsSection ? ` (${options.tdsSection} @ ${options.tdsRate}%)` : ''),
+                            h("span", null,
+                                "\u2212 ",
+                                fmt(totals.tdsAmount))),
+                        h("div", { className: "inv-total-row", style: { fontWeight: 600, color: '#0f766e', fontSize: '0.78rem' } },
+                            h("span", null, "Net Receivable"),
+                            h("span", null, fmt(totals.netReceivable))))))),
+            (showHsnSummary && hsnRows.length > 0) || (showTaxInWords && totalTax > 0) ? (h("div", { style: { margin: pdfStyle === 'classic' ? '0 0 0.75rem' : '0 2rem 0.75rem', fontSize: '0.75rem' } },
+                showHsnSummary && hsnRows.length > 0 && (h(HsnSummaryTable, { ctx: { hsnRows, isIndia, isInterstate, taxLabel, totals } })),
+                showTaxInWords && totalTax > 0 && (h("p", { "data-pdf-page-boundary": "", style: { margin: '0.35rem 0 0' } },
+                    "Tax amount (in words): ",
+                    h("strong", null, currencySymbol === 'INR' ? numberToWords(totalTax) : amountInWords(totalTax)))))) : null,
+            exportDecl && (h("div", { style: { margin: '0 2rem 0.5rem', fontSize: '0.68rem', lineHeight: 1.45, color: '#475569', fontWeight: 400 } }, exportDecl)),
+            options.reverseCharge && isIndia && showGST && (h("div", { style: { margin: '0 2rem 0.5rem', padding: '0.5rem 0.75rem', background: 'var(--warn-bg)', border: '1px solid var(--warn-border)', borderRadius: 4, fontSize: '0.78rem', color: 'var(--warn-text)' } },
+                h("strong", null, "Reverse Charge applicable."),
+                " GST is payable by the recipient under Section 9(3)/9(4) of the CGST Act.")),
+            invoiceType === 'composition' && (h("div", { style: { margin: '0 2rem 0.5rem', padding: '0.5rem 0.75rem', background: 'var(--info-bg)', border: '1px solid var(--info-border)', borderRadius: 4, fontSize: '0.78rem', color: 'var(--info-text)', fontStyle: 'italic' } },
+                "\"Composition taxable person, not eligible to collect tax on supplies.\" \u00A0",
+                h("span", { style: { fontStyle: 'normal', fontSize: '0.7rem' } }, "(Rule 46A, CGST Rules)"))),
+            h("div", { className: "inv-footer", style: pdfStyle !== 'classic' ? { padding: '1rem 2rem' } : {} },
+                h("div", { className: "inv-footer-left" },
+                    showBankDetails && (account?.bankName || profile?.bankName) && (h("div", { className: "inv-footer-block" },
+                        h("h4", { className: "inv-section-label" }, getLabel(_ps_labels, 'bankDetails')),
+                        showAccountLabel && account?.label && (h("p", { style: { margin: '0 0 0.25rem', fontSize: '0.75rem', color: '#64748b', fontStyle: 'italic' } },
+                            "Pay via: ",
+                            h("strong", { style: { color: '#334155' } }, account.label))),
+                        h("div", { className: "inv-footer-details" },
+                            (account?.accountHolderName || profile?.businessName) && (h("p", null,
+                                h("span", { className: "inv-detail-label" }, "A/C Name:"),
+                                " ",
+                                account?.accountHolderName || profile.businessName)),
+                            h("p", null,
+                                h("span", { className: "inv-detail-label" }, "Bank:"),
+                                " ",
+                                account?.bankName || profile.bankName),
+                            h("p", null,
+                                h("span", { className: "inv-detail-label" }, "A/C No:"),
+                                " ",
+                                account?.accountNumber || profile.accountNumber,
+                                account?.accountType && (h("span", { style: { marginLeft: '0.4rem', fontSize: '0.85em', color: '#64748b' } },
+                                    "\u00B7 ",
+                                    ({ savings: 'Savings', current: 'Current', cc: 'Cash Credit', od: 'Overdraft', nre: 'NRE', nro: 'NRO' })[account.accountType] || account.accountType))),
+                            (account?.ifsc || profile.ifsc) && h("p", null,
+                                h("span", { className: "inv-detail-label" },
+                                    sellerCC.bankLabel || 'IFSC',
+                                    ":"),
+                                " ",
+                                account?.ifsc || profile.ifsc),
+                            (account?.swift || profile.swift) && h("p", null,
+                                h("span", { className: "inv-detail-label" }, "SWIFT/BIC:"),
+                                " ",
+                                account?.swift || profile.swift),
+                            account?.iban && h("p", null,
+                                h("span", { className: "inv-detail-label" }, "IBAN:"),
+                                " ",
+                                account.iban),
+                            purposeCode && h("p", null,
+                                h("span", { className: "inv-detail-label" }, "Purpose code:"),
+                                " ",
+                                purposeCodeText(purposeCode)),
+                            profile.pan && isIndia && h("p", null,
+                                h("span", { className: "inv-detail-label" }, "PAN:"),
+                                " ",
+                                profile.pan)))),
+                    paymentLink && (h("div", { className: "inv-footer-block" },
+                        h("h4", { className: "inv-section-label" }, "PAY ONLINE"),
+                        h("p", { className: "inv-terms", style: { wordBreak: 'break-all' } }, paymentLink))),
+                    exchangeRateLine && (h("div", { className: "inv-footer-block" },
+                        h("h4", { className: "inv-section-label" }, "EXCHANGE RATE"),
+                        h("p", { className: "inv-terms" }, exchangeRateLine))),
+                    !_ps.termsSeparatePage && (() => {
+                        const termsHtml = customTerms ? splitNumberedTerms(DOMPurify.sanitize(customTerms)) : '';
+                        const hasTerms = htmlHasText(termsHtml);
+                        return showTerms && hasTerms ? (h("div", { className: "inv-footer-block" },
+                            h("h4", { className: "inv-section-label" }, getLabel(_ps_labels, 'terms')),
+                            h("div", { className: `inv-terms inv-rich ${termsClassMod}`, dangerouslySetInnerHTML: { __html: termsHtml } }))) : null;
+                    })(),
+                    !_ps.termsSeparatePage && (() => {
+                        const notesHtml = customNotes ? splitNumberedTerms(DOMPurify.sanitize(customNotes)) : '';
+                        const hasNotes = htmlHasText(notesHtml);
+                        return showNotes && hasNotes ? (h("div", { className: "inv-footer-block" },
+                            h("h4", { className: "inv-section-label" }, getLabel(_ps_labels, 'notes')),
+                            h("div", { className: `inv-terms inv-rich ${termsClassMod}`, dangerouslySetInnerHTML: { __html: notesHtml } }))) : null;
+                    })(),
+                    showSystemGeneratedNote && (h("div", { className: "inv-footer-block inv-system-note" },
+                        h("p", { className: "inv-terms", style: { margin: 0, fontStyle: 'italic' } },
+                            h("strong", null, "Note:"),
+                            " This is a system-generated invoice. No signature or stamp is required."))),
+                    showDeclaration && (h("div", { className: "inv-footer-block" },
+                        h("h4", { className: "inv-section-label" }, "DECLARATION"),
+                        h("p", { className: "inv-terms", style: { margin: 0 } }, declarationText)))),
+                _ps.termsSeparatePage && (customTerms || customNotes) && (h("div", { "data-pdf-page": "terms", style: { padding: '2rem', pageBreakBefore: 'always', breakBefore: 'page' } },
+                    (() => {
+                        const termsHtml = customTerms ? splitNumberedTerms(DOMPurify.sanitize(customTerms)) : '';
+                        const hasTerms = htmlHasText(termsHtml);
+                        return showTerms && hasTerms ? (h("div", { className: "inv-footer-block" },
+                            h("h4", { className: "inv-section-label" }, getLabel(_ps_labels, 'terms')),
+                            h("div", { className: `inv-terms inv-rich ${termsClassMod}`, dangerouslySetInnerHTML: { __html: termsHtml } }))) : null;
+                    })(),
+                    (() => {
+                        const notesHtml = customNotes ? splitNumberedTerms(DOMPurify.sanitize(customNotes)) : '';
+                        const hasNotes = htmlHasText(notesHtml);
+                        return showNotes && hasNotes ? (h("div", { className: "inv-footer-block", style: { marginTop: '2rem' } },
+                            h("h4", { className: "inv-section-label" }, getLabel(_ps_labels, 'notes')),
+                            h("div", { className: `inv-terms inv-rich ${termsClassMod}`, dangerouslySetInnerHTML: { __html: notesHtml } }))) : null;
+                    })())),
+                (() => {
+                    // v1.9.0: signature source priority — profile.signature (per-business,
+                    // legacy), then printSettings.signatureImage (app-wide default set
+                    // via Print Settings). Same for the signatory name.
+                    const printCfg = _ps; // v1.10.4 — reuse top-of-function read
+                    const sigImg = profile?.signature || (printCfg.signatureShow !== false ? printCfg.signatureImage : null);
+                    const sigName = profile?.businessName || printCfg.signatureName;
+                    // v1.10.67 (#66 item 13) — the stamp is a separate image with its own
+                    // height, so it no longer has to be pasted into the signature file.
+                    // Either one alone is enough to print the block.
+                    const stampImg = profile?.stamp || null;
+                    const sigMaxHeight = Number(profile?.signatureHeight) || 60;
+                    const stampMaxHeight = Number(profile?.stampHeight) || 70;
+                    if (!showSignature || (!sigImg && !stampImg))
+                        return null;
+                    return (h("div", { className: "inv-signature" },
+                        showSignatoryText && h("p", { className: "inv-sig-label" }, getLabel(_ps_labels, 'authorizedSignatory')),
+                        h(SignatureImages, { sigImg: sigImg, stampImg: stampImg, sigHeight: sigMaxHeight, stampHeight: stampMaxHeight, layout: profile?.signLayout, gap: 8 }),
+                        h("p", { className: "inv-sig-name" }, sigName)));
+                })()))),
+        (() => {
+            const filtered = extraSections.filter(s => s.title || s.content);
+            // v1.10.74 - dropped "Page N of M": M assumed a one-page invoice, so it
+            // was wrong whenever the invoice itself ran longer.
+            return filtered.map((section, idx) => (h("div", { key: section.id, className: "inv-extra-page", "data-pdf-page": idx + 2 },
+                h("div", { className: "inv-extra-page-header" },
+                    h("div", null,
+                        h("span", { className: "inv-extra-ref" },
+                            customTitle,
+                            " \u2014 ",
+                            details?.invoiceNumber),
+                        client?.name && h("span", { className: "inv-extra-ref" },
+                            " | ",
+                            client.name))),
+                section.title && h("h4", { className: "inv-section-label", style: { marginBottom: '0.75rem' } }, section.title.toUpperCase()),
+                section.content && (h("div", { className: "inv-extra-content", dangerouslySetInnerHTML: { __html: DOMPurify.sanitize(section.content) } })))));
+        })(),
+        invoiceType === 'proforma' && (h("div", { style: {
+                position: 'absolute', top: '50%', left: '50%',
+                transform: 'translate(-50%, -50%) rotate(-35deg)',
+                fontSize: '5rem', fontWeight: 800, color: `${accent}0a`,
+                pointerEvents: 'none', whiteSpace: 'nowrap'
+            } }, "ESTIMATE")),
+        pdfStyle === 'modern' && (h("div", { style: { height: '4px', background: accent, marginTop: 'auto' } }))));
+});
+export default InvoicePreview;
