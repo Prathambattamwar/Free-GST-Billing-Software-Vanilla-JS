@@ -47,7 +47,7 @@ export default function StarBanner() {
             background: 'var(--info-bg)', border: '1px solid var(--info-border)', color: 'var(--info-text)', fontSize: '0.85rem',
         } },
         h(Star, { size: 18, style: { color: '#f59e0b', fill: '#f59e0b', flexShrink: 0 } }),
-        h("span", { style: { flex: '1 1 240px' } }, "Finding Free GST Billing useful? A star on GitHub helps other businesses find it. It takes one click."),
+        h("span", { style: { flex: '1 1 240px' } }, "Finding GST Billing useful? A star on GitHub helps other businesses find it. It takes one click."),
         h("a", { className: "btn btn-primary", href: REPO, target: "_blank", rel: "noopener noreferrer", onClick: () => save({ done: true }), style: { padding: '0.3rem 0.8rem', fontSize: '0.8rem', textDecoration: 'none' } },
             h(Star, { size: 14 }),
             " Star on GitHub"),

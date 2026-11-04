@@ -872,7 +872,7 @@ export const AUSTRALIA_STATES = [
   'Western Australia','Tasmania','Australian Capital Territory','Northern Territory'
 ];
 
-// Returns states/provinces list for a country, or [] if free-text is better
+// Returns states/provinces list for a country, or [] if manual text entry is better
 export const getStatesForCountry = (countryName) => {
   switch (countryName) {
     case 'India': return INDIAN_STATES;

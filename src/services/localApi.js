@@ -5,6 +5,7 @@
 import { templateTotals, clientYearToDate, businessKeyOf, numberSeriesFor, counterKeyFor, nextCounterValue, startFor, formatDocNumber, getFinancialYearLabel, parseLocalDate, INVOICE_TYPES } from '../utils.js';
 
 const APP_VERSION = '1.10.83';
+// Legacy database name is intentionally preserved so existing browser data remains available.
 const DB_NAME = 'free-gst-billing-local';
 const DB_VERSION = 1;
 const RECORDS_STORE = 'records';
@@ -238,7 +239,7 @@ function backupContent() {
 
 async function createBackup(date = new Date().toISOString().slice(0, 10)) {
   if (db.backups.some((item) => item.date === date)) return { success: true, date, existing: true };
-  const name = `free-gst-billing-backup-${date}.json`;
+  const name = `gst-billing-backup-${date}.json`;
   const content = backupContent();
   const file = await storeLocalFile(name, new Blob([content], { type: 'application/json' }), 'application/json');
   db.backups.push({ date, fileId: file.id, name: file.name, size: file.size, createdAt: new Date().toISOString() });
@@ -452,7 +453,7 @@ async function handleApi(url, init = {}) {
       const previous = clone(db);
       try {
         const restoreStamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const preRestoreFile = await storeLocalFile(`free-gst-billing-backup-pre-restore-${restoreStamp}.json`, new Blob([backupContent()], { type: 'application/json' }), 'application/json');
+        const preRestoreFile = await storeLocalFile(`gst-billing-backup-pre-restore-${restoreStamp}.json`, new Blob([backupContent()], { type: 'application/json' }), 'application/json');
         const snapshotBlob = await readLocalFile(snapshot.fileId);
         if (!snapshotBlob) throw new Error('Backup file is missing from this browser.');
         const parsed = JSON.parse(await snapshotBlob.text());

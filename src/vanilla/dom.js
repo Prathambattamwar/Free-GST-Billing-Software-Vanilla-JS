@@ -1,5 +1,5 @@
 /*
- * Free GST Billing — framework-free DOM renderer
+ * GST Billing — browser-native DOM renderer
  * ------------------------------------------------
  * Native HTML/SVG nodes, DOM events and browser JavaScript only.
  * No external UI framework or runtime is loaded.
@@ -524,5 +524,5 @@ export function createNativeRoot(container) {
   return root;
 }
 
-const FrameworkFreeCompat = { createElement: h, Fragment, StrictMode, Suspense, Component, memo, forwardRef, lazy };
-export default FrameworkFreeCompat;
+const BrowserDOMCompat = { createElement: h, Fragment, StrictMode, Suspense, Component, memo, forwardRef, lazy };
+export default BrowserDOMCompat;

@@ -1,4 +1,4 @@
-/* Free GST Billing startup recovery for static hosting (including GitHub Pages). */
+/* GST Billing startup recovery for static hosting (including GitHub Pages). */
 (function () {
   'use strict';
   if (location.protocol === 'file:') return;

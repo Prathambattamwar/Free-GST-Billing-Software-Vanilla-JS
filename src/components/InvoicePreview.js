@@ -1,5 +1,5 @@
 import { h, Fragment } from '../vanilla/dom.js';
-import FrameworkFree, { useState, useEffect, useMemo } from '../vanilla/dom.js';
+import BrowserDOM, { useState, useEffect, useMemo } from '../vanilla/dom.js';
 import QRCode from 'qrcode';
 import SignatureImages from './SignatureImages.js';
 import DOMPurify from 'dompurify';
@@ -16,7 +16,7 @@ import { purposeCodeText } from '../utils/purposeCodes.js';
 // instance renders with previewOnly=true so it doesn't create a
 // duplicate id on the page — HTML-invalid + could confuse getElementById
 // lookups.
-const InvoicePreview = FrameworkFree.forwardRef(({ profile: profileProp, client, details, items, totals, invoiceType = 'tax-invoice', customTerms, customNotes, extraSections = [], options = {}, previewOnly = false, cancelled = false, einvoice = null }, ref) => {
+const InvoicePreview = BrowserDOM.forwardRef(({ profile: profileProp, client, details, items, totals, invoiceType = 'tax-invoice', customTerms, customNotes, extraSections = [], options = {}, previewOnly = false, cancelled = false, einvoice = null }, ref) => {
     // v1.10.76 - the business profile can still be loading on the first render
     // (a page refresh while editing an invoice), and reading a bank field from
     // null blanked the whole app. Empty until it arrives.

@@ -72,7 +72,7 @@ export default function SetupWizard({ onClose }) {
             h("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' } },
                 h("div", null,
                     h("h2", { style: { margin: 0, fontSize: '1.35rem' } },
-                        "\uD83D\uDC4B Welcome to Free GST Billing ",
+                        "\uD83D\uDC4B Welcome to GST Billing ",
                         h(HelpButton, { title: "Setting up your invoices", doc: "first-run#setup-wizard", size: 16 })),
                     h("p", { style: { margin: '0.25rem 0 0', fontSize: '0.85rem', color: 'var(--text-muted)' } },
                         "Step ",

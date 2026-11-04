@@ -641,7 +641,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
             ? prev
             : { w: el.offsetWidth, h: el.offsetHeight }));
         // No explicit first call: observe() delivers an initial callback with
-        // the current size, so the mount measurement comes for free without a
+        // the current size, so the mount measurement comes without an extra
         // synchronous setState in the effect body.
         const ro = new ResizeObserver(measure);
         ro.observe(el);
@@ -702,7 +702,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
     // The number this bill is stored under on the server (null until the first
     // save of a new bill). When the Invoice Number field no longer matches it,
     // the save is a RENAME: the bill moves to the new number, which must be
-    // free, and the old file goes. It used to be saved as a second invoice with
+    // released, and the old file goes. It used to be saved as a second invoice with
     // overwrite on - replacing any other invoice that had the typed number - and
     // the old one stayed, so the sale was counted twice.
     const savedId = useRef(editingBill && !editingBill._isDuplicate ? editingBill.id : null);
@@ -1855,7 +1855,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         // count as "editing", so saving it overwrote whatever invoice already had
         // that number: converting two quotations in a row replaced the first
         // invoice with the second.
-        // A rename never overwrites: the new number must be free.
+        // A rename never overwrites: the new number must be available.
         const shouldOverwrite = !renameFrom && (!isNewDoc || hasBeenSaved.current);
         // The number this bill actually ended up under: the 409 retry below can
         // move it, and the recurring template + callers must use the real one.
@@ -1989,7 +1989,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                         }
                     }
                     if (!success) {
-                        toast(`Could not find a free invoice number after 1000 attempts. Please change the number manually.`, 'error');
+                        toast(`Could not find an available invoice number after 1000 attempts. Please change the number manually.`, 'error');
                         return null;
                     }
                 }
@@ -2651,7 +2651,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                 }
             }
         }
-        // v1.10.3 — free the multi-megabyte base64 image strings once
+        // v1.10.3 — release the multi-megabyte base64 image strings once
         // multi-copy replay is done. Post-processing steps below only
         // mutate the PDF pages, they don't need the source images. Prior
         // code held mainImg + pageRecipes in closure through the whole
@@ -4050,7 +4050,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                                         " (with payment of IGST, claimed back later as a refund).")),
                                 !savedArn && (h("p", { style: { margin: '0.35rem 0 0', fontSize: '0.78rem', lineHeight: 1.5 } },
                                     h("strong", null, "Have a LUT?"),
-                                    " Exports and SEZ supplies under a LUT are billed without IGST, so you don't pay tax and wait for a refund. File it free on the GST portal each financial year (Form GST RFD-11), then add its ARN in Settings \u2192 Company.",
+                                    " Exports and SEZ supplies under a LUT are billed without IGST, so you don't pay tax and wait for a refund. File it on the GST portal without a filing fee each financial year (Form GST RFD-11), then add its ARN in Settings \u2192 Company.",
                                     h(HelpButton, { title: "LUT for exports", doc: "gst-basics#lut", size: 14 }))),
                                 savedArn && invFy && profile?.lutFy !== invFy && (h("p", { style: { margin: '0.35rem 0 0', fontSize: '0.78rem', lineHeight: 1.5, color: 'var(--warn-text)' } },
                                     "\u26A0 Your saved LUT is for FY ",

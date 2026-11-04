@@ -1,4 +1,4 @@
-/* Free GST Billing - imported directly by the hand-written static service worker. v1.10.83.
+/* GST Billing - imported directly by the hand-written static service worker. v1.10.83.
 
    When a NEW version of the app takes over, reload every open window of the
    app. A window still showing the previous version can be stuck on a blank

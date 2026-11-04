@@ -106,7 +106,7 @@ export default function InventoryView() {
             toast('GST % must be between 0 and 100', 'warning');
             return;
         }
-        // v1.10.83 (#115) - a raw materials list must be complete, positive and loop-free.
+        // v1.10.83 (#115) - a raw materials list must be complete, positive and avoid dependency loops.
         const bom = form.bom.map((l) => ({ productId: l.productId, qty: Number(l.qty) }));
         if (mfgOn && form.madeHere && form.kind !== 'service') {
             const err = bomError(editingId || '_new', bom, products);

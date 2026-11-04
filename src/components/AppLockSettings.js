@@ -69,7 +69,7 @@ export default function AppLockSettings() {
                 ? `On: ${status.length === 8 ? "an" : "a"} ${status.length} digit PIN is asked when the app opens.`
                 : 'Off. Turn it on to ask for a 6 or 8 digit PIN when the app opens, for a PC other people also use.',
             ' ',
-            "It locks the screen only; it does not encrypt your files. Forgot it? Put a file named RESET-PIN in the Free-GST-Billing folder and reload."),
+            "It locks the screen only; it does not encrypt your files. Forgot it? Put a file named RESET-PIN in the GST-Billing folder and reload."),
         !mode && (h("div", { style: { display: 'flex', gap: '0.5rem', flexWrap: 'wrap' } },
             h("button", { type: "button", className: "btn btn-secondary", onClick: () => setMode('set') }, status.enabled ? 'Change PIN' : 'Turn on PIN lock'),
             status.enabled && h("button", { type: "button", className: "btn btn-secondary", onClick: () => setMode('off') }, "Turn off"),

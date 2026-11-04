@@ -508,7 +508,7 @@ export default function SettingsView({ onSaved }) {
     const runExport = async () => {
         try {
             const json = await exportAllData(exportSel);
-            const fileName = `freegstbill-backup-${new Date().toISOString().split('T')[0]}.json`;
+            const fileName = `gst-billing-backup-${new Date().toISOString().split('T')[0]}.json`;
             // Local download (always)
             const blob = new Blob([json], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
@@ -533,7 +533,7 @@ export default function SettingsView({ onSaved }) {
             const text = await file.text();
             const inspection = inspectBackup(text);
             if (!inspection.valid) {
-                toast("This file doesn't look like a Free GST Billing backup.", 'error');
+                toast("This file doesn't look like a GST Billing backup.", 'error');
                 return;
             }
             setImportInspection(inspection);
@@ -990,7 +990,7 @@ export default function SettingsView({ onSaved }) {
                                 h("label", { className: "form-label", style: { marginBottom: 6 } },
                                     "LUT for exports and SEZ supplies ",
                                     h(HelpButton, { title: "LUT for exports", doc: "settings#lut", size: 16, style: { marginLeft: 6 } })),
-                                h("p", { style: { fontSize: '0.72rem', color: 'var(--text-muted)', margin: '0 0 0.6rem' } }, "With a Letter of Undertaking (filed free on the GST portal, Form GST RFD-11, once per financial year) you bill exports and SEZ supplies without IGST. Invoices dated in the year below tick \u201Cunder LUT\u201D by themselves and print its ARN."),
+                                h("p", { style: { fontSize: '0.72rem', color: 'var(--text-muted)', margin: '0 0 0.6rem' } }, "With a Letter of Undertaking (filed on the GST portal without a filing fee, Form GST RFD-11, once per financial year) you bill exports and SEZ supplies without IGST. Invoices dated in the year below tick \u201Cunder LUT\u201D by themselves and print its ARN."),
                                 h("div", { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.6rem' } },
                                     h("div", null,
                                         h("label", { className: "form-label", htmlFor: "lut-arn", style: { fontSize: '0.72rem' } }, "LUT ARN (acknowledgement number)"),
@@ -1396,7 +1396,7 @@ export default function SettingsView({ onSaved }) {
                     h("div", null,
                         h("strong", null, "Your business data is stored locally in this browser."),
                         " Invoices, clients, products, GST records, settings and automatic backups are saved in the private ",
-                        h("code", null, "Free GST Billing Software"),
+                        h("code", null, "GST Billing Software"),
                         " browser profile using IndexedDB. The app does not require a Google account and does not send business records to an application server. See Privacy & internet for the complete data flow.")),
                 h("p", { className: "page-subtitle mb-6" }, "Choose what to back up or restore \u2014 invoices, clients, products, settings, custom units, or just specific parts. Backup files are plain JSON and download directly to your computer."),
                 h("div", { className: "flex gap-4", style: { flexWrap: 'wrap' } },

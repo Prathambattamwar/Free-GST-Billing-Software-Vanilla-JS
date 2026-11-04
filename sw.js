@@ -1,6 +1,6 @@
 importScripts('./sw-reload.js');
 const CACHE_PREFIX = 'fgsb-static-';
-const CACHE_NAME = `${CACHE_PREFIX}1.10.86-remove-support-freeforever`;
+const CACHE_NAME = `${CACHE_PREFIX}1.10.87-branding-update`;
 const SHELL = ['./', './index.html', './src/main.js', './src/index.css', './favicon.svg', './manifest.webmanifest'];
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL)).catch(() => {}));

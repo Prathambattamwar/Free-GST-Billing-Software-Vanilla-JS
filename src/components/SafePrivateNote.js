@@ -8,7 +8,7 @@ const POINTS = [
     'Your business data is stored locally in this browser',
     'No shared app database or shared storage account',
     'Export a backup to move your data to another device',
-    'Free and open source: anyone can check the code',
+    'Open source: anyone can check the code',
 ];
 export default function SafePrivateNote({ style }) {
     return (h("div", { role: "note", "aria-label": "Safe and private", style: { display: 'flex', gap: '0.7rem', alignItems: 'flex-start', padding: '0.75rem 0.9rem', borderRadius: 10,
@@ -26,7 +26,7 @@ const SAFETY = [
     { icon: HardDrive, title: 'Your data stays in this browser', text: 'Invoices, clients, products, settings and backups are stored in this browser profile using IndexedDB. No Google sign-in or shared app database is used.', doc: 'security#your-data-stays' },
     { icon: UserX, title: 'No app account or password', text: 'No account, password or OAuth permission is collected by the app.', doc: 'security#your-data-stays' },
     { icon: WifiOff, title: 'Local storage works offline', text: 'Business records can be read and saved without an internet connection. External help pages and optional online resources still need internet.', doc: 'security#offline-mode' },
-    { icon: EyeOff, title: 'No tracking, no ads', text: 'No analytics and nothing sent to us. We never see your invoices, amounts, GSTIN or bank details. Free because we earn from paid work for businesses, not from data.', doc: 'security#why-free' },
+    { icon: EyeOff, title: 'No tracking, no ads', text: 'No analytics and nothing sent to us. We never see your invoices, amounts, GSTIN or bank details. The project is supported by paid work for businesses, not by selling data.', doc: 'security#open-source' },
     { icon: HardDrive, title: 'Move data to another device', text: 'Download a JSON backup from Settings and import it in the other browser.', doc: 'backup#export-import' },
     { icon: Code, title: 'Open source', text: 'Anyone can read the code on GitHub, and a developer can build the app from it themselves.', doc: 'security#open-source' },
     { icon: Download, title: 'Browser-based app', text: 'The deployed app is static HTML, CSS and JavaScript. No Node.js application server is used to process business records.', doc: 'security#open-source' },
