@@ -3645,3 +3645,76 @@ html:not([data-theme="dark"]) .welcome-card-close:hover { background: rgba(15, 2
   .welcome-card h2 { font-size: 1.2rem; }
   .welcome-card-btn { flex: 1 1 100%; justify-content: center; }
 }
+
+/* v1.10.86 — Floating rounded navigation panel.
+   The desktop menu sits slightly inset from the viewport so it reads as a
+   separate floating surface instead of a full-height attached rail. */
+@media (min-width: 769px) {
+  .app-layout > .sidebar {
+    flex: 0 0 260px;
+    width: 260px;
+    height: calc(100vh - 32px);
+    margin: 16px 0 16px 16px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-right-color: rgba(255, 255, 255, 0.08);
+    border-radius: 22px;
+    background-clip: padding-box;
+    box-shadow: 0 14px 36px rgba(15, 23, 42, 0.16), 0 2px 8px rgba(15, 23, 42, 0.08);
+    position: relative;
+    z-index: 5;
+  }
+
+  html:not([data-theme="dark"]) .app-layout > .sidebar {
+    border-color: rgba(148, 163, 184, 0.28);
+    box-shadow: 0 14px 36px rgba(15, 23, 42, 0.09), 0 2px 8px rgba(15, 23, 42, 0.04);
+  }
+
+  /* Keep the docked Settings save bar aligned with the new inset sidebar. */
+  .app-layout:not(.sidebar-autohide) .settings-savebar { left: 276px; }
+
+  /* Auto-hide keeps its compact floating rail and expands over the workspace. */
+  .app-layout.sidebar-autohide > .sidebar {
+    left: 16px;
+    top: 16px;
+    bottom: 16px;
+    height: auto;
+    margin: 0;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 22px;
+    box-shadow: 0 14px 36px rgba(15, 23, 42, 0.18);
+  }
+  .app-layout.sidebar-autohide > .sidebar:hover,
+  .app-layout.sidebar-autohide > .sidebar:has(:focus-visible) {
+    box-shadow: 0 18px 44px rgba(15, 23, 42, 0.28);
+  }
+  .app-layout.sidebar-autohide > .main-content { margin-left: 80px; }
+  .app-layout.sidebar-autohide .settings-savebar { left: 80px; }
+  .app-layout.sidebar-autohide:not(:has(.sidebar:hover)) > .sidebar:not(:has(:focus-visible)) {
+    border-radius: 20px;
+  }
+}
+
+/* Rounded navigation items complement the floating panel without changing
+   the active/hover colours or the existing click targets. */
+.sidebar .nav-btn { border-radius: 12px; }
+
+/* Phones keep the slide-in behaviour, but the drawer is now an inset card
+   with rounded corners on every side rather than a full-height slab. */
+@media (max-width: 768px) {
+  .sidebar {
+    top: 10px;
+    left: 10px;
+    bottom: 10px;
+    height: auto;
+    width: min(280px, calc(88vw - 20px));
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 22px;
+    transform: translateX(calc(-100% - 22px));
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.32);
+  }
+  .sidebar.sidebar-open { transform: translateX(0); }
+  html:not([data-theme="dark"]) .sidebar {
+    border-color: rgba(148, 163, 184, 0.3);
+    box-shadow: 0 18px 44px rgba(15, 23, 42, 0.2);
+  }
+}

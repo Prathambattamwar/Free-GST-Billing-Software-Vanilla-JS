@@ -1,6 +1,6 @@
 importScripts('./sw-reload.js');
 const CACHE_PREFIX = 'fgsb-static-';
-const CACHE_NAME = `${CACHE_PREFIX}1.10.85-ghpages-csp-importmap-fix`;
+const CACHE_NAME = `${CACHE_PREFIX}1.10.86-floating-rounded-sidebar`;
 const SHELL = ['./', './index.html', './src/main.js', './src/index.css', './favicon.svg', './manifest.webmanifest'];
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL)).catch(() => {}));
