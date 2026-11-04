@@ -1,6 +1,6 @@
 importScripts('./sw-reload.js');
 const CACHE_PREFIX = 'fgsb-static-';
-const CACHE_NAME = `${CACHE_PREFIX}1.10.90-remove-all-question-mark-help`; 
+const CACHE_NAME = `${CACHE_PREFIX}1.10.91-cashbook-validation-fix`; 
 const SHELL = ['./', './index.html', './src/main.js', './src/index.css', './favicon.ico', './favicon-16.png', './favicon-32.png', './icons/icon-192.png', './icons/icon-512.png', './icons/maskable-192.png', './icons/maskable-512.png', './icons/apple-touch-180.png', './manifest.webmanifest'];
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL)).catch(() => {}));

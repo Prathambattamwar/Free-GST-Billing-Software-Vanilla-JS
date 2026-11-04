@@ -309,7 +309,16 @@ async function handleApi(url, init = {}) {
         }
       }
       if (collection === 'cashBook') {
-        if (!item || typeof item !== 'object' || !Number.isFinite(Number(item.amount)) || Number(item.amount) <= 0 || !item.date || !['in', 'out'].includes(item.direction)) return errorResponse('Invalid cash-book entry', 400);
+        // CashBook.js stores the transaction direction as `type` ('in'|'out').
+        // Accept the older `direction` field as a compatibility fallback, but
+        // normalize to `type` before saving so summaries and exports stay consistent.
+        const cashType = item?.type ?? item?.direction;
+        const amount = Number(item?.amount);
+        if (!item || typeof item !== 'object' || !Number.isFinite(amount) || amount <= 0 || !item.date || !['in', 'out'].includes(cashType)) {
+          return errorResponse('Invalid cash-book entry', 400);
+        }
+        item.type = cashType;
+        delete item.direction;
       }
       if (collection === 'purchases' && Array.isArray(item.payments)) {
         const total = item.payments.reduce((sum, payment) => sum + (Number(payment?.amount) || 0), 0);
