@@ -1,5 +1,12 @@
 # GST Billing Software — Changelog
 
+## 1.10.88 — 4 November 2026
+
+### Interface
+- Removed the top-right User Guide question-mark button and its menu/command-palette entry. Contextual help links inside forms remain available.
+- Improved responsive layouts for desktop, tablet and mobile: safer content sizing, touch-friendly navigation, stacked forms, responsive cards, scrollable data tables and viewport-fitted dialogs.
+- Updated the service-worker cache key so deployed devices fetch the revised interface.
+
 ## 1.10.87 — 4 November 2026
 
 ### Branding

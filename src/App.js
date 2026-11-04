@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, lazy, Suspense, h, Fragment } from './vanilla/dom.js';
-import { Home, FileText, Settings, Plus, Users, Package, BarChart3, Wallet, RefreshCw, Receipt, BookOpen, Moon, Sun, Download, X, ShoppingCart, ChevronDown, Building2, Pencil, HelpCircle, Search, Command, Bell, Calculator, Menu, Banknote } from './vanilla/icons.js';
+import { Home, FileText, Settings, Plus, Users, Package, BarChart3, Wallet, RefreshCw, Receipt, BookOpen, Moon, Sun, Download, X, ShoppingCart, ChevronDown, Building2, Pencil, Search, Command, Bell, Calculator, Menu, Banknote } from './vanilla/icons.js';
 import { getProfile, getAllProfiles, saveProfile, getEnabledModules, getMenuOrder, onMenuChanged, getAllBills, getAllProducts, getStockAlertSettings, getAllClients, runUpdateNow, getLockStatus } from './store.js';
 import { isModuleEnabled, getUpcomingFilings, countsAsSales, localToday, toLocalIsoDate, DOCS_URL, findLowStock, trackedStock } from './utils.js';
 import { orderedMenu } from './utils/businessTypes.js';
@@ -489,9 +489,6 @@ function App() {
         reports: { icon: BarChart3, label: 'Reports' },
         filing: { icon: BookOpen, label: 'GST Returns' },
         incometax: { icon: Calculator, label: 'Income Tax' },
-        // v1.10.75 - opens the online documentation, which covers every screen
-        // and stays current; the old built-in guide had fallen far behind.
-        guide: { icon: HelpCircle, label: 'User Guide', onClick: openDocs },
     };
     const navItems = menu.filter(m => m.section === 'main').map(m => ({ id: m.id, ...NAV_EXTRAS[m.id] }));
     const bottomIds = menu.filter(m => m.section === 'bottom').map(m => m.id);
@@ -506,8 +503,6 @@ function App() {
     const brand = profile || menuBrandCache;
     const ownBrand = !!brand?.showInMenu && !!String(brand?.businessName || '').trim();
     const topActions = topIds.map(id => ({
-        guide: (h("button", { key: id, type: "button", className: "topbar-btn", onClick: openDocs, title: "User guide (opens in your browser)", "aria-label": "User guide" },
-            h(HelpCircle, { size: 18 }))),
         /* Opens the list of overdue / due-soon invoices, GST filing deadlines and
            low-stock items, each a click away from the page that fixes it. */
         notifications: (h("button", { key: id, type: "button", className: "topbar-btn", onClick: () => setShowNotifs(s => !s), title: "Notifications", "aria-label": notifTotal > 0 ? `Notifications: ${notifTotal}` : 'Notifications' },
@@ -539,8 +534,6 @@ function App() {
             acts.push({ label: `Go to ${item.label}`, hint: '', category: 'nav', run: item.onClick || (() => setCurrentView(item.id)) });
         });
         acts.push({ label: 'Go to Settings', hint: '', category: 'nav', run: () => setCurrentView('settings') });
-        if (topIds.includes('guide'))
-            acts.push({ label: 'Open the User Guide', hint: '', category: 'help', run: openDocs });
         acts.push({ label: 'Toggle dark mode', hint: '', category: 'action', run: () => setDarkMode(d => !d) });
         acts.push({ label: 'Show keyboard shortcuts', hint: 'Ctrl+/', category: 'help', run: () => setShowShortcutsHelp(true) });
         if (updateInfo?.updateAvailable) {

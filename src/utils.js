@@ -1922,7 +1922,6 @@ export const MENU_ITEMS = [
   { id: 'reports', label: 'Reports', module: 'reports', section: 'main', help: 'Sales, profit and loss, dues and stock reports.' },
   { id: 'filing', label: 'GST returns', module: 'gstReturns', section: 'main', indiaOnly: true, help: 'GSTR-1 and GSTR-3B files, with a filing guide.' },
   { id: 'incometax', label: 'Income tax', module: 'incomeTax', section: 'main', indiaOnly: true, help: 'Old vs new regime calculator and bank statement import.' },
-  { id: 'guide', label: 'User guide', module: 'guide', section: 'top', help: 'The ? button at the top right: opens the online help.' },
   { id: 'notifications', label: 'Notifications', module: 'notifications', section: 'top', help: 'Bell at the top right: overdue invoices, GST due dates and low stock.' },
   { id: 'lock', label: 'Lock app', module: null, section: 'top', help: 'Padlock at the top right, shown only when a PIN is set.' },
   { id: 'offline', label: 'Offline mode', module: 'offlineButton', section: 'top', help: 'Wi-Fi button at the top right: turn Offline mode on or off, and see what changes.' },

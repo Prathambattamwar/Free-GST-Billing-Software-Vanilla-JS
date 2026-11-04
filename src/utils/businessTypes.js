@@ -14,7 +14,7 @@ import { FEATURE_GROUPS, MENU_ITEMS, isModuleEnabled } from '../utils.js';
 export const SWITCHABLE_MODULES = FEATURE_GROUPS.flatMap(g => g.modules).filter(m => !m.core).map(m => m.id);
 
 // Menu helpers every type keeps: they are about the app, not the business.
-const APP_HELPERS = ['guide', 'notifications', 'darkMode', 'offlineButton'];
+const APP_HELPERS = ['notifications', 'darkMode', 'offlineButton'];
 // Every type sells, and every business handles cash (the cash book).
 const SELLING = ['receipts', 'cashBook', 'reports', 'gstReturns', 'incomeTax', 'upiQr', 'googleDrive'];
 const GOODS = ['inventory', 'purchases', 'expenses'];
