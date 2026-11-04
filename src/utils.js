@@ -1906,8 +1906,8 @@ export const isValidUpiId = (s) => /^[\w.-]+@[\w.-]+$/.test(String(s || '').trim
 // v1.10.83 - the sidebar is listed item by item in MENU_ITEMS (order,
 // switch, one plain line each), and the other modules are grouped by the
 // screen they live on, so the Features tab reads like the app itself.
-// `module: null` = always shown (Settings, Support & About with the
-// DiceCodes branding, and Lock app, which only appears once a PIN is set).
+// `module: null` = always shown (Settings and Lock app, which only appears
+// once a PIN is set).
 // `section` is the part of the sidebar: 'main' (top) or 'bottom'.
 export const MENU_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', module: 'dashboard', core: true, section: 'main', help: 'Your sales, dues and shortcuts at a glance.' },
@@ -1927,7 +1927,6 @@ export const MENU_ITEMS = [
   { id: 'lock', label: 'Lock app', module: null, section: 'top', help: 'Padlock at the top right, shown only when a PIN is set.' },
   { id: 'offline', label: 'Offline mode', module: 'offlineButton', section: 'top', help: 'Wi-Fi button at the top right: turn Offline mode on or off, and see what changes.' },
   { id: 'darkMode', label: 'Dark mode', module: 'darkMode', section: 'top', help: 'Moon / sun button at the top right: light or dark screens.' },
-  { id: 'support', label: 'Support & About', module: null, section: 'bottom', help: 'Who makes this app, version and how to get help.' },
   { id: 'settings', label: 'Settings', module: null, section: 'bottom', help: 'Always here, so you can turn things back on.' },
 ];
 

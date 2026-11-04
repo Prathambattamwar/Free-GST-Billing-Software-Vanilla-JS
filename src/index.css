@@ -395,15 +395,6 @@ body {
 .sidebar-autohide-toggle.on { background: rgba(37, 99, 235, 0.18); border-color: rgba(37, 99, 235, 0.45); color: #93c5fd; }
 .sidebar-autohide-toggle:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 
-/* Support & About stands out in the sidebar: a rose pill, solid when open. */
-.nav-btn.nav-btn-support {
-  background: rgba(225, 29, 72, 0.14); border: 1px solid rgba(225, 29, 72, 0.35); color: #fda4af;
-}
-.nav-btn.nav-btn-support:hover { background: rgba(225, 29, 72, 0.24); color: #fff; }
-.nav-btn.nav-btn-support > svg { color: #fb7185; }
-.nav-btn.nav-btn-support-active,
-.nav-btn.nav-btn-support-active:hover { background: #e11d48; border-color: #e11d48; color: #fff; box-shadow: 0 4px 12px rgba(225, 29, 72, 0.35); }
-.nav-btn.nav-btn-support-active > svg { color: #fff; fill: #fff; }
 @media (min-width: 769px) {
   .app-layout.sidebar-autohide > .sidebar {
     position: fixed; left: 0; top: 0; bottom: 0; z-index: 900;
@@ -474,23 +465,7 @@ body {
   gap: 0.4rem;
   margin: -1.25rem 0 0.6rem;
 }
-.topbar-free {
-  margin-right: 0.35rem;
-  padding: 0.3rem 0.75rem;
-  border-radius: 999px;
-  font-size: 0.75rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: #15803d;
-  background: rgba(34, 197, 94, 0.12);
-  border: 1px solid rgba(34, 197, 94, 0.35);
-  cursor: default;
-  white-space: nowrap;
-}
-[data-theme="dark"] .topbar-free { color: #4ade80; background: rgba(34, 197, 94, 0.14); }
 /* On a PC the promise is in the top bar; a phone has no top bar, so the menu keeps it. */
-@media (min-width: 769px) { .sidebar-free-phone { display: none; } }
 .topbar-btn {
   position: relative;
   width: 36px;
@@ -641,8 +616,6 @@ body {
   font-weight: 500;
   line-height: 1.35;
 }
-/* v1.10.83 - "Free forever" under the app name. */
-.sidebar-free { color: #22c55e; font-weight: 700; }
 /* v1.10.83 - the business's own logo / name in the menu: a long name gets two
    lines, then "..." (the full name is its tooltip); a logo fits a white tile. */
 .sidebar-brand-text { min-width: 0; flex: 1; }
@@ -650,7 +623,6 @@ body {
 .sidebar-logo.sidebar-logo-own { background: #fff; padding: 3px; overflow: hidden; }
 .sidebar-logo.sidebar-logo-own img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
 .sidebar-logo-letter { color: #fff; font-weight: 800; font-size: 1.15rem; }
-html:not([data-theme="dark"]) .sidebar-free { color: #16a34a; }
 
 .sidebar-nav {
   display: flex;
@@ -3528,12 +3500,6 @@ html:not([data-theme="dark"]) .sidebar-subtitle { color: #64748b; }
 html:not([data-theme="dark"]) .sidebar-autohide-toggle { color: #64748b; }
 html:not([data-theme="dark"]) .sidebar-autohide-toggle:hover { background: rgba(15, 23, 42, 0.06); color: #0f172a; }
 html:not([data-theme="dark"]) .sidebar-autohide-toggle.on { background: rgba(37, 99, 235, 0.10); border-color: rgba(37, 99, 235, 0.35); color: var(--primary); }
-html:not([data-theme="dark"]) .nav-btn.nav-btn-support { background: #fff1f2; border-color: #fecdd3; color: #be123c; }
-html:not([data-theme="dark"]) .nav-btn.nav-btn-support:hover { background: #ffe4e6; color: #9f1239; }
-html:not([data-theme="dark"]) .nav-btn.nav-btn-support > svg { color: #e11d48; }
-html:not([data-theme="dark"]) .nav-btn.nav-btn-support-active,
-html:not([data-theme="dark"]) .nav-btn.nav-btn-support-active:hover { background: #e11d48; border-color: #e11d48; color: #fff; }
-html:not([data-theme="dark"]) .nav-btn.nav-btn-support-active > svg { color: #fff; }
 html:not([data-theme="dark"]) .nav-btn { color: #475569; }
 html:not([data-theme="dark"]) .nav-btn:hover { background: rgba(15, 23, 42, 0.06); color: #0f172a; }
 html:not([data-theme="dark"]) .profile-switcher-btn,
@@ -3592,76 +3558,3 @@ html:not([data-theme="dark"]) .mobile-topbar .topbar-btn { background: rgba(15, 
   font-size: 0.85rem;
 }
 .app-lock-help { font-size: 0.8rem; color: var(--text-muted); text-align: left; line-height: 1.5; }
-
-/* v1.10.86 — Floating rounded navigation panel.
-   The desktop menu sits slightly inset from the viewport so it reads as a
-   separate floating surface instead of a full-height attached rail. */
-@media (min-width: 769px) {
-  .app-layout > .sidebar {
-    flex: 0 0 260px;
-    width: 260px;
-    height: calc(100vh - 32px);
-    margin: 16px 0 16px 16px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-right-color: rgba(255, 255, 255, 0.08);
-    border-radius: 22px;
-    background-clip: padding-box;
-    box-shadow: 0 14px 36px rgba(15, 23, 42, 0.16), 0 2px 8px rgba(15, 23, 42, 0.08);
-    position: relative;
-    z-index: 5;
-  }
-
-  html:not([data-theme="dark"]) .app-layout > .sidebar {
-    border-color: rgba(148, 163, 184, 0.28);
-    box-shadow: 0 14px 36px rgba(15, 23, 42, 0.09), 0 2px 8px rgba(15, 23, 42, 0.04);
-  }
-
-  /* Keep the docked Settings save bar aligned with the new inset sidebar. */
-  .app-layout:not(.sidebar-autohide) .settings-savebar { left: 276px; }
-
-  /* Auto-hide keeps its compact floating rail and expands over the workspace. */
-  .app-layout.sidebar-autohide > .sidebar {
-    left: 16px;
-    top: 16px;
-    bottom: 16px;
-    height: auto;
-    margin: 0;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 22px;
-    box-shadow: 0 14px 36px rgba(15, 23, 42, 0.18);
-  }
-  .app-layout.sidebar-autohide > .sidebar:hover,
-  .app-layout.sidebar-autohide > .sidebar:has(:focus-visible) {
-    box-shadow: 0 18px 44px rgba(15, 23, 42, 0.28);
-  }
-  .app-layout.sidebar-autohide > .main-content { margin-left: 80px; }
-  .app-layout.sidebar-autohide .settings-savebar { left: 80px; }
-  .app-layout.sidebar-autohide:not(:has(.sidebar:hover)) > .sidebar:not(:has(:focus-visible)) {
-    border-radius: 20px;
-  }
-}
-
-/* Rounded navigation items complement the floating panel without changing
-   the active/hover colours or the existing click targets. */
-.sidebar .nav-btn { border-radius: 12px; }
-
-/* Phones keep the slide-in behaviour, but the drawer is now an inset card
-   with rounded corners on every side rather than a full-height slab. */
-@media (max-width: 768px) {
-  .sidebar {
-    top: 10px;
-    left: 10px;
-    bottom: 10px;
-    height: auto;
-    width: min(280px, calc(88vw - 20px));
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 22px;
-    transform: translateX(calc(-100% - 22px));
-    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.32);
-  }
-  .sidebar.sidebar-open { transform: translateX(0); }
-  html:not([data-theme="dark"]) .sidebar {
-    border-color: rgba(148, 163, 184, 0.3);
-    box-shadow: 0 18px 44px rgba(15, 23, 42, 0.2);
-  }
-}

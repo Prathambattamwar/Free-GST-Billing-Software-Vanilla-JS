@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, lazy, Suspense, h, Fragment } from './vanilla/dom.js';
-import { Home, FileText, Settings, Plus, Users, Package, BarChart3, Wallet, RefreshCw, Receipt, BookOpen, Moon, Sun, Download, X, ShoppingCart, ChevronDown, Building2, Pencil, HelpCircle, Search, Command, Bell, Calculator, Menu, Heart, Banknote } from './vanilla/icons.js';
+import { Home, FileText, Settings, Plus, Users, Package, BarChart3, Wallet, RefreshCw, Receipt, BookOpen, Moon, Sun, Download, X, ShoppingCart, ChevronDown, Building2, Pencil, HelpCircle, Search, Command, Bell, Calculator, Menu, Banknote } from './vanilla/icons.js';
 import { getProfile, getAllProfiles, saveProfile, getEnabledModules, getMenuOrder, onMenuChanged, getAllBills, getAllProducts, getStockAlertSettings, getAllClients, runUpdateNow, getLockStatus } from './store.js';
 import { isModuleEnabled, getUpcomingFilings, countsAsSales, localToday, toLocalIsoDate, DOCS_URL, findLowStock, trackedStock } from './utils.js';
 import { orderedMenu } from './utils/businessTypes.js';
@@ -35,9 +35,7 @@ const CashBook = lazy(() => import('./components/CashBook.js'));
 const GSTReturns = lazy(() => import('./components/GSTReturns.js'));
 const IncomeTax = lazy(() => import('./components/IncomeTax.js'));
 const PurchaseBills = lazy(() => import('./components/PurchaseBills.js'));
-const SupportView = lazy(() => import('./components/SupportView.js'));
 import StarBanner from './components/StarBanner.js';
-import AppFooter from './components/AppFooter.js';
 import LockButton from './components/LockButton.js';
 import OfflineModeButton from './components/OfflineModeButton.js';
 import { isOfflineMode } from './utils/offlineMode.js';
@@ -75,7 +73,7 @@ function App() {
         try {
             const params = new URLSearchParams(window.location.search);
             const v = params.get('view');
-            const valid = ['dashboard', 'new', 'clients', 'inventory', 'expenses', 'purchases', 'recurring', 'receipts', 'cashbook', 'reports', 'filing', 'incometax', 'settings', 'support'];
+            const valid = ['dashboard', 'new', 'clients', 'inventory', 'expenses', 'purchases', 'recurring', 'receipts', 'cashbook', 'reports', 'filing', 'incometax', 'settings'];
             if (v && valid.includes(v)) {
                 // Strip the query string so a refresh doesn't keep snapping back to
                 // the shortcut target — only the *first* navigation honours it.
@@ -86,7 +84,7 @@ function App() {
         catch { /* sandboxed history API — fall through */ }
         // 'guide' was the built-in User Guide (removed in v1.10.75).
         const last = sessionStorage.getItem('gst_currentView');
-        return last && last !== 'guide' ? last : 'dashboard';
+        return last && last !== 'guide' && last !== 'support' ? last : 'dashboard';
     });
     const [profile, setProfile] = useState(null);
     // v1.10.83 - the menu's own name and logo, as last shown (see `brand` below).
@@ -465,7 +463,7 @@ function App() {
     const [, setMenuTick] = useState(0);
     useEffect(() => onMenuChanged(() => setMenuTick(t => t + 1)), []);
     // Sidebar items in the saved order; hidden ones dropped. `module: null`
-    // items (Settings, Support & About, Lock app) are always shown.
+    // items (Settings and Lock app) are always shown.
     const menu = orderedMenu(getMenuOrder()).filter(m => !m.module || showIfModule(m.module));
     // If the user just disabled the module backing the current view, kick them to dashboard
     // so they don't land on an empty page after toggling.
@@ -541,7 +539,6 @@ function App() {
             acts.push({ label: `Go to ${item.label}`, hint: '', category: 'nav', run: item.onClick || (() => setCurrentView(item.id)) });
         });
         acts.push({ label: 'Go to Settings', hint: '', category: 'nav', run: () => setCurrentView('settings') });
-        acts.push({ label: 'Go to Support & About', hint: '', category: 'nav', run: () => setCurrentView('support') });
         if (topIds.includes('guide'))
             acts.push({ label: 'Open the User Guide', hint: '', category: 'help', run: openDocs });
         acts.push({ label: 'Toggle dark mode', hint: '', category: 'action', run: () => setDarkMode(d => !d) });
@@ -777,11 +774,7 @@ function App() {
                         : h(FileText, { size: 22 })),
                 h("div", { className: "sidebar-brand-text" },
                     h("h2", { className: `sidebar-title${ownBrand ? ' sidebar-title-own' : ''}`, title: ownBrand ? `${brand.businessName} - Free GST Billing` : undefined }, ownBrand ? brand.businessName : 'GST Billing'),
-                    h("p", { className: "sidebar-subtitle", title: "Free forever. Your data is saved locally in this browser. No tracking, no ads." },
-                        h("span", { className: "sidebar-free sidebar-free-phone" },
-                            "Free forever",
-                            h("br", null)),
-                        "by DiceCodes")),
+                    h("p", { className: "sidebar-subtitle" }, "by DiceCodes")),
                 h("button", { type: "button", className: `sidebar-autohide-toggle${sidebarAutoHide ? ' on' : ''}`, "aria-pressed": sidebarAutoHide, "aria-label": "Auto-hide menu", title: sidebarAutoHide ? 'Keep this menu open' : 'Auto-hide this menu: icons only, it opens when you point at it', onClick: (e) => { e.stopPropagation(); toggleSidebarAutoHide(!sidebarAutoHide); } },
                     h(Menu, { size: 18 }))),
             h("div", { className: "profile-switcher", ref: profileMenuRef, style: { position: 'relative' } },
@@ -818,9 +811,6 @@ function App() {
                                 flexShrink: 0,
                             } }))),
                     bottomIds.map(id => ({
-                        support: (h("button", { key: id, className: `nav-btn nav-btn-support${currentView === 'support' ? ' nav-btn-support-active' : ''}`, onClick: () => setCurrentView('support'), title: "Who makes this app, and how to help" },
-                            h(Heart, { size: 18 }),
-                            " Support & About")),
                         settings: (h("button", { key: id, className: `nav-btn ${currentView === 'settings' ? 'nav-btn-active' : ''}`, onClick: () => setCurrentView('settings'), style: updateBannerVisible ? { position: 'relative' } : undefined },
                             h(Settings, { size: 18 }),
                             " Settings",
@@ -832,11 +822,10 @@ function App() {
                     })[id])))),
         h("div", { className: "main-content" },
             h("div", { className: "app-topbar" },
-                h("span", { className: "topbar-free", title: "Free forever: no paid version, no locked features, no ads or tracking. Business records stay in this browser profile." }, "Free forever"),
                 topActions),
             h(ErrorBoundary, { key: currentView, onHome: () => setCurrentView('dashboard') },
                 currentView !== 'new' && h(StarBanner, null),
-                currentView === 'dashboard' && (h(Dashboard, { onNew: handleNewInvoice, onEdit: handleEditInvoice, onPrint: handlePrintInvoice, onDuplicate: handleDuplicateInvoice, onConvert: handleConvertToInvoice, onOpenProducts: () => setCurrentView('inventory'), onOpenSettings: () => setCurrentView('settings'), onOpenGuide: openDocs, onOpenSupport: () => setCurrentView('support'), activeProfile: profile })),
+                currentView === 'dashboard' && (h(Dashboard, { onNew: handleNewInvoice, onEdit: handleEditInvoice, onPrint: handlePrintInvoice, onDuplicate: handleDuplicateInvoice, onConvert: handleConvertToInvoice, onOpenProducts: () => setCurrentView('inventory'), onOpenSettings: () => setCurrentView('settings'), onOpenGuide: openDocs, activeProfile: profile })),
                 currentView === 'new' && (h(InvoiceGenerator, { key: editorKey, onBack: () => { setEditingBill(null); setCurrentView('dashboard'); }, profile: profile, editingBill: editingBill })),
                 h(Suspense, { fallback: h(ViewLoading, null) },
                     currentView === 'clients' && (h(ClientsView, { onNew: handleNewInvoice, onEdit: handleEditInvoice, onDuplicate: handleDuplicateInvoice })),
@@ -852,8 +841,8 @@ function App() {
                     currentView === 'filing' && (h(GSTReturns, { key: businessKey })),
                     currentView === 'incometax' && (h(IncomeTax, { key: businessKey })),
                     currentView === 'settings' && (h(SettingsView, { onSaved: (p) => setProfile(p) })),
-                    currentView === 'support' && (h(SupportView, null))),
-                currentView === 'dashboard' && h(AppFooter, { onOpenSupport: () => setCurrentView('support') }))),
+                ),
+            )),
         showNotifs && (h("div", { className: "modal-overlay", onClick: () => setShowNotifs(false) },
             h("div", { className: "modal-content", style: { maxWidth: '480px' }, onClick: e => e.stopPropagation() },
                 h("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' } },

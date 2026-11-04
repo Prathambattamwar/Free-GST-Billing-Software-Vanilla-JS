@@ -1,6 +1,6 @@
 // v1.10.83 - Offline mode (the Wi-Fi button at the top, and Settings →
 // Privacy & internet). On: the app never goes online by itself - no update
-// check, no supporters list, no automatic online requests while the app is in local-only mode.
+// check and no automatic online requests while the app is in local-only mode.
 // What the user clicks (help pages, WhatsApp, Report) still works. The
 // The local database remains available while this mode is enabled.
 import { useEffect, useState } from '../vanilla/dom.js';

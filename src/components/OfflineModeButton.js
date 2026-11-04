@@ -8,8 +8,7 @@ import HelpButton from './HelpButton.js';
 import { useOfflineMode } from '../utils/offlineMode.js';
 const STOPS = [
     'No automatic check for updates. Use Check for Updates in Settings when you want one.',
-    'The supporters list is not loaded (the last numbers seen still show).',
-    'Business data remains available locally. Automatic internet requests such as update checks and public lists are paused.',
+    'Business data remains available locally. Automatic internet requests such as update checks are paused.',
 ];
 const KEEPS = [
     'You can create and save records locally, even when you are offline.',
@@ -28,7 +27,7 @@ export default function OfflineModeButton({ className, onOpenSettings }) {
                     " Offline mode",
                     h(HelpButton, { title: "Offline mode", doc: "security#offline-mode", size: 16 })),
                 h("p", { style: { margin: '0 0 1rem', fontSize: '0.9rem', color: 'var(--text-secondary)' } }, on
-                    ? 'On. Automatic internet requests such as update checks and public lists are paused. Local business data continues to work.'
+                    ? 'On. Automatic internet requests such as update checks are paused. Local business data continues to work.'
                     : 'Off. Optional online resources can load automatically. Your business records remain stored locally either way.'),
                 h("div", { style: { fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.3rem' } }, on ? 'While it is on' : 'When it is on'),
                 h("ul", { style: { margin: '0 0 0.8rem', paddingLeft: '1.1rem', fontSize: '0.85rem', lineHeight: 1.55 } }, STOPS.map((t) => h("li", { key: t }, t))),

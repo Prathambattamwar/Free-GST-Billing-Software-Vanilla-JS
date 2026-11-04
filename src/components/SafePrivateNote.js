@@ -1,6 +1,6 @@
 import { h, Fragment } from '../vanilla/dom.js';
 // v1.10.83 - "Is this open-source app safe?" answered where people first ask
-// it: the welcome screen and Support & About. Every line here must stay true;
+// it: the welcome screen. Every line here must stay true;
 // the full, checked answer is the docs page docs-site/pages/security.mjs.
 import { ShieldCheck, HardDrive, UserX, WifiOff, EyeOff, Code, Download, Archive, KeyRound, Bug, RefreshCw, ListChecks } from '../vanilla/icons.js';
 import { docsLink } from '../utils.js';
@@ -19,7 +19,7 @@ export default function SafePrivateNote({ style }) {
             h("ul", { style: { margin: 0, paddingLeft: '1.1rem', fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.55 } }, POINTS.map((p) => h("li", { key: p }, p))),
             h("a", { href: docsLink('security'), target: "_blank", rel: "noopener noreferrer", style: { display: 'inline-block', marginTop: '0.35rem', fontSize: '0.8rem', fontWeight: 600, color: 'var(--primary)' } }, "How we keep it safe \u2192"))));
 }
-// v1.10.83 - the full list, as its own section on Support & About ("make
+// v1.10.83 - the full list, as its own section on the welcome screen ("make
 // this safe and private a different section and bigger, with every point").
 // Each line is a summary of a section of docs-site/pages/security.mjs.
 const SAFETY = [

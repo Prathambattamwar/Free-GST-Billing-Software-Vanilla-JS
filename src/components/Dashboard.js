@@ -13,7 +13,6 @@ import LockButton from './LockButton.js';
 import ActionsMenu from './ActionsMenu.js';
 import BulkCsvImport from './BulkCsvImport.js';
 import PrintPreviewModal from './PrintPreviewModal.js';
-import SupportNudge from './SupportNudge.js';
 import { toast } from './Toast.js';
 import { confirmAction } from './ConfirmModal.js';
 import { useCostCentres } from './useCostCentres.js';
@@ -224,7 +223,7 @@ const foreignReceiptFields = (input) => {
         ...(firc ? { fircRef: firc.slice(0, 60) } : {}),
     };
 };
-export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConvert, onOpenProducts, onOpenSettings, onOpenGuide, onOpenSupport, activeProfile }) {
+export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConvert, onOpenProducts, onOpenSettings, onOpenGuide, activeProfile }) {
     // v1.10.64 — requested (#55, @sangwanmail-eng): "An invoice belonging to one
     // company should not appear under the other."
     //
@@ -1543,7 +1542,6 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
                 "New to this?",
                 ' ',
                 h("button", { type: "button", onClick: onOpenGuide, style: { background: 'none', border: 0, padding: 0, font: 'inherit', color: 'var(--primary)', textDecoration: 'underline', cursor: 'pointer' } }, "Read the 5-minute guide")))),
-        !startedSteps && onOpenSupport && h(SupportNudge, { invoiceCount: bills.length, onOpen: onOpenSupport }),
         overdueBills.length > 0 && (h("div", { className: "overdue-banner", onClick: () => { setStatusFilter('overdue'); }, style: { background: 'var(--danger-light)', border: '1px solid var(--danger-light)', borderRadius: 10, padding: '0.85rem 1.25rem', marginBottom: '1.25rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.75rem' } },
             h(AlertTriangle, { size: 20, style: { color: '#dc2626', flexShrink: 0 } }),
             h("div", { style: { flex: 1 } },

@@ -9,7 +9,6 @@ import { useOfflineMode } from '../utils/offlineMode.js';
 import { docsLink } from '../utils.js';
 const USES = [
     ['Checking for a new version', 'By itself: a few seconds after the app opens, then every 6 hours', 'Asks GitHub for the newest version number. Nothing about you is sent.', 'Stopped'],
-    ['The supporters list', 'By itself: when Support & About or its card on the Dashboard shows', 'Reads a public list from GitHub. Nothing is sent.', 'Stopped'],
     ['Local browser storage', 'Whenever you create or change a record', 'Reads and saves invoices, customers, products, GST records, settings and saved PDFs in this browser profile using IndexedDB.', 'Always available locally'],
     ['Updating the app', 'When you click Update or Check for Updates', 'Downloads the new version from GitHub.', 'Only when you click'],
     ['Help pages, Report a problem, WhatsApp, the GST portal', 'When you click them', 'Opens them in your browser, like any link.', 'Only when you click'],
@@ -32,7 +31,7 @@ export default function PrivacyInternet() {
                     " Offline mode: never go online by itself"),
                 h("br", null),
                 h("span", { style: { fontSize: '0.85rem' } }, offline
-                    ? 'On. Automatic internet requests such as update checks and public lists are paused. Local business data continues to work.'
+                    ? 'On. Automatic internet requests such as update checks are paused. Local business data continues to work.'
                     : 'Off. Optional online resources can load automatically. Your business data remains local either way.'))),
         h("div", { className: "table-wrap", style: { overflowX: 'auto' } },
             h("table", { style: { width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' } },
