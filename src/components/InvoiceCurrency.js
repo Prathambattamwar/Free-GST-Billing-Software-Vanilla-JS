@@ -19,9 +19,9 @@ export default function InvoiceCurrency({ options, baseCurrency, regionMode, inv
     const hasRate = isFinite(rate) && rate > 0;
     const lastRate = options.fxRates?.[currency];
     const dateText = invoiceDate ? parseLocalDate(invoiceDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'the invoice date';
-    return (h("div", { className: "form-group full-width", "data-invoice-currency": true, style: { marginBottom: compact ? '0.75rem' : 0 } },
+    return (h("div", { className: `form-group${foreign || compact ? ' full-width' : ''}`, "data-invoice-currency": true, style: { marginBottom: compact ? '0.75rem' : 0 } },
         h("div", { style: { display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'flex-end' } },
-            h("div", { style: { flex: '0 1 150px', minWidth: 120 } },
+            h("div", { style: { flex: foreign ? '0 1 150px' : '1 1 150px', minWidth: 120 } },
                 h("label", { className: "form-label", htmlFor: compact ? 'inv-currency-c' : 'inv-currency' },
                     "Currency ",
                     h(HelpButton, { title: "Invoice currency and exchange rate", doc: "invoices#currency", size: 14 })),

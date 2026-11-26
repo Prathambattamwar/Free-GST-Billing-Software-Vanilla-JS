@@ -1,0 +1,84 @@
+import { h, Fragment } from '../vanilla/dom.js';
+import { useEffect, useMemo, useRef, useState } from '../vanilla/dom.js';
+import { X, Download, Printer, MessageCircle, Mail, FileText } from '../vanilla/icons.js';
+import { sendPdfOnWhatsApp } from '../utils/share.js';
+import { toast } from './Toast.js';
+import HelpButton from './HelpButton.js';
+// v1.10.85 (#157) - Statement PDF and Aging PDF open here first, instead of
+// downloading straight away. Asked for: "view the document without
+// downloading it", with Download, Print, WhatsApp and Email, and close back
+// to the Client Ledger.
+//
+// The PDF is shown in the browser's own PDF viewer, in a frame on a blob: URL
+// (the app's Content-Security-Policy in src/index.html allows frame-src blob:). Print prints that same frame, as printViaIframe
+// does for invoices. WhatsApp and Email work as they do for an invoice on the
+// Invoices list: a phone shares the PDF itself; on a PC (where a web page
+// cannot attach a file to WhatsApp or a mail) the PDF is downloaded and the
+// chat / mail opens with the message, ready to attach it.
+// v1.10.86 - helpDoc: the help page for the ? button (the supplier statement has its own).
+export default function PdfPreviewModal({ doc, fileName, title, message, phone, email, subject, onClose, helpDoc = 'clients#statement' }) {
+    const frameRef = useRef(null);
+    const blob = useMemo(() => doc.output('blob'), [doc]);
+    // Made and revoked in one effect: React StrictMode runs effects twice in
+    // development, and a URL made in useMemo was revoked by the first cleanup.
+    const [url, setUrl] = useState('');
+    useEffect(() => {
+        const u = URL.createObjectURL(blob);
+        setUrl(u);
+        return () => URL.revokeObjectURL(u);
+    }, [blob]);
+    useEffect(() => {
+        const onKey = (e) => { if (e.key === 'Escape')
+            onClose(); };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [onClose]);
+    const download = () => doc.save(fileName);
+    const print = () => {
+        try {
+            frameRef.current.contentWindow.focus();
+            frameRef.current.contentWindow.print();
+        }
+        catch {
+            if (!window.open(url, '_blank'))
+                download();
+        }
+    };
+    // v1.10.86 - a phone gets the Share sheet with the PDF; the PC copies the
+    // PDF for Ctrl+V in the chat (utils/share.js sendPdfOnWhatsApp).
+    const whatsApp = () => sendPdfOnWhatsApp({ phone, toast, prepare: () => ({ blob, fileName, message }) });
+    const mail = () => {
+        // Only a plain address is used, so a stray "?" or "&" can't break the link.
+        const to = /^[^\s@?&#]+@[^\s@?&#]+$/.test(String(email || '').trim()) ? String(email).trim() : '';
+        const body = `Dear Sir/Madam,\n\n${message.replace(/\*/g, '')}\n\nRegards`;
+        window.open(`mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`, '_blank');
+        download();
+        toast('PDF downloaded. Attach it to the email.', 'info', 6000);
+    };
+    const btn = { fontSize: '0.85rem', padding: '0.5rem 0.9rem' };
+    return (h("div", { className: "modal-overlay print-preview-overlay", role: "dialog", "aria-modal": "true", "aria-labelledby": "pdf-preview-title", onClick: (e) => { if (e.target === e.currentTarget)
+            onClose(); }, style: { zIndex: 10001 } },
+        h("div", { className: "modal-content print-preview-content", onClick: (e) => e.stopPropagation(), style: { maxWidth: 'min(900px, calc(96vw / var(--ui-zoom, 1)))', width: '100%', height: 'calc(min(92vh, 92dvh) / var(--ui-zoom, 1))', padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
+            h("div", { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.9rem 1.25rem', borderBottom: '1px solid var(--border)', background: 'var(--card-bg)' } },
+                h("h3", { id: "pdf-preview-title", style: { margin: 0, fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' } },
+                    h(FileText, { size: 18, style: { color: 'var(--primary)' } }),
+                    " ",
+                    title,
+                    h(HelpButton, { title: "Statement and Aging PDFs", doc: helpDoc, size: 16 })),
+                h("button", { type: "button", className: "icon-btn", onClick: onClose, title: "Close (Esc)", "aria-label": "Close" },
+                    h(X, { size: 18 }))),
+            url && h("iframe", { ref: frameRef, src: url, title: title, style: { flex: 1, minHeight: 0, width: '100%', border: 0, background: 'var(--bg-secondary)' } }),
+            h("div", { style: { padding: '0.85rem 1.25rem', borderTop: '1px solid var(--border)', background: 'var(--card-bg)', display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'flex-end' } },
+                h("button", { type: "button", className: "btn btn-secondary", style: btn, onClick: whatsApp, title: "Send on WhatsApp" },
+                    h(MessageCircle, { size: 15 }),
+                    " WhatsApp"),
+                h("button", { type: "button", className: "btn btn-secondary", style: btn, onClick: mail, title: "Send by email" },
+                    h(Mail, { size: 15 }),
+                    " Email"),
+                h("button", { type: "button", className: "btn btn-secondary", style: btn, onClick: download },
+                    h(Download, { size: 15 }),
+                    " Download"),
+                h("button", { type: "button", className: "btn btn-primary", style: btn, onClick: print },
+                    h(Printer, { size: 15 }),
+                    " Print")))));
+}

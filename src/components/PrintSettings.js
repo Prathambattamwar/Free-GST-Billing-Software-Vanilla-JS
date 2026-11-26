@@ -1,10 +1,11 @@
-import { useState, useEffect, useRef, h, Fragment } from '../vanilla/dom.js';
+import { h, Fragment } from '../vanilla/dom.js';
+import { useState, useEffect, useRef } from '../vanilla/dom.js';
 import { Printer, TestTube, RotateCcw, Info, Save as SaveIcon, Trash2 } from '../vanilla/icons.js';
 import { toast } from './Toast.js';
 import { confirmAction } from './ConfirmModal.js';
 import InvoicePreview from './InvoicePreview.js';
-import { getProfile, getInvoiceDisplayOptions, saveInvoiceDisplayOptions } from '../store.js';
-import { DEFAULT_PRINT_SETTINGS, getPrintSettings, savePrintSettings, buildSampleInvoice, BUSINESS_PRESETS, applyBusinessPreset, LABEL_PRESETS } from '../utils/printSettings.js';
+import { getProfile, getInvoiceDisplayOptions, saveInvoiceDisplayOptions, getBusinessType } from '../store.js';
+import { DEFAULT_PRINT_SETTINGS, getPrintSettings, savePrintSettings, buildSampleInvoice, BUSINESS_PRESETS, applyBusinessPreset, LABEL_PRESETS, PRINT_SETTINGS_EVENT } from '../utils/printSettings.js';
 import HelpButton from './HelpButton.js';
 // v1.9.9 — Visual design presets. Each is a starting point that flips
 // the pdfTemplate + color palette + thermal typography + a couple of
@@ -201,6 +202,12 @@ export default function PrintSettings() {
     // they scroll settings on the left.
     const [previewMode, setPreviewMode] = useState('pdf'); // 'pdf' | 'thermal' | 'both'
     useEffect(() => { getProfile().then(setProfile).catch(() => { }); }, []);
+    // v1.10.86 - Settings → Company → Business type sets the print style too.
+    useEffect(() => {
+        const reload = () => setSettings(getPrintSettings());
+        window.addEventListener(PRINT_SETTINGS_EVENT, reload);
+        return () => window.removeEventListener(PRINT_SETTINGS_EVENT, reload);
+    }, []);
     const set = (patch) => {
         const next = { ...settings, ...patch };
         setSettings(next);
@@ -236,7 +243,7 @@ export default function PrintSettings() {
     const HIDDEN_HINT = activeBiz ? (h("span", { style: { fontSize: '0.7rem', color: 'var(--text-muted)', fontStyle: 'italic' } },
         "Some options are hidden because they don't apply to your \"",
         BUSINESS_PRESETS[activeBiz]?.label,
-        "\" workflow. Change or clear the business type above to see everything.")) : null;
+        "\" print style. Click Show all options to see everything.")) : null;
     const reset = () => {
         setSettings({ ...DEFAULT_PRINT_SETTINGS });
         savePrintSettings({ ...DEFAULT_PRINT_SETTINGS });
@@ -245,7 +252,7 @@ export default function PrintSettings() {
     const runTestPrint = async () => {
         // Render a sample invoice with current settings, then trigger browser print.
         setShowTestPreview(true);
-        // Wait for the browser to update the preview + fonts to load, then generate PDF.
+        // Wait for React to render the preview + fonts to load, then generate PDF.
         setTimeout(async () => {
             try {
                 const { jsPDF } = await import('jspdf');
@@ -373,12 +380,6 @@ export default function PrintSettings() {
                         h(HelpButton, { title: "Print & PDF Settings", doc: "print-settings#how-it-saves", size: 16 }))),
                 h("p", { style: { fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0 } }, "App-wide defaults for every printed / PDF invoice. 70+ settings \u2014 every one dynamic. Each invoice can override via its Customize panel.")),
             h("div", { style: { display: 'flex', gap: '0.5rem', flexWrap: 'wrap' } },
-                h("button", { className: "btn btn-secondary", style: { fontSize: '0.82rem' }, onClick: () => {
-                        const next = { ...settings, onboardingComplete: false };
-                        setSettings(next);
-                        savePrintSettings(next);
-                        toast('Setup wizard will re-open on next page reload', 'info');
-                    }, title: "Show the first-run wizard again" }, "\uD83D\uDE80 Run setup wizard"),
                 h("button", { className: "btn btn-secondary", style: { fontSize: '0.82rem' }, onClick: reset },
                     h(RotateCcw, { size: 14 }),
                     " Reset defaults"),
@@ -400,41 +401,43 @@ export default function PrintSettings() {
                         borderRadius: 10,
                         marginBottom: '1rem',
                     } },
-                    h("div", { style: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: '0.6rem', gap: '0.5rem', flexWrap: 'wrap' } },
-                        h("strong", { style: { fontSize: '0.9rem' } },
-                            "\u26A1 Business type ",
-                            h(HelpButton, { title: "Business type preset", doc: "print-settings#business-type", size: 16, style: { marginLeft: 6 } }),
-                            " ",
-                            h("span", { style: { fontSize: '0.65rem', fontWeight: 500, color: 'var(--text-muted)', marginLeft: 6 } }, "sets up to a dozen settings to match your workflow")),
-                        h("span", { style: { fontSize: '0.72rem', color: 'var(--text-muted)' } }, "Pick this first. Every setting below is still editable.")),
-                    h("div", { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.5rem' } }, Object.entries(BUSINESS_PRESETS).map(([key, preset]) => {
-                        const active = settings.activeBusinessPresetId === key;
-                        return (h("button", { key: key, type: "button", onClick: async () => {
-                                if (!await confirmAction({
-                                    title: `Apply "${preset.label}" preset?`,
-                                    message: `This will overwrite ${Object.keys(preset.patch).length} print settings on top of your current setup. You can undo by picking "Reset defaults".`,
-                                    confirmLabel: 'Apply preset',
-                                    tone: 'warning',
-                                }))
-                                    return;
-                                const next = { ...applyBusinessPreset(settings, key), activeBusinessPresetId: key };
-                                setSettings(next);
-                                savePrintSettings(next);
-                                toast(`Applied "${preset.label}" preset`, 'success');
-                            }, style: {
-                                padding: '0.65rem 0.7rem',
-                                border: active ? '2px solid var(--primary)' : '1px solid var(--border)',
-                                borderRadius: 8,
-                                background: active ? 'var(--primary-light, rgba(30,64,175,0.08))' : 'var(--card)',
-                                cursor: 'pointer', textAlign: 'left',
-                                display: 'flex', flexDirection: 'column', gap: '3px',
-                                transition: 'all 0.15s',
-                            } },
-                            h("div", { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 } },
-                                h("strong", { style: { fontSize: '0.82rem' } }, preset.label),
-                                active && h("span", { style: { fontSize: '0.62rem', color: 'var(--primary)', fontWeight: 700 } }, "ACTIVE")),
-                            h("span", { style: { fontSize: '0.7rem', color: 'var(--text-muted)', lineHeight: 1.3 } }, preset.hint)));
-                    }))),
+                    h("div", { style: { display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', fontSize: '0.88rem' } },
+                        h("span", null,
+                            "Print style: ",
+                            h("strong", null, BUSINESS_PRESETS[activeBiz]?.label.replace(/^\W+\s*/u, '') || 'Standard'),
+                            activeBiz && activeBiz === getBusinessType() && h("span", { style: { color: 'var(--text-muted)' } }, " (from your business type)")),
+                        h("button", { type: "button", className: "btn-link", onClick: () => window.dispatchEvent(new CustomEvent('fgsb:settings-open', { detail: 'section-biztype' })), style: { background: 'none', border: 0, color: 'var(--primary)', textDecoration: 'underline', cursor: 'pointer', font: 'inherit', padding: 0 } }, "Change business type"),
+                        h(HelpButton, { title: "Print style", doc: "print-settings#business-type", size: 16 })),
+                    h("details", { style: { marginTop: '0.5rem' } },
+                        h("summary", { style: { cursor: 'pointer', fontSize: '0.78rem', color: 'var(--text-muted)' } }, "Use another print style (keeps your business type)"),
+                        h("div", { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.5rem', marginTop: '0.5rem' } }, Object.entries(BUSINESS_PRESETS).map(([key, preset]) => {
+                            const active = settings.activeBusinessPresetId === key;
+                            return (h("button", { key: key, type: "button", onClick: async () => {
+                                    if (!await confirmAction({
+                                        title: `Apply "${preset.label}" preset?`,
+                                        message: `This will overwrite ${Object.keys(preset.patch).length} print settings on top of your current setup. You can undo by picking "Reset defaults".`,
+                                        confirmLabel: 'Apply preset',
+                                        tone: 'warning',
+                                    }))
+                                        return;
+                                    const next = { ...applyBusinessPreset(settings, key), activeBusinessPresetId: key };
+                                    setSettings(next);
+                                    savePrintSettings(next);
+                                    toast(`Applied "${preset.label}" preset`, 'success');
+                                }, style: {
+                                    padding: '0.65rem 0.7rem',
+                                    border: active ? '2px solid var(--primary)' : '1px solid var(--border)',
+                                    borderRadius: 8,
+                                    background: active ? 'var(--primary-light, rgba(30,64,175,0.08))' : 'var(--card)',
+                                    cursor: 'pointer', textAlign: 'left',
+                                    display: 'flex', flexDirection: 'column', gap: '3px',
+                                    transition: 'all 0.15s',
+                                } },
+                                h("div", { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 } },
+                                    h("strong", { style: { fontSize: '0.82rem' } }, preset.label),
+                                    active && h("span", { style: { fontSize: '0.62rem', color: 'var(--primary)', fontWeight: 700 } }, "ACTIVE")),
+                                h("span", { style: { fontSize: '0.7rem', color: 'var(--text-muted)', lineHeight: 1.3 } }, preset.hint)));
+                        })))),
                 HIDDEN_HINT && (h("div", { style: { padding: '0.55rem 0.85rem', background: 'var(--primary-light, rgba(30,64,175,0.06))', border: '1px solid var(--border)', borderRadius: 8, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' } },
                     h("span", { style: { fontSize: '0.85rem' } }, "\u2139"),
                     HIDDEN_HINT,
@@ -594,7 +597,7 @@ export default function PrintSettings() {
                 h("div", { style: { padding: '0.75rem 1rem', background: 'var(--bg-secondary)', borderRadius: 8, marginBottom: '1rem', fontSize: '0.78rem', color: 'var(--text-muted)' } },
                     "\uD83D\uDDA8 Thermal receipt settings (font, cut mark, feed lines, contrast) are hidden \u2014 the ",
                     h("strong", null, BUSINESS_PRESETS[activeBiz]?.label),
-                    " preset uses A4/A5 PDFs. Switch business type above if you also print thermal receipts.")),
+                    " print style uses A4/A5 PDFs. Use another print style (at the top) if you also print thermal receipts.")),
                 h("div", { style: { marginTop: '1.75rem', padding: '1rem 1.25rem', background: 'var(--bg-secondary)', borderRadius: 8 } },
                     h("h4", { style: { margin: '0 0 0.75rem', fontSize: '0.95rem', color: 'var(--primary)' } },
                         "\uD83D\uDCC4 PDF & universal print features ",
@@ -602,7 +605,7 @@ export default function PrintSettings() {
                     h("p", { style: { fontSize: '0.78rem', color: 'var(--text-muted)', margin: '0 0 1rem' } }, "Applies to A4 / A5 / Letter / Legal / thermal \u2014 every option here is dynamic (turn on / off any time)."),
                     h("div", { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem' } },
                         h(SettingGroup, { title: "Auto-print", doc: "print-settings#auto-print" },
-                            h(ToggleRow, { label: "Auto-print on save", value: settings.autoPrintOnSave, onChange: v => set({ autoPrintOnSave: v }), hint: "Send to your default printer immediately after Save & Download PDF. Perfect for POS counters \u2014 no manual click needed." })),
+                            h(ToggleRow, { label: "Auto-print on save", value: settings.autoPrintOnSave, onChange: v => set({ autoPrintOnSave: v }), hint: "Send to your default printer immediately after Save PDF. Perfect for POS counters \u2014 no manual click needed." })),
                         h(SettingGroup, { title: "Watermark", doc: "print-settings#watermark" },
                             h(ToggleRow, { label: "Show watermark", value: settings.watermarkEnabled, onChange: v => set({ watermarkEnabled: v }), hint: "Big diagonal stamp across the PDF (e.g. PAID / DUPLICATE / DRAFT)." }),
                             settings.watermarkEnabled && (h(Fragment, null,
@@ -681,6 +684,7 @@ export default function PrintSettings() {
                                 { key: 'composition', label: 'Composition', def: 'COMP' },
                                 { key: 'credit-note', label: 'Credit Note', def: 'CN' },
                                 { key: 'delivery-challan', label: 'Delivery Challan', def: 'DC' },
+                                { key: 'sales-order', label: 'Sales Order', def: 'SO' },
                             ].map(({ key, label, def }) => (h("div", { key: key, style: { display: 'grid', gridTemplateColumns: '1fr 130px', gap: '0.5rem', alignItems: 'center', marginBottom: 6 } },
                                 h("span", { style: { fontSize: '0.82rem' } }, label),
                                 h("input", { type: "text", className: "form-input", value: settings.customPrefixes?.[key] || '', onChange: e => set({ customPrefixes: { ...(settings.customPrefixes || {}), [key]: e.target.value.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 8) } }), placeholder: def, maxLength: 8, style: { fontSize: '0.8rem', padding: '0.3rem 0.5rem' } }))))),
@@ -842,7 +846,7 @@ export default function PrintSettings() {
                         } }))),
             h("div", { className: "print-settings-preview-pane", style: {
                     position: 'sticky', top: '1rem',
-                    maxHeight: 'calc(100vh - 2rem)',
+                    maxHeight: 'calc(100vh / var(--ui-zoom, 1) - 2rem)',
                     padding: '1rem',
                     background: 'var(--bg-secondary)',
                     borderRadius: 8,

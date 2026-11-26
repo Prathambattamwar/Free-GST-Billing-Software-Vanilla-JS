@@ -1,9 +1,16 @@
-import { useState, useEffect, useRef, useMemo, lazy, Suspense, h, Fragment } from './vanilla/dom.js';
-import { Home, FileText, Settings, Plus, Users, Package, BarChart3, Wallet, RefreshCw, Receipt, BookOpen, Moon, Sun, Download, X, ShoppingCart, ChevronDown, Building2, Pencil, Search, Command, Bell, Calculator, Menu, Banknote } from './vanilla/icons.js';
-import { getProfile, getAllProfiles, saveProfile, getEnabledModules, getMenuOrder, onMenuChanged, getAllBills, getAllProducts, getStockAlertSettings, getAllClients, runUpdateNow, getLockStatus } from './store.js';
-import { isModuleEnabled, getUpcomingFilings, countsAsSales, localToday, toLocalIsoDate, DOCS_URL, findLowStock, trackedStock } from './utils.js';
+import { h, Fragment } from './vanilla/dom.js';
+import { useState, useEffect, useRef, useMemo, lazy, Suspense } from './vanilla/dom.js';
+import { Home, FileText, Settings, Plus, Users, Package, BarChart3, Wallet, RefreshCw, Receipt, BookOpen, Moon, Sun, Download, X, ShoppingCart, ChevronDown, Building2, Pencil, Search, Command, Bell, Calculator, Menu, Heart, Banknote } from './vanilla/icons.js';
+import { getAllProfilesWithHidden, saveProfile, getEnabledModules, getMenuOrder, getMenuHidden, getMenuDots, onMenuChanged, getAllBills, getAllProducts, getAllRecurring, getStockAlertSettings, runUpdateNow, getLockStatus, visibleProfiles, hasHiddenProfiles, openHiddenCompanies, hideCompaniesAgain, isOpenedHidden, DATA_SAVED_EVENT } from './store.js';
+import { isModuleEnabled, localToday, trackedStock } from './utils.js';
 import { orderedMenu } from './utils/businessTypes.js';
-// v1.10.4 — Route-level lazy loading. Prior App.js synchronously
+import SidebarMenu, { NavDot } from './components/SidebarMenu.js';
+import MenuCustomise, { onOpenCustomiseMenu } from './components/MenuCustomise.js';
+import { hiddenItems } from './utils/menuGroups.js';
+import { findAttention, menuDots, rollupDot, readFiledMarks, readNewSeen, markNewSeen, NEW_IN } from './utils/attention.js';
+import { getPrintSettings } from './utils/printSettings.js';
+import { notifyUpdate, canAskToNotify, askToNotify } from './utils/updateNotice.js';
+// v1.10.4 — Route-level lazy loading. Prior App.jsx synchronously
 // imported all 12 views (~15k LOC combined), so a first-paint on
 // Dashboard downloaded and parsed GSTReturns (1952), InvoiceGenerator
 // (2409), IncomeTax (1038), SettingsView (1479), PrintSettings (1294)
@@ -13,18 +20,22 @@ import { orderedMenu } from './utils/businessTypes.js';
 //  - Dashboard stays eager — it's the default landing route.
 //  - InvoiceGenerator stays eager — new-invoice is the primary action
 //    reachable from Ctrl+K / manifest shortcut / big blue button.
-//  - Every other view is deferred view loader → own JavaScript module → fetched on
+//  - Every other view is React.lazy → own Vite chunk → fetched on
 //    first navigation only. Suspense fallback is a lightweight spinner.
 // Result: smaller initial JS payload; each heavy view chunk-caches
 // once fetched.
 import Dashboard from './components/Dashboard.js';
 import InvoiceGenerator from './components/InvoiceGenerator.js';
-import SetupWizard from './components/SetupWizard.js';
 import ToastContainer, { toast } from './components/Toast.js';
+import UpdateOverlay from './components/UpdateOverlay.js';
+import { releaseNoteTitles } from './utils/changelog.js';
 import ErrorBoundary from './components/ErrorBoundary.js';
-import ConfirmModalContainer from './components/ConfirmModal.js';
+import ConfirmModalContainer, { promptAction } from './components/ConfirmModal.js';
 import WelcomeGuide from './components/WelcomeGuide.js';
+import { WhatsNewAfterUpdate, SEEN_KEY as WHATS_NEW_SEEN_KEY } from './components/WhatsNewSlides.js';
 const SettingsView = lazy(() => import('./components/SettingsView.js'));
+// v1.10.86 - loaded on first Ctrl+K (it carries the How do I… list and the help index).
+const QuickSearch = lazy(() => import('./components/QuickSearch.js'));
 const ClientsView = lazy(() => import('./components/ClientsView.js'));
 const InventoryView = lazy(() => import('./components/InventoryView.js'));
 const ReportsView = lazy(() => import('./components/ReportsView.js'));
@@ -36,13 +47,13 @@ const GSTReturns = lazy(() => import('./components/GSTReturns.js'));
 const IncomeTax = lazy(() => import('./components/IncomeTax.js'));
 const PurchaseBills = lazy(() => import('./components/PurchaseBills.js'));
 import StarBanner from './components/StarBanner.js';
-import LockButton from './components/LockButton.js';
+import AppFooter from './components/AppFooter.js';
 import OfflineModeButton from './components/OfflineModeButton.js';
-import { isOfflineMode } from './utils/offlineMode.js';
+import { startView } from './utils/listPrefs.js';
 import HelpButton from './components/HelpButton.js';
+import ActionsMenu from './components/ActionsMenu.js';
 import { lockNow } from './utils/appLock.js';
-import { getPrintSettings } from './utils/printSettings.js';
-const openDocs = () => window.open(DOCS_URL, '_blank', 'noopener,noreferrer');
+import { PageBarSlots, fitPageBar } from './components/pageBarSlots.js';
 // v1.10.4 — Lightweight Suspense fallback shown while a lazy view
 // downloads. Purely visual — no data fetching, no state.
 function ViewLoading() {
@@ -56,16 +67,20 @@ function ViewLoading() {
             "Loading\u2026")));
 }
 const MENU_BRAND_KEY = 'gst_menuBrand';
+// v1.10.86 - the Control Panel moved into Settings -> App & updates: an old
+// ?view=controlpanel link or a saved gst_currentView opens that tab instead.
+const fromControlPanel = (view) => {
+    if (view !== 'controlpanel')
+        return view;
+    try {
+        sessionStorage.setItem('gst_settingsTab', 'section-updates');
+    }
+    catch { /* storage blocked */ }
+    return 'settings';
+};
 function App() {
-    // v1.9.3 — Setup Wizard shown on first-run (before onboardingComplete = true)
-    const [showWizard, setShowWizard] = useState(() => {
-        try {
-            return !getPrintSettings().onboardingComplete;
-        }
-        catch {
-            return false;
-        }
-    });
+    // v1.10.86 - the second first-run window (SetupWizard: business type, paper,
+    // language) is gone; the welcome asks the business type itself.
     const [currentView, setCurrentView] = useState(() => {
         // PWA manifest "shortcuts" deep-link in via ?view=X (e.g. right-clicking
         // the pinned taskbar icon → "New Invoice" opens /?view=new). Honour that
@@ -73,18 +88,21 @@ function App() {
         try {
             const params = new URLSearchParams(window.location.search);
             const v = params.get('view');
+            // v1.10.74 - 'controlpanel' added so ?view=controlpanel deep links work too.
             const valid = ['dashboard', 'new', 'clients', 'inventory', 'expenses', 'purchases', 'recurring', 'receipts', 'cashbook', 'reports', 'filing', 'incometax', 'settings'];
             if (v && valid.includes(v)) {
                 // Strip the query string so a refresh doesn't keep snapping back to
                 // the shortcut target — only the *first* navigation honours it.
                 window.history.replaceState({}, '', window.location.pathname);
-                return v;
+                return fromControlPanel(v);
             }
         }
         catch { /* sandboxed history API — fall through */ }
         // 'guide' was the built-in User Guide (removed in v1.10.75).
         const last = sessionStorage.getItem('gst_currentView');
-        return last && last !== 'guide' && last !== 'support' ? last : 'dashboard';
+        // v1.10.86 - a new tab or window opens on the screen chosen in Customise
+        // Dashboard ("Open the app on"); a reload keeps the screen it was on.
+        return last && last !== 'guide' && last !== 'support' ? fromControlPanel(last) : startView();
     });
     const [profile, setProfile] = useState(null);
     // v1.10.83 - the menu's own name and logo, as last shown (see `brand` below).
@@ -128,6 +146,10 @@ function App() {
         return localStorage.getItem('freegstbill_theme') === 'dark';
     });
     const [showWelcome, setShowWelcome] = useState(false);
+    const [serverDown, setServerDown] = useState(false);
+    const retryTimer = useRef(null);
+    const [serverStatus, setServerStatus] = useState('checking'); // 'checking' | 'online' | 'offline'
+    const profileLoaded = useRef(false);
     const [allProfiles, setAllProfiles] = useState([]);
     const [showProfileMenu, setShowProfileMenu] = useState(false);
     const profileMenuRef = useRef(null);
@@ -137,35 +159,27 @@ function App() {
     // after that dismissal will re-show the banner.
     const [updateInfo, setUpdateInfo] = useState(null);
     const [showUpdateModal, setShowUpdateModal] = useState(false);
-    const updateBannerVisible = updateInfo?.updateAvailable
-        && localStorage.getItem('freegstbill_dismissedUpdate') !== updateInfo.latest;
-    useEffect(() => {
-        let cancelled = false;
-        const check = async () => {
-            // The browser-local adapter skips this when Offline mode is on; releases
-            // are checked directly against the public GitHub releases API.
-            if (isOfflineMode())
-                return;
-            try {
-                const res = await fetch('/api/check-update');
-                const data = await res.json();
-                if (!cancelled)
-                    setUpdateInfo(data);
-            }
-            catch { /* offline — quietly skip */ }
-        };
-        // First check ~5 seconds after mount so it doesn't fight the initial load.
-        const initial = setTimeout(check, 5000);
-        // Then re-check every 6 hours while the app is open.
-        const interval = setInterval(check, 6 * 60 * 60 * 1000);
-        return () => { cancelled = true; clearTimeout(initial); clearInterval(interval); };
-    }, []);
+    const [notifyAsked, setNotifyAsked] = useState(false);
+    const updateBannerVisible = false; // Static edition updates are deployed with the site files.
+    useEffect(() => { setUpdateInfo(null); }, []);
     // ---- Notification centre ----
-    // Computed from locally stored data on app boot + every 10 minutes; tucked under a
+    // Computed from server data on app boot + every 10 minutes; tucked under a
     // bell icon next to dark-mode toggle in the sidebar. Each section is one
     // click away from the relevant page.
-    const [notifications, setNotifications] = useState({ overdue: [], dueSoon: [], lowStock: [], filings: [], autoFire: null });
+    const [notifications, setNotifications] = useState({ overdue: [], dueSoon: [], lowStock: [], filings: [], autoFire: null, recurringDue: [] });
     const [showNotifs, setShowNotifs] = useState(false);
+    // v1.10.86 - "New" dots on screens with new features (utils/attention.js
+    // NEW_IN), until each is opened once. A new install (no What's new seen,
+    // setup not done) starts with all of them seen.
+    const [newSeen, setNewSeen] = useState(() => {
+        let fresh = false;
+        try {
+            fresh = !localStorage.getItem(WHATS_NEW_SEEN_KEY) && getPrintSettings().onboardingComplete !== true;
+        }
+        catch { /* storage blocked */ }
+        return readNewSeen(fresh);
+    });
+    useEffect(() => { setNewSeen(s => markNewSeen(s, currentView)); }, [currentView]);
     // v1.10.62 — reported (#53, @sangwanmail-eng): "Notifications should clear
     // after check."
     //
@@ -201,6 +215,7 @@ function App() {
         lowStock: notifications.lowStock.map(p => `${p.id || p.name}:${p.stock ?? ''}`).sort().join('|'),
         filings: notifications.filings.map(f => f.label || f.id || String(f)).sort().join('|'),
         autoFire: notifications.autoFire?.count > 0 ? `autofire:${notifications.autoFire.count}` : '',
+        recurringDue: notifications.recurringDue.map(t => `${t.id}:${t.nextDate}`).sort().join('|'),
     }), [notifications]);
     // A section counts toward the badge only when it has content AND that
     // content is not the exact thing the user already dismissed.
@@ -209,9 +224,10 @@ function App() {
         + (isLive('dueSoon') ? notifications.dueSoon.length : 0)
         + (isLive('lowStock') ? notifications.lowStock.length : 0)
         + (isLive('filings') ? notifications.filings.length : 0)
-        + (isLive('autoFire') ? 1 : 0);
+        + (isLive('autoFire') ? 1 : 0)
+        + (isLive('recurringDue') ? notifications.recurringDue.length : 0);
     // How many sections are currently showing something that could be cleared.
-    const dismissableCount = ['overdue', 'dueSoon', 'lowStock', 'filings', 'autoFire']
+    const dismissableCount = ['overdue', 'dueSoon', 'lowStock', 'filings', 'autoFire', 'recurringDue']
         .filter(isLive).length;
     const markAllNotifsRead = () => {
         const next = { ...dismissed, ...notifSignatures };
@@ -221,42 +237,33 @@ function App() {
         }
         catch { /* private mode */ }
     };
+    // v1.10.86 - the bell and the menu's red dots both come from findAttention
+    // (utils/attention.js). Looked at on start, on every screen change, a moment
+    // after a bill / product / template / purchase is saved, and every 10 min.
+    const profileRef = useRef(null);
+    profileRef.current = profile;
+    const profileKey = `${profile?.gstin || ''}|${profile?.businessName || ''}`;
     useEffect(() => {
         let cancelled = false;
+        let saveTimer = null;
         const compute = async () => {
             try {
-                const [bills, products, stockAlertCfg] = await Promise.all([
+                const [bills, products, stockAlertCfg, templates] = await Promise.all([
                     getAllBills().catch(() => []),
                     getAllProducts().catch(() => []),
                     getStockAlertSettings().catch(() => ({ enabled: true, threshold: 5 })),
+                    getAllRecurring().catch(() => []),
                 ]);
                 if (cancelled)
                     return;
                 // Local dates: toISOString() is UTC (yesterday in India until 05:30),
-                // while the browser adapter stamps lastRecurringAutoFire with local date.
+                // while the server stamps lastRecurringAutoFire with its local date.
                 const today = localToday();
-                const tomorrow = new Date();
-                tomorrow.setDate(tomorrow.getDate() + 3);
-                const tomorrowStr = toLocalIsoDate(tomorrow);
-                // v1.10.67 (#66 item 12) — never chase payment for a cancelled invoice;
-                // nor for a quotation, proforma, challan or credit note (countsAsSales).
-                const overdue = bills.filter(b => {
-                    const d = b.data?.details?.dueDate;
-                    return d && d < today && b.status !== 'paid' && countsAsSales(b);
+                const prof = profileRef.current;
+                const { overdue, dueSoon, lowStock, filings, recurringDue } = findAttention({
+                    bills, products, stockCfg: stockAlertCfg, templates, profile: prof, filed: readFiledMarks(prof),
                 });
-                const dueSoon = bills.filter(b => {
-                    const d = b.data?.details?.dueDate;
-                    return d && d >= today && d <= tomorrowStr && b.status !== 'paid' && countsAsSales(b);
-                });
-                // Honour the user's stock-alert preferences. When disabled, the filter
-                // returns nothing — bell badge drops to 0 for the stock category.
-                // When enabled, use the configured threshold (default 5).
-                const stockThreshold = Number(stockAlertCfg?.threshold ?? 5);
-                const lowStock = stockAlertCfg?.enabled === false
-                    ? []
-                    : findLowStock(products, stockThreshold); // services and uncounted left out (#121)
-                const filings = getUpcomingFilings().filter(f => f.daysAway <= 10);
-                // Recurring auto-fire breadcrumb — set by the browser adapter on workspace startup.
+                // Recurring auto-fire breadcrumb — set by server.js processDueRecurring().
                 // Only "fresh" (today's) auto-fires count as a notification; older ones
                 // would otherwise stay sticky forever.
                 let autoFire = null;
@@ -269,57 +276,40 @@ function App() {
                     }
                 }
                 catch { /* fine */ }
-                setNotifications({ overdue, dueSoon, lowStock, filings, autoFire });
+                setNotifications({ overdue, dueSoon, lowStock, filings, autoFire, recurringDue });
             }
             catch { /* offline / server down — leave previous counts */ }
         };
         compute();
         const interval = setInterval(compute, 10 * 60 * 1000);
-        return () => { cancelled = true; clearInterval(interval); };
-    }, [currentView]); // recompute on view change so the bell stays fresh after the user records a payment
+        // Not while an invoice is open: its auto-save would redraw the app
+        // between keystrokes. Leaving the editor looks again anyway.
+        const onSaved = () => { if (currentView === 'new')
+            return; clearTimeout(saveTimer); saveTimer = setTimeout(compute, 1500); };
+        window.addEventListener(DATA_SAVED_EVENT, onSaved);
+        return () => { cancelled = true; clearInterval(interval); clearTimeout(saveTimer); window.removeEventListener(DATA_SAVED_EVENT, onSaved); };
+    }, [currentView, profileKey]); // recompute on view change so the bell stays fresh after the user records a payment
     // ---- Keyboard shortcuts + command palette ----
     // Ctrl+K opens a Spotlight-style command palette; Ctrl+N starts a new
     // invoice from anywhere; Ctrl+/ shows the full shortcuts list. Ctrl+S /
     // Ctrl+P live in InvoiceGenerator (they need invoice-form context). All
     // global handlers also accept Meta (⌘) for macOS users.
+    // v1.10.86 - the search itself (results, "How do I…", keyboard) is
+    // components/QuickSearch.jsx; it reads invoices, clients and products each
+    // time it opens.
     const [showPalette, setShowPalette] = useState(false);
-    const [paletteQuery, setPaletteQuery] = useState('');
-    const [paletteIdx, setPaletteIdx] = useState(0);
-    // v1.9.4 — pre-load searchable content so Ctrl+K acts as a true global
-    // search across invoices, clients, products, and settings sections.
-    // Small cost (fires once on mount + when palette opens); big UX win.
-    const [searchCorpus, setSearchCorpus] = useState({ bills: [], clients: [], products: [] });
-    useEffect(() => {
-        Promise.all([
-            getAllBills().catch(() => []),
-            getAllClients().catch(() => []),
-            getAllProducts().catch(() => []),
-        ]).then(([bills, clients, products]) => {
-            setSearchCorpus({
-                bills: bills.slice(0, 100),
-                clients: clients.slice(0, 200),
-                products: products.slice(0, 200),
-            });
-        });
-    }, [showPalette]); // refresh when palette opens
     const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
-    // Palette useMemo + dependent effects are declared further down, AFTER
-    // `navItems` and `handleNewInvoice` exist. Declaring them up here would
-    // throw "Cannot access 'X' before initialization" at render time because
-    // useMemo's dependency array is evaluated synchronously every render.
     // v1.10.69 - see runUpdateNow() in store.js for why this is no longer a link.
     const [updating, setUpdating] = useState(false);
+    // v1.10.86 - the progress window (UpdateOverlay) shows the steps and any
+    // error; on success the page reloads on the new version by itself.
     const handleUpdateNow = async () => {
         setUpdating(true);
-        toast('Opening the latest GitHub release. The site owner deploys browser-app updates.', 'info', 8000);
+        setShowUpdateModal(false);
         const result = await runUpdateNow();
         setUpdating(false);
-        if (result.ok) {
-            toast('GitHub Releases opened. Refresh after a new build is deployed to this site.', 'success', 10000);
-        }
-        else {
-            toast(`Update failed — ${result.error}`, 'error', 10000);
-        }
+        if (result.hint)
+            toast(result.error, 'info', 10000);
     };
     const dismissUpdate = () => {
         if (updateInfo?.latest) {
@@ -331,20 +321,60 @@ function App() {
         }
         setShowUpdateModal(false);
     };
-    // Load the active business profile and saved profile switcher from the
-    // IndexedDB-backed browser data adapter. There is no application server heartbeat.
+    // Confirm the browser-local API adapter is available — continuously monitors
     useEffect(() => {
         let cancelled = false;
-        Promise.all([getProfile(), getAllProfiles()]).then(([active, profiles]) => {
-            if (cancelled) return;
-            setProfile(active || null);
-            setAllProfiles(Array.isArray(profiles) ? profiles : []);
-            if (!active?.businessName && !localStorage.getItem('freegstbill_onboarded')) setShowWelcome(true);
-        }).catch((error) => {
-            if (!cancelled) toast(`Could not load your local billing workspace: ${error?.message || 'Please reload the app.'}`, 'error', 10000);
-        });
-        return () => { cancelled = true; };
+        // v1.10.73 - a busy or older PC can take a few seconds to answer. One
+        // slow reply used to replace the whole app with "Needs a Quick Start"
+        // mid-invoice. Once the app has loaded, it now takes 3 missed checks in a
+        // row (about 15 s) before saying the app is not running; before the first
+        // load it still says so straight away.
+        let misses = 0;
+        const checkServer = async () => {
+            try {
+                            // The browser-local API adapter answers this check when IndexedDB is ready.
+                const live = await fetch('/api/profile', { method: 'HEAD', cache: 'no-store', signal: AbortSignal.timeout(8000) });
+                if (live.ok) {
+                    if (cancelled)
+                        return;
+                    misses = 0;
+                    setServerDown(false);
+                    setServerStatus('online');
+                    if (!profileLoaded.current) {
+                        const res = await fetch('/api/profile', { signal: AbortSignal.timeout(8000) });
+                        if (!res.ok)
+                            throw new Error('not ok');
+                        profileLoaded.current = true;
+                        const p = await res.json();
+                        setProfile(p);
+                        if (!p.businessName && !localStorage.getItem('freegstbill_onboarded')) {
+                            setShowWelcome(true);
+                        }
+                    }
+                    return;
+                }
+                throw new Error('not ok');
+            }
+            catch {
+                if (cancelled)
+                    return;
+                misses += 1;
+                if (!profileLoaded.current || misses >= 3) {
+                    setServerDown(true);
+                    setServerStatus('offline');
+                }
+            }
+        };
+        checkServer();
+        // Keep checking every 5 seconds (fast when down, normal heartbeat when up)
+        retryTimer.current = setInterval(checkServer, 5000);
+        return () => {
+            cancelled = true;
+            if (retryTimer.current)
+                clearInterval(retryTimer.current);
+        };
     }, []);
+    // Static browser edition: no desktop server launcher or install banner is used.
     useEffect(() => {
         sessionStorage.setItem('gst_currentView', currentView);
     }, [currentView]);
@@ -361,7 +391,29 @@ function App() {
     useEffect(() => {
         document.documentElement.setAttribute('data-theme', darkMode ? 'dark' : 'light');
         localStorage.setItem('freegstbill_theme', darkMode ? 'dark' : 'light');
+        // v1.10.85 - the Windows Setup's window turns its title bar dark too.
+        try {
+            window.chrome?.webview?.postMessage(`theme:${darkMode ? 'dark' : 'light'}`);
+        }
+        catch { /* not the Setup's window */ }
     }, [darkMode]);
+    // Load all saved business profiles
+    useEffect(() => {
+        if (serverStatus === 'online') {
+            getAllProfilesWithHidden().then(setAllProfiles).catch(() => { });
+        }
+        // v1.10.85 (#125) - Settings hid or showed a company.
+        const reload = () => getAllProfilesWithHidden().then(setAllProfiles).catch(() => { });
+        window.addEventListener('fgsb:profiles-changed', reload);
+        return () => window.removeEventListener('fgsb:profiles-changed', reload);
+    }, [serverStatus]);
+    // v1.10.85 - a save refused because the books are closed for its date:
+    // the server's reason, once, whatever screen it came from.
+    useEffect(() => {
+        const say = (e) => toast(e.detail?.error || 'The books are closed for that date (Settings -> Data).', 'error');
+        window.addEventListener('fgsb:period-locked', say);
+        return () => window.removeEventListener('fgsb:period-locked', say);
+    }, []);
     // Close profile menu on outside click
     useEffect(() => {
         if (!showProfileMenu)
@@ -374,13 +426,52 @@ function App() {
         document.addEventListener('mousedown', handler);
         return () => document.removeEventListener('mousedown', handler);
     }, [showProfileMenu]);
+    // v1.10.85 (#125) - companies hidden behind their own PIN stay out of the
+    // list until it is typed; a switch elsewhere hides them again.
+    const shownProfiles = visibleProfiles(allProfiles);
+    const anyHidden = hasHiddenProfiles(allProfiles);
+    const openHidden = async () => {
+        setShowProfileMenu(false);
+        const pin = await promptAction({ title: 'Open a hidden company', message: 'Type the PIN of the company you want to open.', inputType: 'password', placeholder: '6 or 8 digits', confirmLabel: 'Open' });
+        if (!pin)
+            return;
+        try {
+            const ids = await openHiddenCompanies(pin.trim());
+            const list = await getAllProfilesWithHidden();
+            setAllProfiles(list);
+            const first = visibleProfiles(list).find((p) => p.id === ids[0]);
+            if (first)
+                await handleSwitchProfile(first);
+        }
+        catch (e) {
+            toast(e?.body?.code === 'wait' ? `Too many wrong tries. Wait ${e.body.wait} seconds.` : 'That PIN does not open a company.', 'error');
+        }
+    };
     const handleSwitchProfile = async (bp) => {
+        hideCompaniesAgain(bp.id);
         setShowProfileMenu(false);
         const loaded = { ...bp };
         delete loaded.id;
+        delete loaded.hidden;
+        delete loaded.isActive;
         await saveProfile(loaded);
         setProfile(loaded);
     };
+    // A restart while a hidden company was open must not reopen it: move to the
+    // first company that is not hidden. Once, on the first list from the server
+    // (review: run on every switch, a stale `isActive` kept switching for ever).
+    const hiddenStartChecked = useRef(false);
+    useEffect(() => {
+        if (hiddenStartChecked.current || !allProfiles.length)
+            return;
+        hiddenStartChecked.current = true;
+        if (!allProfiles.some((p) => p.hidden && p.isActive && !isOpenedHidden(p.id)))
+            return;
+        const fallback = shownProfiles.find((p) => !p.hidden);
+        if (fallback)
+            handleSwitchProfile(fallback);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [allProfiles]);
     // v1.10.66 (#64 item 1) — identifies the active business for the screens
     // keyed on it below. GSTIN first, the same rule belongsToProfile() uses to
     // decide which records a business owns; the name covers a business that has
@@ -393,7 +484,8 @@ function App() {
     const [navOpen, setNavOpen] = useState(false);
     const closeNavAfterPick = (e) => {
         const picked = e.target.closest('button');
-        if (picked && !picked.classList.contains('profile-switcher-btn'))
+        // v1.10.86 - nor opening / closing a menu group or arranging the menu.
+        if (picked && !picked.classList.contains('profile-switcher-btn') && !picked.hasAttribute('data-keep-open'))
             setNavOpen(false);
     };
     // v1.10.76 - a fresh editor for every invoice opened, so nothing (such as
@@ -422,6 +514,23 @@ function App() {
         setEditingBill(null);
         setCurrentView('new');
     };
+    // v1.10.86 - from a client's account: a new invoice with that client filled
+    // in (InvoiceGenerator picks it up once its defaults are loaded), and the
+    // payment receipt form opened for them.
+    const handleNewInvoiceFor = (client) => {
+        try {
+            sessionStorage.setItem('gst_newInvoiceFor', JSON.stringify({ id: client?.id || '', name: client?.name || '' }));
+        }
+        catch { /* storage blocked */ }
+        handleNewInvoice();
+    };
+    const handleRecordPaymentFor = (clientName) => {
+        try {
+            sessionStorage.setItem('gst_receiptFor', clientName || '');
+        }
+        catch { /* storage blocked */ }
+        setCurrentView('receipts');
+    };
     const handleEditInvoice = (bill) => {
         setEditorKey((k) => k + 1);
         sessionStorage.removeItem('gst_invoiceDraft');
@@ -445,12 +554,14 @@ function App() {
         setEditingBill(clone);
         setCurrentView('new');
     };
-    const handleConvertToInvoice = (bill) => {
+    // v1.10.85 (#135) - also quotation -> sales order, and a sales order's
+    // challan / invoice (prepared by utils/salesOrders.js dispatchDraft).
+    const handleConvertToInvoice = (bill, type = 'tax-invoice') => {
         setEditorKey((k) => k + 1);
         sessionStorage.removeItem('gst_invoiceDraft');
         const clone = JSON.parse(JSON.stringify(bill));
         clone._isDuplicate = true;
-        clone._convertToType = 'tax-invoice';
+        clone._convertToType = clone._convertToType || type;
         setEditingBill(clone);
         setCurrentView('new');
     };
@@ -462,9 +573,15 @@ function App() {
     // sidebar straight away.
     const [, setMenuTick] = useState(0);
     useEffect(() => onMenuChanged(() => setMenuTick(t => t + 1)), []);
-    // Sidebar items in the saved order; hidden ones dropped. `module: null`
-    // items (Settings and Lock app) are always shown.
-    const menu = orderedMenu(getMenuOrder()).filter(m => !m.module || showIfModule(m.module));
+    // v1.10.86 - "Customise menu" (the pencil at the top of the sidebar, or
+    // Settings -> Features). Items taken out there leave the sidebar only:
+    // navItems / bottomIds keep them, so Ctrl+K search still finds them.
+    const [showMenuEditor, setShowMenuEditor] = useState(false);
+    useEffect(() => onOpenCustomiseMenu(() => setShowMenuEditor(true)), []);
+    const menuHidden = hiddenItems(getMenuHidden());
+    // Sidebar items in the saved order; hidden ones dropped. Core settings and lock entries remain available.
+    const menu = orderedMenu(getMenuOrder()).filter(m => !['guide', 'support', 'phone'].includes(m.id) && (!m.module || showIfModule(m.module)));
+    // Never surface the removed documentation/help entries, even if an old menu preference contains them.
     // If the user just disabled the module backing the current view, kick them to dashboard
     // so they don't land on an empty page after toggling.
     useEffect(() => {
@@ -473,6 +590,7 @@ function App() {
         if (moduleForView && !isModuleEnabled(moduleForView, enabledModules)) {
             setCurrentView('dashboard');
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [currentView, JSON.stringify(enabledModules)]);
     // v1.10.83 - order, labels and switches come from MENU_ITEMS (utils.js);
     // only the icons and click handlers live here.
@@ -492,24 +610,78 @@ function App() {
     };
     const navItems = menu.filter(m => m.section === 'main').map(m => ({ id: m.id, ...NAV_EXTRAS[m.id] }));
     const bottomIds = menu.filter(m => m.section === 'bottom').map(m => m.id);
+    // v1.10.86 - red dots in the menu: the bell's live sections (so "Mark all
+    // as read" clears both), an update, and "New" on screens still in the menu.
+    // Only items that are switched on; one taken out of the menu shows on its
+    // group's header (SidebarMenu), and anything at all on the phone's ☰ button.
+    const shownIds = [...navItems.map(i => i.id), ...bottomIds];
+    const allDots = getMenuDots() ? menuDots(notifications, {
+        live: isLive, autoFire: notifications.autoFire,
+        update: updateBannerVisible ? updateInfo.latest : null,
+        unseenNew: Object.keys(NEW_IN.items).filter(id => !newSeen.includes(id) && !menuHidden.includes(id)),
+    }) : {};
+    const dots = Object.fromEntries(Object.entries(allDots).filter(([id]) => shownIds.includes(id)));
+    const anyDot = rollupDot(Object.keys(dots), dots);
+    // v1.10.86 - icons and names for the Customise menu window, as in the sidebar.
+    const menuExtras = { ...NAV_EXTRAS, settings: { icon: Settings, label: 'Settings' } };
+    // v1.10.86 - a Settings tab / section from the sidebar (as openSettingsAt below).
+    const openSettingsSection = (sectionId) => {
+        try {
+            sessionStorage.setItem('gst_settingsTab', sectionId);
+        }
+        catch { /* storage blocked */ }
+        setCurrentView('settings');
+        setTimeout(() => window.dispatchEvent(new CustomEvent('fgsb:settings-open', { detail: sectionId })), 80);
+    };
     // v1.10.83 - small buttons at the top right of every screen (asked for:
     // "dark mode button should be on top, not in the sidebar").
     const topIds = menu.filter(m => m.section === 'top').map(m => m.id);
     // v1.10.83 - the business's own name and logo at the top of the menu, when
     // it says so (Settings → Branding, or the first-run setup).
-    // The profile comes from the local browser data adapter after first paint; until
+    // The profile comes from the server a moment after the first paint; until
     // then the menu uses the name and logo it showed last time (kept in this
     // browser), so a refresh does not flash "GST Billing" before the logo.
     const brand = profile || menuBrandCache;
     const ownBrand = !!brand?.showInMenu && !!String(brand?.businessName || '').trim();
+    // The window's title bar shows the page and the business, like a desktop
+    // program ("Invoices - Dice Codes"), not the long search-engine title.
+    const pageLabel = (NAV_EXTRAS[currentView] || menu.find(m => m.id === currentView))?.label;
+    const windowName = String(brand?.businessName || '').trim() || 'GST Billing';
+    // v1.10.84 - and says so when an update is waiting (the taskbar shows it too).
+    const updateNote = updateBannerVisible ? ` (update ${updateInfo.latest} available)` : '';
+    useEffect(() => {
+        document.title = (pageLabel ? `${pageLabel} - ${windowName}` : windowName) + updateNote;
+    }, [pageLabel, windowName, updateNote]);
+    // v1.10.86 - a search box you can see (it opens the Ctrl+K quick search);
+    // a search icon on a phone (CSS hides the words).
+    const openPalette = () => setShowPalette(true);
+    const searchBox = (h("button", { type: "button", className: "topbar-search", onClick: openPalette, title: "Search or jump to a page (Ctrl+K)", "aria-label": "Search or jump to a page (Ctrl+K)" },
+        h(Search, { size: 16 }),
+        h("span", { className: "topbar-search-text" }, "Search\u2026"),
+        h("kbd", { className: "topbar-search-kbd" }, "Ctrl+K")));
+    // v1.10.86 - the page title and the page's buttons sit in the top bar, in
+    // these two boxes (components/PageHeader.jsx fills them). The bar steps down
+    // (search icon, then a ⋯ menu, then a second line) only when it must.
+    const [barTitleEl, setBarTitleEl] = useState(null);
+    const [barActionsEl, setBarActionsEl] = useState(null);
+    const barSlots = useMemo(() => (barTitleEl && barActionsEl ? { title: barTitleEl, actions: barActionsEl } : null), [barTitleEl, barActionsEl]);
+    const barRef = useRef(null);
+    useEffect(() => {
+        const bar = barRef.current;
+        if (!bar || typeof ResizeObserver === 'undefined')
+            return undefined;
+        const ro = new ResizeObserver(() => fitPageBar(bar));
+        ro.observe(bar);
+        for (const el of bar.children)
+            ro.observe(el); // the title and buttons change with the screen
+        return () => ro.disconnect();
+    }, [barTitleEl, barActionsEl]);
     const topActions = topIds.map(id => ({
         /* Opens the list of overdue / due-soon invoices, GST filing deadlines and
            low-stock items, each a click away from the page that fixes it. */
         notifications: (h("button", { key: id, type: "button", className: "topbar-btn", onClick: () => setShowNotifs(s => !s), title: "Notifications", "aria-label": notifTotal > 0 ? `Notifications: ${notifTotal}` : 'Notifications' },
             h(Bell, { size: 18 }),
             notifTotal > 0 && h("span", { className: "topbar-badge" }, notifTotal > 99 ? '99+' : notifTotal))),
-        /* v1.10.80 (#98) - only when a PIN is set. */
-        lock: h(LockButton, { key: id, className: "topbar-btn", label: null }),
         /* v1.10.83 - Offline mode on / off, and what it changes. */
         offline: h(OfflineModeButton, { key: id, className: "topbar-btn", onOpenSettings: () => {
                 try {
@@ -520,90 +692,6 @@ function App() {
             } }),
         darkMode: (h("button", { key: id, type: "button", className: "topbar-btn", onClick: () => setDarkMode(d => !d), title: darkMode ? 'Switch to light mode' : 'Switch to dark mode', "aria-label": darkMode ? 'Light mode' : 'Dark mode' }, darkMode ? h(Sun, { size: 18 }) : h(Moon, { size: 18 }))),
     })[id]);
-    // Command palette actions — declared here (not earlier) because the deps
-    // array references `navItems` and `handleNewInvoice`, which are consts.
-    // Reading a const before its declaration triggers a Temporal Dead Zone
-    // ReferenceError ("Cannot access 'X' before initialization") at runtime.
-    const paletteActions = useMemo(() => {
-        const acts = [
-            { label: 'New Invoice', hint: 'Ctrl+N', category: 'action', run: () => { handleNewInvoice(); } },
-        ];
-        navItems.forEach(item => {
-            if (item.id === 'new')
-                return; // already covered above
-            acts.push({ label: `Go to ${item.label}`, hint: '', category: 'nav', run: item.onClick || (() => setCurrentView(item.id)) });
-        });
-        acts.push({ label: 'Go to Settings', hint: '', category: 'nav', run: () => setCurrentView('settings') });
-        acts.push({ label: 'Toggle dark mode', hint: '', category: 'action', run: () => setDarkMode(d => !d) });
-        acts.push({ label: 'Show keyboard shortcuts', hint: 'Ctrl+/', category: 'help', run: () => setShowShortcutsHelp(true) });
-        if (updateInfo?.updateAvailable) {
-            acts.push({ label: `View update — v${updateInfo.latest}`, hint: '', category: 'update', run: () => setShowUpdateModal(true) });
-        }
-        // v1.9.4 — cross-app search: invoices, clients, products
-        // v1.10.5 — audit H24 fix. Prior code dispatched
-        // `CustomEvent('fgsb-open-bill', { detail: b.id })` but no one
-        // listened for it — selecting an invoice in the palette silently
-        // dropped the ID and just landed on Dashboard. Now: reuse
-        // handleEditInvoice() directly, which is already the canonical way
-        // to open a bill for editing (works from Dashboard row-click too).
-        searchCorpus.bills.forEach(b => {
-            acts.push({
-                label: `📄 ${b.invoiceNumber || 'INV-?'} — ${b.clientName || 'No client'}`,
-                hint: b.invoiceDate ? new Date(b.invoiceDate).toLocaleDateString('en-IN') : '',
-                category: 'invoice',
-                run: () => handleEditInvoice(b),
-            });
-        });
-        searchCorpus.clients.forEach(c => {
-            acts.push({
-                label: `👤 ${c.name} — client${c.gstin ? ' · GSTIN: ' + c.gstin : ''}`,
-                hint: c.phone || c.email || '',
-                category: 'client',
-                run: () => setCurrentView('clients'),
-            });
-        });
-        // v1.10.83 - a product result opens Products, so none while it is hidden.
-        if (navItems.some(i => i.id === 'inventory'))
-            searchCorpus.products.forEach(p => {
-                acts.push({
-                    label: `📦 ${p.name} — product${p.hsn ? ' · HSN: ' + p.hsn : ''}`,
-                    hint: trackedStock(p) === null ? '' : trackedStock(p) + ' in stock',
-                    category: 'product',
-                    run: () => setCurrentView('inventory'),
-                });
-            });
-        // Settings sections (jump to specific area)
-        // v1.10.74 - these all used to just open Settings at the top. Each now
-        // names its section id; after Settings mounts (it's lazy-loaded, so retry
-        // briefly) we click that section's "Jump to" chip, which already scrolls
-        // below the sticky bars.
-        const openSettingsAt = (sectionId) => {
-            setCurrentView('settings');
-            let tries = 0;
-            const jump = () => {
-                const chip = document.querySelector(`.settings-jumpnav a[href="#${sectionId}"]`);
-                if (chip && document.getElementById(sectionId))
-                    chip.click();
-                else if (++tries < 30)
-                    setTimeout(jump, 100);
-            };
-            setTimeout(jump, 50);
-        };
-        const settingsJumps = [
-            ['Company profile', 'section-company'], ['Payment accounts', 'section-company'],
-            ['Print & PDF Settings', 'section-print'], ['PDF Style Editor', 'section-print'],
-            ['Business type presets', 'section-print'], ['Section labels', 'section-print'],
-            ['Watermarks', 'section-print'], ['Multi-copy print', 'section-print'],
-            ['Digital signature', 'section-company'], ['Company letterhead', 'section-print'],
-            ['Business type', 'section-biztype'], ['Features', 'section-modules'], ['Region preference', 'section-region'],
-            ['Local browser storage', 'section-cloud'], ['App updates', 'section-updates'],
-        ];
-        settingsJumps.forEach(([s, sectionId]) => {
-            acts.push({ label: `⚙️ Settings → ${s}`, hint: '', category: 'settings', run: () => openSettingsAt(sectionId) });
-        });
-        return acts;
-    }, [navItems, bottomIds, topIds, updateInfo, handleNewInvoice, searchCorpus]);
-    const filteredPalette = paletteActions.filter(a => !paletteQuery.trim() || a.label.toLowerCase().includes(paletteQuery.toLowerCase()));
     // Global keyboard shortcuts. Lives down here for the same TDZ reason —
     // the handler closes over `handleNewInvoice` which is declared above only.
     useEffect(() => {
@@ -616,8 +704,6 @@ function App() {
             if (e.key === 'k' || e.key === 'K') {
                 e.preventDefault();
                 setShowPalette(p => !p);
-                setPaletteQuery('');
-                setPaletteIdx(0);
             }
             else if (e.key === '/') {
                 e.preventDefault();
@@ -636,6 +722,7 @@ function App() {
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
     // v1.9.4 — Accessibility hooks (v1.10.4/1.10.6 updated):
     //   1. Mirror `title` → `aria-label` on every icon button that lacks one.
@@ -687,37 +774,17 @@ function App() {
         window.addEventListener('keydown', onEsc);
         return () => { observer.disconnect(); window.removeEventListener('keydown', onEsc); };
     }, [showPalette]);
-    // Palette-only arrow / Enter / Esc nav. Filtered list dep keeps the
-    // handler in sync with the user's current query.
-    useEffect(() => {
-        if (!showPalette)
-            return;
-        const onKey = (e) => {
-            if (e.key === 'Escape') {
-                e.preventDefault();
-                setShowPalette(false);
-                return;
-            }
-            if (e.key === 'ArrowDown') {
-                e.preventDefault();
-                setPaletteIdx(i => Math.min(i + 1, filteredPalette.length - 1));
-            }
-            else if (e.key === 'ArrowUp') {
-                e.preventDefault();
-                setPaletteIdx(i => Math.max(i - 1, 0));
-            }
-            else if (e.key === 'Enter') {
-                e.preventDefault();
-                const action = filteredPalette[paletteIdx];
-                if (action) {
-                    action.run();
-                    setShowPalette(false);
-                }
-            }
-        };
-        window.addEventListener('keydown', onKey);
-        return () => window.removeEventListener('keydown', onKey);
-    }, [showPalette, paletteIdx, filteredPalette]);
+    // Static browser edition: show a local-storage error only if the IndexedDB
+    // adapter is unavailable. There is no local server to start or restart.
+    if (serverDown) {
+        return h("main", { className: "server-down-overlay", role: "alert", style: { minHeight: '100vh', display: 'grid', placeItems: 'center', padding: '24px' } },
+            h("section", { className: "server-down-modal", style: { maxWidth: 560, width: '100%' } },
+                h(FileText, { size: 42, color: "#3b82f6" }),
+                h("h2", null, "Browser storage is unavailable"),
+                h("p", null, "GST Billing saves records in this browser profile. Check that site storage is enabled, close other GST Billing tabs, and reload the page."),
+                h("p", { className: "server-down-safe" }, "Your saved records are not intentionally deleted by this message. If the issue continues, export or restore a backup after storage becomes available."),
+                h("button", { type: "button", className: "btn btn-primary", onClick: () => window.location.reload() }, "Reload app")));
+    }
     if (showWelcome) {
         return (h(Fragment, null,
             h(WelcomeGuide, { onComplete: (p) => {
@@ -725,39 +792,19 @@ function App() {
                         setProfile(p);
                     setShowWelcome(false);
                 } }),
+            h(WhatsNewAfterUpdate, { blocked: true }),
             h(ToastContainer, null),
             h(ConfirmModalContainer, null)));
     }
-    // v1.10.33 — "Finish setup" bottom-right pill. Shown when the user
-    // hit Skip on the wizard (onboardingSkipped=true) so they can come
-    // back later without hunting through Settings. Hidden after they
-    // finish setup (finish() clears the flag) or if they explicitly said
-    // "None of these — I'll configure manually".
-    const showResumeSetupPill = (() => {
-        try {
-            const ps = getPrintSettings();
-            return !showWizard && ps.onboardingComplete === true && ps.onboardingSkipped === true;
-        }
-        catch {
-            return false;
-        }
-    })();
     return (h("div", { className: `app-layout${sidebarAutoHide ? ' sidebar-autohide' : ''}` },
-        showWizard && h(SetupWizard, { onClose: () => setShowWizard(false) }),
-        showResumeSetupPill && (h("button", { type: "button", onClick: () => setShowWizard(true), title: "Come back to the setup wizard \u2014 pick a business type, paper size, and language.", style: {
-                // Above the docked Save bar on Settings, so it never covers Save.
-                position: 'fixed', bottom: currentView === 'settings' ? '5.5rem' : '1.25rem', right: '1.25rem', zIndex: 9998,
-                padding: '0.6rem 1rem', borderRadius: 999,
-                background: 'var(--primary)', color: '#fff', border: 'none',
-                fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer',
-                boxShadow: '0 6px 20px rgba(30,64,175,0.35), 0 2px 4px rgba(0,0,0,0.15)',
-                display: 'flex', alignItems: 'center', gap: '0.4rem',
-            } }, "\u2728 Finish setup")),
+        h(WhatsNewAfterUpdate, { blocked: showWelcome }),
         h("div", { className: "mobile-topbar" },
-            h("button", { type: "button", className: "mobile-topbar-btn", onClick: () => setNavOpen(true), "aria-label": "Open menu", "aria-expanded": navOpen },
-                h(Menu, { size: 22 })),
+            h("button", { type: "button", className: "mobile-topbar-btn", onClick: () => setNavOpen(true), "aria-label": anyDot ? `Open menu: ${anyDot.text}` : 'Open menu', title: anyDot?.text, "aria-expanded": navOpen },
+                h(Menu, { size: 22 }),
+                h(NavDot, { dot: anyDot })),
             h("span", { className: "mobile-topbar-title" }, "GST Billing"),
             h("span", { className: "mobile-topbar-business" }, profile?.businessName || ''),
+            searchBox,
             topActions),
         navOpen && h("div", { className: "sidebar-backdrop", onClick: () => setNavOpen(false), "aria-hidden": "true" }),
         h("div", { className: `sidebar${navOpen ? ' sidebar-open' : ''}`, onClick: closeNavAfterPick },
@@ -772,20 +819,21 @@ function App() {
                     h(Menu, { size: 18 }))),
             h("div", { className: "profile-switcher", ref: profileMenuRef, style: { position: 'relative' } },
                 h("div", { className: "profile-switcher-row" },
-                    h("button", { className: "profile-switcher-btn", onClick: () => allProfiles.length > 1 && setShowProfileMenu(v => !v), title: allProfiles.length > 1 ? 'Switch business profile' : profile?.businessName || 'My Business', style: { cursor: allProfiles.length > 1 ? 'pointer' : 'default' } },
+                    h("button", { className: "profile-switcher-btn", onClick: () => setShowProfileMenu(v => !v), title: shownProfiles.length > 1 || anyHidden ? 'Switch business, or edit its details' : 'Edit business details', "aria-haspopup": "menu", "aria-expanded": showProfileMenu },
                         h(Building2, { size: 14 }),
                         h("span", { className: "profile-switcher-name" }, profile?.businessName || 'My Business'),
-                        allProfiles.length > 1 && h(ChevronDown, { size: 13, style: { marginLeft: 'auto', opacity: 0.6 } })),
-                    h("button", { className: "profile-switcher-edit", onClick: () => { setShowProfileMenu(false); setCurrentView('settings'); }, title: "Edit business profile" },
+                        h(ChevronDown, { size: 13, style: { marginLeft: 'auto', opacity: 0.6 } })),
+                    h("button", { type: "button", className: "profile-switcher-edit", onClick: () => { setShowProfileMenu(false); setShowMenuEditor(true); }, title: "Customise menu", "aria-label": "Customise menu" },
                         h(Pencil, { size: 13 }))),
                 showProfileMenu && (h("div", { className: "profile-switcher-menu" },
-                    allProfiles.map(bp => (h("button", { key: bp.id || bp.businessName, className: `profile-switcher-item${bp.businessName?.trim().toLowerCase() === profile?.businessName?.trim().toLowerCase() ? ' active' : ''}`, onClick: () => handleSwitchProfile(bp) }, bp.businessName))),
+                    shownProfiles.map(bp => (h("button", { key: bp.id || bp.businessName, className: `profile-switcher-item${bp.businessName?.trim().toLowerCase() === profile?.businessName?.trim().toLowerCase() ? ' active' : ''}`, onClick: () => handleSwitchProfile(bp) }, bp.businessName))),
+                    h("button", { className: "profile-switcher-item profile-switcher-details", onClick: () => { setShowProfileMenu(false); openSettingsSection('section-company'); } },
+                        h(Pencil, { size: 13 }),
+                        " Edit business details"),
+                    anyHidden && (h("button", { className: "profile-switcher-item profile-switcher-manage", onClick: openHidden }, "Open a hidden company...")),
                     h("button", { className: "profile-switcher-item profile-switcher-manage", onClick: () => { setShowProfileMenu(false); setCurrentView('settings'); } }, "Manage profiles...")))),
             h("nav", { className: "sidebar-nav" },
-                navItems.map(item => (h("button", { key: item.id, className: `nav-btn ${currentView === item.id ? 'nav-btn-active' : ''}`, onClick: item.onClick || (() => setCurrentView(item.id)) },
-                    h(item.icon, { size: 18 }),
-                    " ",
-                    item.label))),
+                h(SidebarMenu, { items: navItems.filter(i => !menuHidden.includes(i.id)), currentView: currentView, dots: dots, onPick: (item) => (item.onClick ? item.onClick() : setCurrentView(item.id)) }),
                 h("div", { style: { marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '0.25rem' } },
                     updateBannerVisible && (h("button", { className: "nav-btn", onClick: () => setShowUpdateModal(true), title: `v${updateInfo.latest} is available`, style: {
                             background: 'var(--info-bg)',
@@ -803,39 +851,40 @@ function App() {
                                 background: '#f59e0b', boxShadow: '0 0 0 3px rgba(245,158,11,0.25)',
                                 flexShrink: 0,
                             } }))),
-                    bottomIds.map(id => ({
-                        settings: (h("button", { key: id, className: `nav-btn ${currentView === 'settings' ? 'nav-btn-active' : ''}`, onClick: () => setCurrentView('settings'), style: updateBannerVisible ? { position: 'relative' } : undefined },
+                    bottomIds.filter(id => !menuHidden.includes(id)).map(id => ({
+                        settings: (h("button", { key: id, className: `nav-btn ${currentView === 'settings' ? 'nav-btn-active' : ''}`, onClick: () => setCurrentView('settings'), title: dots.settings?.text },
                             h(Settings, { size: 18 }),
                             " Settings",
-                            updateBannerVisible && (h("span", { className: "nav-badge", style: {
-                                    position: 'absolute', top: '8px', right: '12px',
-                                    width: 8, height: 8, borderRadius: '50%',
-                                    background: '#f59e0b',
-                                }, title: "Update available" })))),
+                            h(NavDot, { dot: dots.settings }))),
                     })[id])))),
+        showMenuEditor && (h(MenuCustomise, { extras: menuExtras, onClose: () => setShowMenuEditor(false), onOpenFeatures: () => { setShowMenuEditor(false); openSettingsSection('section-modules'); } })),
         h("div", { className: "main-content" },
-            h("div", { className: "app-topbar" },
-                topActions),
-            h(ErrorBoundary, { key: currentView, onHome: () => setCurrentView('dashboard') },
-                currentView !== 'new' && h(StarBanner, null),
-                currentView === 'dashboard' && (h(Dashboard, { onNew: handleNewInvoice, onEdit: handleEditInvoice, onPrint: handlePrintInvoice, onDuplicate: handleDuplicateInvoice, onConvert: handleConvertToInvoice, onOpenProducts: () => setCurrentView('inventory'), onOpenSettings: () => setCurrentView('settings'), onOpenGuide: openDocs, activeProfile: profile })),
-                currentView === 'new' && (h(InvoiceGenerator, { key: editorKey, onBack: () => { setEditingBill(null); setCurrentView('dashboard'); }, profile: profile, editingBill: editingBill })),
-                h(Suspense, { fallback: h(ViewLoading, null) },
-                    currentView === 'clients' && (h(ClientsView, { onNew: handleNewInvoice, onEdit: handleEditInvoice, onDuplicate: handleDuplicateInvoice })),
-                    currentView === 'inventory' && (
-                    // v1.10.83 (#115) - remounted per business, like the screens below, so its production list follows the switch.
-                    h(InventoryView, { key: businessKey })),
-                    currentView === 'expenses' && (h(ExpenseTracker, { key: businessKey })),
-                    currentView === 'purchases' && (h(PurchaseBills, { key: businessKey })),
-                    currentView === 'recurring' && (h(RecurringInvoices, { key: businessKey, onEdit: handleEditInvoice })),
-                    currentView === 'receipts' && (h(ReceiptVoucher, { key: businessKey })),
-                    currentView === 'cashbook' && (h(CashBook, { key: businessKey, onOpenView: setCurrentView })),
-                    currentView === 'reports' && (h(ReportsView, { key: businessKey })),
-                    currentView === 'filing' && (h(GSTReturns, { key: businessKey })),
-                    currentView === 'incometax' && (h(IncomeTax, { key: businessKey })),
-                    currentView === 'settings' && (h(SettingsView, { onSaved: (p) => setProfile(p) })),
-                ),
-            )),
+            h("div", { className: "app-topbar", ref: barRef },
+                h("div", { className: "page-bar-title", ref: setBarTitleEl }),
+                searchBox,
+                h("div", { className: "page-bar-actions", ref: setBarActionsEl }),
+                h("div", { className: "topbar-global" }, topActions)),
+            h(PageBarSlots.Provider, { value: barSlots },
+                h(ErrorBoundary, { key: currentView, onHome: () => setCurrentView('dashboard') },
+                    currentView !== 'new' && h(StarBanner, null),
+                    currentView === 'dashboard' && (h(Dashboard, { onNew: handleNewInvoice, onEdit: handleEditInvoice, onPrint: handlePrintInvoice, onDuplicate: handleDuplicateInvoice, onConvert: handleConvertToInvoice, onOpenProducts: () => setCurrentView('inventory'), onOpenPurchases: () => setCurrentView('purchases'), onOpenSettings: () => setCurrentView('settings'), activeProfile: profile })),
+                    currentView === 'new' && (h(InvoiceGenerator, { key: editorKey, onBack: () => { setEditingBill(null); setCurrentView('dashboard'); }, profile: profile, editingBill: editingBill })),
+                    h(Suspense, { fallback: h(ViewLoading, null) },
+                        currentView === 'clients' && (h(ClientsView, { key: businessKey, onNew: handleNewInvoice, onNewFor: handleNewInvoiceFor, onRecordPayment: handleRecordPaymentFor, onEdit: handleEditInvoice, onDuplicate: handleDuplicateInvoice, onPrint: handlePrintInvoice })),
+                        currentView === 'inventory' && (
+                        // v1.10.83 (#115) - remounted per business, like the screens below, so its production list follows the switch.
+                        h(InventoryView, { key: businessKey, onOpenPurchases: () => setCurrentView('purchases') })),
+                        currentView === 'expenses' && (h(ExpenseTracker, { key: businessKey })),
+                        currentView === 'purchases' && (h(PurchaseBills, { key: businessKey, onOpenGstReturns: () => setCurrentView('filing') })),
+                        currentView === 'recurring' && (h(RecurringInvoices, { key: businessKey, onEdit: handleEditInvoice })),
+                        currentView === 'receipts' && (h(ReceiptVoucher, { key: businessKey })),
+                        currentView === 'cashbook' && (h(CashBook, { key: businessKey, onOpenView: setCurrentView })),
+                        currentView === 'reports' && (h(ReportsView, { key: businessKey })),
+                        currentView === 'filing' && (h(GSTReturns, { key: businessKey, onOpenPurchases: () => setCurrentView('purchases') })),
+                        currentView === 'incometax' && (h(IncomeTax, { key: businessKey })),
+                        currentView === 'settings' && (h(SettingsView, { onSaved: (p) => setProfile(p) })),
+                        currentView === 'support' && (null)),
+                    currentView === 'dashboard' && null))),
         showNotifs && (h("div", { className: "modal-overlay", onClick: () => setShowNotifs(false) },
             h("div", { className: "modal-content", style: { maxWidth: '480px' }, onClick: e => e.stopPropagation() },
                 h("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' } },
@@ -856,6 +905,17 @@ function App() {
                                 notifications.autoFire.count !== 1 ? 's' : '',
                                 " auto-generated today"),
                             h("div", { style: { fontSize: '0.72rem', opacity: 0.85, marginTop: '0.2rem' } }, "Check the Dashboard for the new bills \u00B7 review and download PDFs as needed")))),
+                    isLive('recurringDue') && (h("button", { type: "button", className: "notice notice-warn", onClick: () => { setShowNotifs(false); setCurrentView('recurring'); }, style: { cursor: 'pointer', border: 'none', textAlign: 'left' } },
+                        h("span", { className: "notice-icon" }, "\uD83D\uDD01"),
+                        h("div", { style: { flex: 1 } },
+                            h("strong", null,
+                                notifications.recurringDue.length,
+                                " recurring invoice",
+                                notifications.recurringDue.length !== 1 ? 's' : '',
+                                " due to be made"),
+                            h("div", { style: { fontSize: '0.72rem', opacity: 0.85, marginTop: '0.2rem' } },
+                                notifications.recurringDue.slice(0, 3).map(t => t.clientName || 'No client').join(' · '),
+                                " \u00B7 open Recurring and use Generate Now")))),
                     isLive('overdue') && (h("button", { type: "button", className: "notice notice-danger", onClick: () => { setShowNotifs(false); setCurrentView('dashboard'); }, style: { cursor: 'pointer', border: 'none', textAlign: 'left' } },
                         h("span", { className: "notice-icon" }, "\u26A0"),
                         h("div", { style: { flex: 1 } },
@@ -893,31 +953,8 @@ function App() {
                                 notifications.lowStock.length !== 1 ? 's' : '',
                                 " low on stock"),
                             h("div", { style: { fontSize: '0.72rem', opacity: 0.85, marginTop: '0.2rem' } }, notifications.lowStock.slice(0, 3).map(p => `${p.name} (${trackedStock(p)} left)`).join(' · ')))))))))),
-        showPalette && (h("div", { className: "modal-overlay", onClick: () => setShowPalette(false) },
-            h("div", { className: "modal-content", style: { maxWidth: '520px', padding: 0, overflow: 'hidden' }, onClick: e => e.stopPropagation() },
-                h("div", { style: { display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.75rem 1rem', borderBottom: '1px solid var(--border-color)' } },
-                    h(Search, { size: 16, style: { color: 'var(--text-muted)' } }),
-                    h("input", { autoFocus: true, type: "text", placeholder: "Type a command or page name\u2026", value: paletteQuery, onChange: e => { setPaletteQuery(e.target.value); setPaletteIdx(0); }, className: "form-input", style: { border: 0, background: 'transparent', flex: 1, fontSize: '0.95rem' } }),
-                    h("span", { style: { fontSize: '0.7rem', color: 'var(--text-muted)' } }, "Esc")),
-                h("div", { style: { maxHeight: '360px', overflowY: 'auto' } },
-                    filteredPalette.length === 0 && (h("p", { style: { textAlign: 'center', color: 'var(--text-muted)', padding: '1.25rem', margin: 0, fontSize: '0.85rem' } },
-                        "Nothing matches \"",
-                        paletteQuery,
-                        "\".")),
-                    filteredPalette.map((a, i) => (h("button", { key: a.label, type: "button", onClick: () => { a.run(); setShowPalette(false); }, onMouseEnter: () => setPaletteIdx(i), style: {
-                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                            width: '100%', padding: '0.6rem 1rem', border: 0, cursor: 'pointer',
-                            background: i === paletteIdx ? 'var(--bg-tertiary)' : 'transparent',
-                            color: 'var(--text-primary)', textAlign: 'left', fontSize: '0.88rem',
-                        } },
-                        h("span", null, a.label),
-                        a.hint && h("span", { style: { fontSize: '0.7rem', color: 'var(--text-muted)' } }, a.hint))))),
-                h("div", { style: { padding: '0.4rem 1rem', borderTop: '1px solid var(--border-color)', fontSize: '0.7rem', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
-                    h("span", null,
-                        h(Command, { size: 11, style: { verticalAlign: 'middle', marginRight: 4 } }),
-                        "Ctrl+K to toggle \u00B7 \u2191\u2193 navigate \u00B7 Enter run ",
-                        h(HelpButton, { title: "Quick search", doc: "shortcuts#command-palette", size: 16 })),
-                    h("button", { type: "button", onClick: () => { setShowPalette(false); setShowShortcutsHelp(true); }, style: { background: 'none', border: 0, color: 'var(--primary)', cursor: 'pointer', fontSize: '0.7rem' } }, "All shortcuts (Ctrl+/)"))))),
+        showPalette && (h(Suspense, { fallback: null },
+            h(QuickSearch, { onClose: () => setShowPalette(false), navItems: navItems, topIds: topIds, updateInfo: null, onNewInvoice: handleNewInvoice, onEditInvoice: handleEditInvoice, onView: setCurrentView, onSettings: openSettingsSection, onDarkMode: () => setDarkMode(d => !d), onShortcuts: () => setShowShortcutsHelp(true), onUpdate: () => { } }))),
         showShortcutsHelp && (h("div", { className: "modal-overlay", onClick: () => setShowShortcutsHelp(false) },
             h("div", { className: "modal-content", style: { maxWidth: '480px' }, onClick: e => e.stopPropagation() },
                 h("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' } },
@@ -933,25 +970,47 @@ function App() {
                                 h("kbd", null, "Ctrl"),
                                 "\u00A0+\u00A0",
                                 h("kbd", null, "K")),
-                            h("td", null, "Open command palette (jump to any page)")),
+                            h("td", null, "Search or jump to a page (the search box at the top)")),
                         h("tr", null,
                             h("td", null,
                                 h("kbd", null, "Ctrl"),
                                 "\u00A0+\u00A0",
                                 h("kbd", null, "N")),
-                            h("td", null, "New invoice")),
+                            h("td", null, "New invoice (when not typing in a box)")),
                         h("tr", null,
                             h("td", null,
                                 h("kbd", null, "Ctrl"),
                                 "\u00A0+\u00A0",
                                 h("kbd", null, "S")),
-                            h("td", null, "Save current invoice (when on the invoice form)")),
+                            h("td", null, "Save the invoice (on New Invoice)")),
                         h("tr", null,
                             h("td", null,
                                 h("kbd", null, "Ctrl"),
                                 "\u00A0+\u00A0",
                                 h("kbd", null, "P")),
-                            h("td", null, "Download PDF (when on the invoice form)")),
+                            h("td", null, "Download the PDF (on New Invoice)")),
+                        h("tr", null,
+                            h("td", null,
+                                h("kbd", null, "Ctrl"),
+                                "\u00A0+\u00A0",
+                                h("kbd", null, "Enter")),
+                            h("td", null, "Add an item row (on New Invoice)")),
+                        h("tr", null,
+                            h("td", null,
+                                h("kbd", null, "Ctrl"),
+                                "\u00A0+\u00A0",
+                                h("kbd", null, "Shift"),
+                                "\u00A0+\u00A0",
+                                h("kbd", null, "D")),
+                            h("td", null, "Copy the last item row (on New Invoice)")),
+                        h("tr", null,
+                            h("td", null,
+                                h("kbd", null, "Ctrl"),
+                                "\u00A0+\u00A0",
+                                h("kbd", null, "Shift"),
+                                "\u00A0+\u00A0",
+                                h("kbd", null, "F")),
+                            h("td", null, "Hide or show the preview (on New Invoice)")),
                         h("tr", null,
                             h("td", null,
                                 h("kbd", null, "Ctrl"),
@@ -965,7 +1024,7 @@ function App() {
                                 h("kbd", null, "Ctrl"),
                                 "\u00A0+\u00A0",
                                 h("kbd", null, "/")),
-                            h("td", null, "Toggle this help")),
+                            h("td", null, "Show or hide this list")),
                         h("tr", null,
                             h("td", null,
                                 h("kbd", null, "Esc")),
@@ -996,13 +1055,18 @@ function App() {
                     h("div", null,
                         h("strong", null, "Your data is safe."),
                         " Updates only refresh the app code and dependencies \u2014 your ",
-                        h("code", null, "This browser / GST Billing Software /"),
+                        h("code", null, "data/"),
                         " folder (invoices, clients, products, settings) and ",
-                        h("code", null, "This browser / GST Billing Software / Invoices/"),
+                        h("code", null, "Saved Invoices/"),
                         " PDF archive are ",
                         h("strong", null, "never touched"),
-                        ". The website owner deploys new static builds; your local browser data stays separate. Refresh the page after a new build is published.")),
-                h("div", { className: "surface-card", style: { maxHeight: '320px', overflowY: 'auto', whiteSpace: 'pre-wrap', fontSize: '0.82rem', lineHeight: 1.55, marginBottom: '0.85rem' } }, updateInfo.releaseNotes || (h("span", { style: { color: 'var(--text-muted)' } },
+                        ". The updater downloads this release from GitHub, backs up your data, puts the new version in place and restarts the app.")),
+                h("div", { className: "surface-card", style: { maxHeight: '320px', overflowY: 'auto', fontSize: '0.82rem', lineHeight: 1.55, marginBottom: '0.85rem' } }, releaseNoteTitles(updateInfo.releaseNotes).length > 0 ? (h(Fragment, null,
+                    h("strong", { style: { display: 'block', marginBottom: '0.35rem' } },
+                        "What's new in v",
+                        updateInfo.latest),
+                    h("ul", { style: { margin: 0, paddingLeft: '1.2rem' } }, releaseNoteTitles(updateInfo.releaseNotes).map((t) => h("li", { key: t, style: { marginBottom: '0.2rem' } }, t))),
+                    h("a", { href: updateInfo.releaseUrl || 'https://github.com/IamRamgarhia/Free-GST-Billing-Software/releases/latest', target: "_blank", rel: "noopener noreferrer", style: { display: 'inline-block', marginTop: '0.5rem', color: 'var(--primary)' } }, "Read the full notes on GitHub"))) : updateInfo.releaseNotes ? h("div", { style: { whiteSpace: 'pre-wrap' } }, updateInfo.releaseNotes) : (h("span", { style: { color: 'var(--text-muted)' } },
                     "No release notes available \u2014 see the full changelog at",
                     ' ',
                     h("a", { href: updateInfo.releaseUrl || 'https://github.com/IamRamgarhia/Free-GST-Billing-Software/releases', target: "_blank", rel: "noopener noreferrer", style: { color: 'var(--primary)' } }, "GitHub Releases"),
@@ -1012,7 +1076,7 @@ function App() {
                     h("div", null,
                         h("strong", null, "Recommended:"),
                         " export a backup before updating, just in case. ",
-                        h("button", { type: "button", className: "btn-link", onClick: () => { setShowUpdateModal(false); setCurrentView('settings'); }, style: { background: 'none', border: 0, color: 'var(--primary)', textDecoration: 'underline', cursor: 'pointer', font: 'inherit', padding: 0 } }, "Open Settings \u2192 Data Management"),
+                        h("button", { type: "button", className: "btn-link", onClick: () => { setShowUpdateModal(false); openSettingsSection('section-data'); }, style: { background: 'none', border: 0, color: 'var(--primary)', textDecoration: 'underline', cursor: 'pointer', font: 'inherit', padding: 0 } }, "Open Settings \u2192 Data & Backups"),
                         " and click ",
                         h("em", null, "Export Backup\u2026"),
                         ".")),
@@ -1020,14 +1084,20 @@ function App() {
                     h("button", { type: "button", className: "btn btn-secondary", onClick: dismissUpdate }, "Skip this version"),
                     h("button", { type: "button", className: "btn btn-secondary", onClick: () => setShowUpdateModal(false) }, "Remind me later"),
                     updateInfo.releaseUrl && (h("a", { href: updateInfo.releaseUrl, target: "_blank", rel: "noopener noreferrer", className: "btn btn-secondary", style: { textDecoration: 'none' } }, "View on GitHub")),
-                    h("button", { type: "button", className: "btn btn-primary", disabled: updating, onClick: handleUpdateNow },
+                    updateInfo.downloadUrl && (h("a", { href: updateInfo.downloadUrl, target: "_blank", rel: "noopener noreferrer", className: "btn btn-primary", style: { textDecoration: 'none' } },
+                        h(Download, { size: 16 }),
+                        " Download the new Mac app")),
+                    !updateInfo.updateHint && (h("button", { type: "button", className: "btn btn-primary", disabled: updating, onClick: handleUpdateNow },
                         h(Download, { size: 16 }),
                         " ",
-                        updating ? 'Opening…' : 'View Release')),
-                h("p", { style: { fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.6rem', marginBottom: 0 } },
-                    h("em", null, "View Release"),
-                    " opens the latest GitHub release in a new tab. The website owner deploys new builds; refresh this page after a new build is published.")))),
+                        updating ? 'Updating…' : 'Update Now'))),
+                !notifyAsked && canAskToNotify() && (h("p", { style: { fontSize: '0.78rem', marginTop: '0.6rem', marginBottom: 0 } },
+                    h("button", { type: "button", className: "btn-link", onClick: () => { setNotifyAsked(true); askToNotify(updateInfo.latest); }, style: { background: 'none', border: 0, color: 'var(--primary)', textDecoration: 'underline', cursor: 'pointer', font: 'inherit', padding: 0 } }, "Tell me with a Windows notification when the next update comes out"))),
+                h("p", { style: { fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.6rem', marginBottom: 0 } }, updateInfo.updateHint || h(Fragment, null,
+                    h("em", null, "Update Now"),
+                    " backs up your data, then fetches the newest release. It takes about a minute \u2014 leave this window open; the app opens again on the new version by itself."))))),
         h(ToastContainer, null),
-        h(ConfirmModalContainer, null)));
+        h(ConfirmModalContainer, null),
+        h(UpdateOverlay, null)));
 }
 export default App;

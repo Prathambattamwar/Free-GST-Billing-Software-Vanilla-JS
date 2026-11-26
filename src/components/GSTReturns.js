@@ -1,16 +1,20 @@
-import { useState, useEffect, useRef, useMemo, h, Fragment } from '../vanilla/dom.js';
+import { h, Fragment } from '../vanilla/dom.js';
+import { useState, useEffect, useRef, useMemo } from '../vanilla/dom.js';
 import { FileText, Download, Upload, ExternalLink, CheckCircle, ChevronDown, ChevronRight, AlertTriangle, BookOpen, BarChart3 } from '../vanilla/icons.js';
-import { getAllBills, getAllExpenses, getAllPurchases, getProfile, getEnabledModules } from '../store.js';
-import { hsnTable, stripEmpty } from '../utils/gstr1Json.js';
-import { formatCurrency, INVOICE_TYPES, getStateCode, formatDateGST, getFilingPeriod, hsnUqc, getFYOptions, belongsToProfile, toCsvLine, isCancelledBill, b2clThreshold, GST_PORTAL_RATES, setOffITC, splitLineTax, roundQty, placeOfSupplyLabel, countsAsSales, parseLocalDate, isModuleEnabled } from '../utils.js';
+import { getAllBills, getAllExpenses, getAllPurchases, getProfile, getEnabledModules, getAllDebitNotes } from '../store.js';
+import { purchaseReturnsTax, netItc, rcmInward, splitRcmItc } from '../utils/debitNotes.js';
+import { purchaseLineTax } from '../utils/purchaseOrders.js';
+import { hsnTable, stripEmpty, lineTreatment, nilTable, expTable, exportNote, b2bInvType, docIssueSummary, docIssueDetails, cleanGstin, gstinFormatOk, hsnSplitFrom, hsnSummary, mergeHsnRows, hsnRowValue, hsnCsvRow, HSN_CSV_HEADERS, billIsInterstate, billSplit, isExportBill, hsnSign, ecoSummary } from '../utils/gstr1Json.js';
+import { formatCurrency, INVOICE_TYPES, getStateCode, formatDateGST, getFilingPeriod, getFYOptions, belongsToProfile, toCsvLine, isCancelledBill, b2clThreshold, GST_PORTAL_RATES, setOffITC, placeOfSupplyLabel, countsAsSales, parseLocalDate, isModuleEnabled, gstinChecksumOk } from '../utils.js';
 import { toast } from './Toast.js';
 import HelpButton from './HelpButton.js';
+import PageHeader, { BarButton } from './PageHeader.js';
 import { billInInr } from '../utils/fx.js';
 import { zeroRatedTotals, withoutZeroRated } from '../utils/lut.js';
+// v1.10.86 - (#175) a "2B only" row opens a purchase bill filled in from 2B.
+import { purchaseFromTwoB, putTwoBDraft, keepTwoBFile, keptTwoBFile, wantsBackToTwoB, clearBackToTwoB, twoBNoteCount } from '../utils/gstr2bBill.js';
 const GST_TYPES = ['tax-invoice', 'credit-note'];
 // GSTR-1 Table 13 "nature of document" codes.
-const DOC_ISSUE_NATURE = { 'tax-invoice': 1, 'bill-of-supply': 1, composition: 1, 'credit-note': 5, 'delivery-challan': 12 };
-const DOC_NATURE_LABEL = { 1: 'Invoices for outward supply', 5: 'Credit notes', 12: 'Delivery challans' };
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const QUARTERS = [
     { id: 'Q1', label: 'Q1 (Apr–Jun)', months: [3, 4, 5] },
@@ -33,6 +37,48 @@ function downloadCSV(filename, headers, rows) {
     URL.revokeObjectURL(url);
 }
 function round2(n) { return Math.round(n * 100) / 100; }
+// v1.10.84 (#166) - one Table 12 list (B2B or B2C) with its own total. Rows
+// come from hsnSummary, the same rows the CSV and the JSON are written from.
+const num = { textAlign: 'right' };
+const sumOf = (rows, f) => rows.reduce((s, r) => s + f(r), 0);
+function HsnTable({ rows }) {
+    return (h("div", { className: "table-scroll" },
+        h("table", { className: "data-table" },
+            h("thead", null,
+                h("tr", null,
+                    h("th", null, "HSN"),
+                    h("th", null, "Description"),
+                    h("th", null, "UQC"),
+                    h("th", { style: num }, "Rate"),
+                    h("th", { style: num }, "Qty"),
+                    h("th", { style: num }, "Taxable"),
+                    h("th", { style: num }, "CGST"),
+                    h("th", { style: num }, "SGST"),
+                    h("th", { style: num }, "IGST"),
+                    h("th", { style: num }, "Total Value"))),
+            h("tbody", null, rows.map((r) => (h("tr", { key: `${r.hsn_sc}|${r.rt}|${r.uqc}` },
+                h("td", null,
+                    h("span", { className: "invoice-badge" }, r.hsn_sc)),
+                h("td", { className: "font-medium" }, r.desc),
+                h("td", null, r.uqc),
+                h("td", { style: num },
+                    r.rt,
+                    "%"),
+                h("td", { style: num }, r.qty),
+                h("td", { style: num }, formatCurrency(r.txval)),
+                h("td", { style: num }, formatCurrency(r.camt)),
+                h("td", { style: num }, formatCurrency(r.samt)),
+                h("td", { style: num }, formatCurrency(r.iamt)),
+                h("td", { style: num, className: "font-bold" }, formatCurrency(hsnRowValue(r))))))),
+            h("tfoot", null,
+                h("tr", { style: { fontWeight: 'bold', borderTop: '2px solid var(--border)' } },
+                    h("td", { colSpan: 5 }, "Total"),
+                    h("td", { style: num }, formatCurrency(sumOf(rows, (r) => r.txval))),
+                    h("td", { style: num }, formatCurrency(sumOf(rows, (r) => r.camt))),
+                    h("td", { style: num }, formatCurrency(sumOf(rows, (r) => r.samt))),
+                    h("td", { style: num }, formatCurrency(sumOf(rows, (r) => r.iamt))),
+                    h("td", { style: num }, formatCurrency(sumOf(rows, hsnRowValue))))))));
+}
 // v1.10.74 - filed marks for one business, falling back to the old shared key.
 function readFilingStatus(key) {
     try {
@@ -42,11 +88,8 @@ function readFilingStatus(key) {
         return {};
     }
 }
-// The per-line split lives in utils.js (splitLineTax) so it can be tested;
-// see v1.10.77 (#89) there.
-// v1.10.83 - an export / SEZ invoice under a LUT charged no IGST
-// (totals.lutZeroRated): its lines report their value and rate with zero tax,
-// as the invoice printed them. Tax-inclusive prices had no tax in them.
+// billSplit, billIsInterstate and isExportBill live in utils/gstr1Json.js so
+// the HSN summary (Table 12) can be tested; see v1.10.84 (#166) there.
 // v1.10.83 - SEZ "without payment" (SEWOP) only when the invoice charged no
 // tax. The LUT tick, or LUT words in the terms (old invoices; the export terms
 // preset has them), cannot make an invoice that charged IGST into SEWOP.
@@ -54,11 +97,6 @@ function readFilingStatus(key) {
 const TAX_KEYS = ['igst', 'cgst', 'sgst', 'utgst', 'rcmTaxIgst', 'rcmTaxCgst', 'rcmTaxSgst', 'rcmTaxUtgst'];
 const billIsLut = (bill) => (!!bill?.data?.invoiceOptions?.isLUT || /\bLUT\b|Letter of Undertaking/i.test(bill?.data?.customTerms || ''))
     && !TAX_KEYS.some((k) => Number(bill?.data?.totals?.[k]) > 0);
-const billSplit = (bill, item, isInter, taxInclusive, isIntraUT) => {
-    if (!bill?.data?.totals?.lutZeroRated)
-        return splitLineTax(item, isInter, taxInclusive, isIntraUT);
-    return { ...splitLineTax(item, isInter, false, isIntraUT), cgst: 0, sgst: 0, utgst: 0, igst: 0, cess: 0 };
-};
 function getTaxableAmount(totals) {
     return totals?.taxableAmount ?? ((totals?.subtotal || 0) - (totals?.totalDiscount || 0));
 }
@@ -69,10 +107,9 @@ function normInv(s) { return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g,
 // part of the invoice value the supplier reports in 2B (`val`); leaving it
 // out flagged every bill with cess as an amount mismatch.
 function purchaseBookTotals(p) {
+    // v1.10.85 (#171) - the shared line maths, so a line discount comes off.
     return (p?.items || []).reduce((acc, it) => {
-        const amount = (Number(it.quantity) || 0) * (Number(it.rate) || 0);
-        const tax = amount * (Number(it.taxPercent) || 0) / 100;
-        const cess = amount * (Number(it.cessPercent) || 0) / 100;
+        const { amount, tax, cess } = purchaseLineTax({ ...it, quantity: Number(it.quantity) || 0, rate: Number(it.rate) || 0, taxPercent: Number(it.taxPercent) || 0 });
         return { taxable: acc.taxable + amount, tax: acc.tax + tax, cess: acc.cess + cess, total: acc.total + amount + tax + cess };
     }, { taxable: 0, tax: 0, cess: 0, total: 0 });
 }
@@ -111,6 +148,7 @@ function buildReconciliation(twoBData, purchases, periodPurchases = purchases) {
                     twoBVal, twoBTaxable, twoBIgst, twoBCgst, twoBSgst,
                     bookVal: 0, bookTaxable: 0, bookIgst: 0, bookCgst: 0, bookSgst: 0,
                     itcAvailable: inv.itcavl !== 'N',
+                    twoB: { sup: { ctin, trdnm: supName }, inv }, // v1.10.86 - (#175) for Add as purchase bill
                 });
                 return;
             }
@@ -165,31 +203,6 @@ function buildReconciliation(twoBData, purchases, periodPurchases = purchases) {
         });
     });
     return rows;
-}
-// Inter-state status of a bill — follows place of supply when set explicitly,
-// SEZ supplies always interstate, else compares seller and client state.
-//
-// v1.10.66 (#61) — the invoice's own saved decision comes first. Every bill
-// keeps the totals the tax engine produced, `isInterstate` included, and a
-// return has to report the tax the way the invoice actually charged it.
-// Re-deriving it here from state NAMES disagreed with the engine where the
-// engine works from codes — a client known only by GSTIN, or a client abroad —
-// and filed IGST for an invoice that charged CGST + SGST. The name comparison
-// below remains only for bills saved before the flag existed.
-function billIsInterstate(bill) {
-    const saved = bill.data?.totals?.isInterstate;
-    if (typeof saved === 'boolean')
-        return saved;
-    const prof = bill.data?.profile;
-    const client = bill.data?.client;
-    const details = bill.data?.details;
-    if (client?.isSEZ)
-        return true;
-    const sellerState = (prof?.state || '').trim().toLowerCase();
-    const placeOfSupply = (details?.placeOfSupply || client?.state || '').trim().toLowerCase();
-    if (!sellerState || !placeOfSupply)
-        return false;
-    return sellerState !== placeOfSupply;
 }
 // ========== Filing Guide Steps ==========
 const GSTR1_STEPS = [
@@ -485,21 +498,25 @@ function StepList({ steps, title, doc }) {
             expanded[i] && (h("div", { style: { padding: '0 1.25rem 0.75rem 3.5rem', fontSize: '0.82rem', color: 'var(--text-secondary)', lineHeight: 1.7 } }, step.details))))))));
 }
 // ========== Main Component ==========
-export default function GSTReturns() {
+export default function GSTReturns({ onOpenPurchases } = {}) {
     const [bills, setBills] = useState([]);
     // v1.10.74 - cancelled invoices, kept apart so they reach only the Table 13
     // document count (the portal wants them in "Cancelled"), never the tax tables.
     const [cancelledBills, setCancelledBills] = useState([]);
     const [expenses, setExpenses] = useState([]);
     const [purchases, setPurchases] = useState([]);
+    const [debitNotes, setDebitNotes] = useState([]);
     const [profile, setProfile] = useState({});
     const [filterMode, setFilterMode] = useState('month');
     const [fyFilter, setFyFilter] = useState('');
     const [monthFilter, setMonthFilter] = useState('');
     const [yearFilter, setYearFilter] = useState('');
     const [quarterFilter, setQuarterFilter] = useState('Q1');
-    const [activeTab, setActiveTab] = useState('gstr1');
-    const [gstr2bData, setGstr2bData] = useState(null); // imported 2B JSON
+    // v1.10.86 - (#175) back from saving a bill made from 2B: the GSTR-2B tab,
+    // with the 2B file imported before (kept in this tab's sessionStorage).
+    const [activeTab, setActiveTab] = useState(() => (wantsBackToTwoB() ? 'gstr2b' : 'gstr1'));
+    useEffect(() => { clearBackToTwoB(); }, []);
+    const [gstr2bData, setGstr2bData] = useState(() => keptTwoBFile()); // imported 2B JSON
     const [gstr2bFilter, setGstr2bFilter] = useState('all'); // all | matched | mismatch | bookOnly | twoBOnly
     const gstr2bInputRef = useRef(null);
     const handleImport2B = async (e) => {
@@ -516,6 +533,7 @@ export default function GSTReturns() {
                 return;
             }
             setGstr2bData(root);
+            keepTwoBFile(root);
             const supplierCount = (root.docdata?.b2b || root.b2b || []).length;
             toast(`Imported GSTR-2B for ${root.gstin || '?'} — ${supplierCount} suppliers`, 'success');
         }
@@ -553,7 +571,11 @@ export default function GSTReturns() {
             // into rupees at the exchange rate saved on it. One without a rate stays
             // as it is, marked fxMissing, and is listed as an error below.
             const inRupees = (bill) => billInInr(bill) || { ...bill, fxMissing: true };
-            setBills((b || []).filter(bill => belongsToProfile(bill, p) && !isCancelledBill(bill)).map(inRupees));
+            // #141 - every table, file and check below reads this cleaned GSTIN.
+            const withCleanGstin = (bill) => (bill.data?.client?.gstin
+                ? { ...bill, data: { ...bill.data, client: { ...bill.data.client, gstin: cleanGstin(bill.data.client.gstin) } } }
+                : bill);
+            setBills((b || []).filter(bill => belongsToProfile(bill, p) && !isCancelledBill(bill)).map(inRupees).map(withCleanGstin));
             setCancelledBills((b || []).filter(bill => belongsToProfile(bill, p) && isCancelledBill(bill)));
             // v1.10.66 (#64) — and only its own expenses and purchases. Left
             // unfiltered, GSTR-3B Table 4 claimed input tax credit on purchases made
@@ -566,6 +588,14 @@ export default function GSTReturns() {
                 setPurchases((pur || []).filter(r => belongsToProfile(r, p)));
             }
             catch { /* ignore — older servers don't have this endpoint */ }
+            // v1.10.85 (#168) - purchase returns take their ITC back (Table 4).
+            try {
+                const dns = await getAllDebitNotes();
+                setDebitNotes((dns || []).filter(r => belongsToProfile(r, p)));
+            }
+            catch {
+                setDebitNotes([]);
+            }
         }
         catch {
             toast('Failed to load data', 'error');
@@ -623,7 +653,7 @@ export default function GSTReturns() {
         if (!bill.data)
             return false;
         return filterByPeriod(bill.invoiceDate);
-        // eslint-disable-next-line vanilla-runtime/exhaustive-deps
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }), [bills, filterMode, fyFilter, quarterFilter, monthFilter, yearFilter]);
     // v1.10.83 - an invoice in another currency with no exchange rate is kept
     // OUT of every total (its dollars are not rupees) and listed as an error
@@ -631,38 +661,23 @@ export default function GSTReturns() {
     const filteredBills = useMemo(() => periodGstBills.filter(b => !b.fxMissing), [periodGstBills]);
     const noRateBills = useMemo(() => periodGstBills.filter(b => b.fxMissing), [periodGstBills]);
     const allFilteredBills = useMemo(() => bills.filter(bill => bill.data && filterByPeriod(bill.invoiceDate)), 
-    // eslint-disable-next-line vanilla-runtime/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [bills, filterMode, fyFilter, quarterFilter, monthFilter, yearFilter]);
     const cancelledInPeriod = useMemo(() => cancelledBills.filter(bill => bill.data && filterByPeriod(bill.invoiceDate)), 
-    // eslint-disable-next-line vanilla-runtime/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [cancelledBills, filterMode, fyFilter, quarterFilter, monthFilter, yearFilter]);
     const filteredExpenses = useMemo(() => expenses.filter(exp => filterByPeriod(exp.date)), 
-    // eslint-disable-next-line vanilla-runtime/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [expenses, filterMode, fyFilter, quarterFilter, monthFilter, yearFilter]);
     // ========== Classification ==========
     const creditNotes = filteredBills.filter(b => (b.invoiceType || 'tax-invoice') === 'credit-note');
     const regularBills = filteredBills.filter(b => (b.invoiceType || 'tax-invoice') !== 'credit-note');
-    // v1.10.74 - the HSN summary (Table 12) is net of credit notes: a credit
-    // note's quantity, value and tax reduce its HSN row instead of adding to it.
-    const hsnSign = (bill) => ((bill.invoiceType || 'tax-invoice') === 'credit-note' ? -1 : 1);
-    // v1.10.66 (#61) — exports. The tax engine now charges a client outside India
-    // IGST, so such an invoice can no longer sit in B2C with your own state as
-    // place of supply: the portal rejects an inter-state row for the home state.
-    // Exports belong in GSTR-1 Table 6A — which needs shipping-bill and port
-    // details this app does not record — and in GSTR-3B 3.1(b). They are kept
-    // out of B2B / B2C and 3.1(a), counted in 3.1(b), and flagged so they are
-    // entered in Table 6A on the portal. They stay in regularBills, so the HSN
-    // and document summaries still include them. An older invoice whose saved
-    // totals charged CGST + SGST stays exactly where it was, so tax it collected
-    // can never drop out of 3.1(a).
-    const isExportBill = (bill) => {
-        const country = String(bill.data?.client?.country || '').trim();
-        return (bill.data?.profile?.country || 'India') === 'India'
-            && !!country && country !== 'India'
-            && !getStateCode(String(bill.data?.details?.placeOfSupply || '').trim())
-            && bill.data?.totals?.isInterstate !== false;
-    };
+    // v1.10.66 (#61) - exports (isExportBill, utils/gstr1Json.js) stay in
+    // regularBills, so the HSN and document summaries still include them.
     const exportBills = regularBills.filter(isExportBill);
+    // v1.10.84 - an export is without payment (WOPAY) when it charged no IGST
+    // under a LUT: the zero-rated totals, or the LUT tick / LUT words with no tax.
+    const exportWopay = (bill) => !!bill.data?.totals?.lutZeroRated || billIsLut(bill);
     // v1.10.83 - GSTR-1 Table 6A, in rupees (each invoice at its own rate). WPAY
     // = with payment of IGST, WOPAY = without (under a LUT).
     const exportRows = [...exportBills, ...noRateBills.filter(isExportBill)].map(b => {
@@ -671,7 +686,7 @@ export default function GSTReturns() {
         return {
             id: b.id, invoiceNo: b.invoiceNumber || '', date: b.invoiceDate || '',
             client: b.data?.client?.name || b.clientName || '', country: b.data?.client?.country || '',
-            type: t.lutZeroRated ? 'WOPAY' : 'WPAY', rates: rates.join(', '),
+            type: exportWopay(b) ? 'WOPAY' : 'WPAY', rates: rates.join(', '),
             currency: b.fxFrom?.currency || b.currency || 'INR', fxRate: b.fxFrom?.rate || (b.fxMissing ? 0 : 1),
             value: t.total || 0, taxable: getTaxableAmount(t), igst: t.igst || 0, cess: t.cess || 0, missing: !!b.fxMissing,
         };
@@ -695,6 +710,28 @@ export default function GSTReturns() {
             return true;
         return false; // Legacy bills default to false — will treat as SGST which is safe
     };
+    // v1.10.84 - each line's GST treatment (gstr1Json.lineTreatment): taxable
+    // lines go in B2B / B2C / exports as before; nil-rated, exempt and non-GST
+    // lines (0% lines, and bills of supply) go in Table 8 and GSTR-3B 3.1(c) /
+    // 3.1(e) instead. Bills of supply were in no table at all before.
+    const treatmentOf = (bill, item) => lineTreatment({
+        invoiceType: bill.invoiceType || 'tax-invoice', isExport: isExportBill(bill),
+        taxPercent: item.taxPercent, gstTreatment: item.gstTreatment,
+    });
+    const taxableLine = (bill) => (item) => treatmentOf(bill, item) === 'taxable';
+    const supplyBills = allFilteredBills.filter(b => b.invoiceType === 'bill-of-supply' && !b.fxMissing);
+    const nilRows = [...filteredBills, ...supplyBills].flatMap(bill => (bill.data?.items || []).map(item => {
+        const treatment = treatmentOf(bill, item);
+        if (treatment === 'taxable')
+            return null;
+        const isInter = billIsInterstate(bill);
+        const split = billSplit(bill, item, isInter, !!bill.data?.taxInclusive, billIsIntraUT(bill));
+        return {
+            interstate: isInter, b2b: !!bill.data?.client?.gstin, treatment,
+            txval: hsnSign(bill) * split.taxable, onTaxInvoice: bill.invoiceType !== 'bill-of-supply',
+        };
+    }).filter(Boolean));
+    const nilSum = (pred) => nilRows.filter(pred).reduce((t, r) => t + r.txval, 0);
     // ========== B2B Rows ==========
     // v1.10.31 — GST-C2 fix: also read totals.utgst (was ignored → intra-UT
     // bills lost 50% of tax in the CSV export). And GST-C3: expose cess so
@@ -771,34 +808,15 @@ export default function GSTReturns() {
         return Object.values(rows).sort((a, b) => (a.inter - b.inter) || a.pos.localeCompare(b.pos) || a.rate - b.rate);
     })();
     // ========== HSN Summary ==========
-    // v1.10.31 — GST-H3 fix: key by hsn+rate+uqc so items with the same HSN
-    // but different UQCs (KGS vs NOS vs PCS) don't get their quantities
-    // summed nonsensically. Also GST-C3 + C2: include cess + UTGST in totals.
-    const hsnMap = {};
-    filteredBills.forEach(bill => {
-        const { items } = bill.data;
-        const isInterState = billIsInterstate(bill);
-        const isIntraUT = billIsIntraUT(bill);
-        (items || []).forEach(item => {
-            const hsn = item.hsn || 'N/A';
-            const rate = item.taxPercent || 0;
-            const uqc = item.unit || 'OTH';
-            const key = `${hsn}|${rate}|${uqc}`;
-            if (!hsnMap[key])
-                hsnMap[key] = { hsn, rate, uqc, description: item.name || '', quantity: 0, taxable: 0, cgst: 0, sgst: 0, igst: 0, cess: 0, totalTax: 0 };
-            const split = billSplit(bill, item, isInterState, !!bill.data?.taxInclusive, isIntraUT);
-            const sign = hsnSign(bill);
-            hsnMap[key].quantity += sign * (item.quantity || 0);
-            hsnMap[key].taxable += sign * split.taxable;
-            hsnMap[key].cgst += sign * split.cgst;
-            hsnMap[key].sgst += sign * (split.sgst + split.utgst);
-            hsnMap[key].igst += sign * split.igst;
-            hsnMap[key].cess += sign * split.cess;
-            hsnMap[key].totalTax += sign * (split.cgst + split.sgst + split.utgst + split.igst + split.cess);
-        });
-    });
-    const hsnRows = Object.values(hsnMap).map((r) => ({ ...r, quantity: roundQty(r.quantity) }))
-        .sort((a, b) => (a.hsn || '').localeCompare(b.hsn || ''));
+    // v1.10.84 (#166) - one builder (utils/gstr1Json.js hsnSummary) for the
+    // screen, the CSV files and the JSON, so the three always agree.
+    const hsnSum = hsnSummary([...filteredBills, ...supplyBills]); // v1.10.84 - bills of supply too
+    const hsnRows = hsnSum.rows;
+    const hsnB2B = hsnRows.filter((r) => r.b2b);
+    const hsnB2C = hsnRows.filter((r) => !r.b2b);
+    // v1.10.86 (#209) - Table 14(a), one row per e-commerce operator GSTIN, for
+    // the screen and the JSON (supeco.clttx).
+    const ecoRows = ecoSummary(filteredBills);
     // ========== Totals ==========
     // v1.10.31 — GST-C3: sumRows now carries cess. GST-H2: credit notes
     // netted from grandTotals so GSTR-3B outward supply table reflects
@@ -846,7 +864,10 @@ export default function GSTReturns() {
     // GSTR-1 still lists them in B2B (SEWP / SEWOP), as the portal wants.
     const zeroRated = zeroRatedTotals(filteredBills, isExportBill);
     const exportTotals = zeroRated.zero; // 3.1(b)
-    const outward31a = withoutZeroRated(grandTotals, zeroRated.inDomestic); // 3.1(a)
+    const outward31aAll = withoutZeroRated(grandTotals, zeroRated.inDomestic);
+    // v1.10.84 - nil-rated / exempt / non-GST lines of tax invoices are in the
+    // invoice totals; they are reported in 3.1(c) / 3.1(e), not 3.1(a).
+    const outward31a = { ...outward31aAll, taxable: outward31aAll.taxable - nilSum(r => r.onTaxInvoice) }; // 3.1(a)
     const outputTax = { cgst: outward31a.cgst, sgst: outward31a.sgst, igst: outward31a.igst + exportTotals.igst };
     // ITC from expenses — P1 #15 fix: route to IGST when the expense is
     // interstate (vendor charged IGST, e.g. AWS / Google / Adobe from an
@@ -879,13 +900,31 @@ export default function GSTReturns() {
     // Table 4(A) csamt); it was always reported as 0.
     const itcCessFromPurchases = filteredPurchases.reduce((s, p) => s + purchaseBookTotals(p).cess, 0);
     // Combined ITC
-    const itcFromExpenses = {
+    const itcGross = {
         cgst: itcFromExpensesOnly.cgst + itcFromPurchases.cgst,
         sgst: itcFromExpensesOnly.sgst + itcFromPurchases.sgst,
         igst: itcFromExpensesOnly.igst + itcFromPurchases.igst,
     };
+    // v1.10.85 (#168) - purchase returns (debit notes dated in the period) take
+    // their ITC back: 4(A)(5) is reported net of them, as GSTR-2B nets the
+    // supplier's credit notes; a head whose returns are more than its ITC goes
+    // to 4(B)(2) "ITC reversed - others", paid with the tax (utils/debitNotes.js).
+    const returnsItc = purchaseReturnsTax(debitNotes, filterByPeriod);
+    const rcmReturns = purchaseReturnsTax(debitNotes.filter((dn) => dn.reverseCharge), filterByPeriod);
+    const hasReturns = returnsItc.igst + returnsItc.cgst + returnsItc.sgst + returnsItc.cess > 0;
+    const { avl: itcNet, rev: itcReversed } = netItc({ ...itcGross, cess: itcCessFromPurchases }, returnsItc);
+    const hasReversal = itcReversed.igst + itcReversed.cgst + itcReversed.sgst + itcReversed.cess > 0;
+    // v1.10.86 - reverse-charge purchase bills (the Reverse charge tick): their
+    // tax is 3.1(d), paid in cash (it cannot be paid from credit), and the same
+    // tax is credit in 4(A)(3) instead of 4(A)(5). Without such bills both are 0
+    // and every figure is as before.
+    const rcm31d = rcmInward(filteredPurchases, rcmReturns);
+    const rcmTax = rcm31d.iamt + rcm31d.camt + rcm31d.samt;
+    const hasRcm = rcm31d.txval > 0 || rcmTax > 0;
+    const { isrc: itcRcm, oth: itcOther } = splitRcmItc(itcNet, rcm31d);
+    const itcFromExpenses = { cgst: itcNet.cgst, sgst: itcNet.sgst, igst: itcNet.igst };
     // v1.10.76 (#81) - credit set off across heads in the legal order (see setOffITC).
-    const setOff = setOffITC(outputTax, itcFromExpenses);
+    const setOff = setOffITC({ igst: outputTax.igst + itcReversed.igst, cgst: outputTax.cgst + itcReversed.cgst, sgst: outputTax.sgst + itcReversed.sgst }, itcFromExpenses);
     const netTax = setOff.payable;
     const itcCarry = setOff.carry;
     const hasCarry = itcCarry.igst + itcCarry.cgst + itcCarry.sgst > 0;
@@ -898,26 +937,8 @@ export default function GSTReturns() {
     // per type, so two series (a changed prefix, a business's own numbering)
     // made a from/to that spanned both; quotations and proformas, which are not
     // reported, were listed; and the file numbered natures by list position.
-    const docSummary = {};
-    const trailingNo = (n) => Number((String(n).match(/(\d+)\s*$/) || [])[1] || 0);
-    [...allFilteredBills, ...cancelledInPeriod].forEach(bill => {
-        const type = bill.invoiceType || 'tax-invoice';
-        const nature = DOC_ISSUE_NATURE[type];
-        if (!nature || !bill.invoiceNumber)
-            return;
-        const series = String(bill.invoiceNumber).replace(/\d+\s*$/, '');
-        const key = `${nature}|${series}`;
-        if (!docSummary[key])
-            docSummary[key] = { nature, type: DOC_NATURE_LABEL[nature], series, from: bill.invoiceNumber, to: bill.invoiceNumber, total: 0, cancelled: 0 };
-        const d = docSummary[key];
-        d.total++;
-        if (isCancelledBill(bill))
-            d.cancelled++;
-        if (trailingNo(bill.invoiceNumber) < trailingNo(d.from))
-            d.from = bill.invoiceNumber;
-        if (trailingNo(bill.invoiceNumber) > trailingNo(d.to))
-            d.to = bill.invoiceNumber;
-    });
+    // Table 13 (gstr1Json.docIssueSummary, tested; ERR-056).
+    const docSummary = docIssueSummary([...allFilteredBills, ...cancelledInPeriod]);
     // ========== Validation Warnings ==========
     const warnings = [];
     noRateBills.forEach(bill => {
@@ -934,10 +955,8 @@ export default function GSTReturns() {
             });
             return;
         }
-        // Official GSTIN format: 2 digits state code, 5 letters PAN holder, 4 digits PAN number,
-        // 1 letter PAN entity, 1 digit, 1 letter (Z by default), 1 alphanumeric checksum.
-        // The last char can be a letter or digit, so the final group is [A-Z\d], not \d.
-        if (client?.gstin && !/^\d{2}[A-Z]{5}\d{4}[A-Z]\d[A-Z][A-Z\d]$/.test(client.gstin)) {
+        // Official GSTIN format (gstinFormatOk); the GSTIN was cleaned on load (#141).
+        if (client?.gstin && !gstinFormatOk(client.gstin)) {
             warnings.push({ type: 'error', msg: `Invoice ${bill.invoiceNumber}: Invalid client GSTIN format — ${client.gstin}` });
         }
         (items || []).forEach(item => {
@@ -964,7 +983,8 @@ export default function GSTReturns() {
     // Put first, so the three-message limit on the banner can never hide it.
     if (exportBills.length > 0) {
         const listed = exportBills.slice(0, 3).map(b => b.invoiceNumber).join(', ') + (exportBills.length > 3 ? ', …' : '');
-        warnings.unshift({ type: 'error', msg: `${exportBills.length} export invoice(s) (${listed}) are not in the GSTR-1 file. Enter them in Table 6A on the GST portal from the Exports table below (in rupees) — their value is in GSTR-3B 3.1(b).` });
+        // v1.10.84 - they are in the JSON file now (Table 6A).
+        warnings.unshift({ type: 'warning', msg: `${exportBills.length} export invoice(s) (${listed}) are in Table 6A of the GSTR-1 file. For goods, add the shipping bill number, date and port code on the portal after uploading; their value is in GSTR-3B 3.1(b).` });
     }
     // ========== Filing Period Key ==========
     const getPeriodKey = () => {
@@ -990,6 +1010,8 @@ export default function GSTReturns() {
         const fy = fyOptions.find(f => f.value === fyFilter);
         return fy ? `03${fy.to.slice(0, 4)}` : getFilingPeriod(new Date().toISOString());
     };
+    // Table 12 comes in a B2B and a B2C list from the May 2025 return.
+    const hsnSplit = hsnSplitFrom(getReturnPeriod());
     const periodFiling = filingStatus[periodKey] || {};
     // v1.10.18 — reported: "in every option give option to change or edit
     // because by mistake if click happens user can change that". Now the R1
@@ -1025,7 +1047,7 @@ export default function GSTReturns() {
     };
     // A period with purchase bills has input tax credit to claim (and maybe
     // reverse charge), so it is not a NIL GSTR-3B even with no sales.
-    const isNilReturn = filteredBills.length === 0 && filteredExpenses.length === 0 && filteredPurchases.length === 0;
+    const isNilReturn = filteredBills.length === 0 && filteredExpenses.length === 0 && filteredPurchases.length === 0 && !hasReturns;
     // ========== CSV Exports ==========
     const exportB2B = () => {
         if (b2bRows.length === 0) {
@@ -1075,52 +1097,19 @@ export default function GSTReturns() {
             toast('No HSN data', 'warning');
             return;
         }
-        // v1.10.31 — GST-H3: key by hsn+rate+uqc so mixed-UQC items don't
-        // aggregate nonsensically. GST-C3: cess included. GST-C2: UTGST folded.
-        const hsnDetailed = {};
-        filteredBills.forEach(bill => {
-            const { items } = bill.data;
-            const isInter = billIsInterstate(bill);
-            const isIntraUT = billIsIntraUT(bill);
-            (items || []).forEach(item => {
-                const hsn = item.hsn || 'N/A';
-                const rate = item.taxPercent || 0;
-                const uqc = hsnUqc(item) || 'NOS';
-                const key = `${hsn}|${rate}|${uqc}`;
-                if (!hsnDetailed[key])
-                    hsnDetailed[key] = { hsn, desc: item.name || '', uqc, qty: 0, rate, taxable: 0, cgst: 0, sgst: 0, igst: 0, cess: 0, totalValue: 0 };
-                const split = billSplit(bill, item, isInter, !!bill.data?.taxInclusive, isIntraUT);
-                const sign = hsnSign(bill); // v1.10.74 - credit notes reduce the row
-                hsnDetailed[key].qty += uqc === 'NA' ? 0 : sign * (item.quantity || 0);
-                hsnDetailed[key].taxable += sign * split.taxable;
-                hsnDetailed[key].cgst += sign * split.cgst;
-                hsnDetailed[key].sgst += sign * (split.sgst + split.utgst);
-                hsnDetailed[key].igst += sign * split.igst;
-                hsnDetailed[key].cess += sign * split.cess;
-                hsnDetailed[key].totalValue += sign * (split.taxable + split.cgst + split.sgst + split.utgst + split.igst + split.cess);
+        // v1.10.84 (#166) - from the May 2025 return the portal takes Table 12 as
+        // two lists, so the CSV comes as two files (a list with no rows is left
+        // out). Earlier periods keep the one combined file.
+        if (!hsnSplit) {
+            downloadCSV('GSTR1_HSN_Summary.csv', HSN_CSV_HEADERS, mergeHsnRows(hsnRows).map(hsnCsvRow));
+        }
+        else {
+            [['B2B', hsnB2B], ['B2C', hsnB2C]].forEach(([part, rows]) => {
+                if (rows.length)
+                    downloadCSV(`GSTR1_HSN_${part}.csv`, HSN_CSV_HEADERS, rows.map(hsnCsvRow));
             });
-        });
-        // v1.10.31 — Column order + header labels now match the GSTR-1
-        // offline utility's Table 12 CSV template (v3.1.6+). The prior order
-        // put "Total Value" LAST and used "Rate %" — the portal importer
-        // rejects those with "Invalid file format". Correct order (portal):
-        //   HSN, Description, UQC, Total Quantity, Total Value, Rate,
-        //   Taxable Value, Integrated Tax Amount, Central Tax Amount,
-        //   State/UT Tax Amount, Cess Amount
-        downloadCSV('GSTR1_HSN_Summary.csv', ['HSN', 'Description', 'UQC', 'Total Quantity', 'Total Value', 'Rate', 'Taxable Value', 'Integrated Tax Amount', 'Central Tax Amount', 'State/UT Tax Amount', 'Cess Amount'], Object.values(hsnDetailed).map(r => [
-            r.hsn,
-            r.desc,
-            r.uqc,
-            roundQty(r.qty, 2),
-            r.totalValue.toFixed(2),
-            r.rate,
-            r.taxable.toFixed(2),
-            r.igst.toFixed(2),
-            r.cgst.toFixed(2),
-            r.sgst.toFixed(2),
-            r.cess.toFixed(2),
-        ]));
-        toast('HSN CSV downloaded — GSTR-1 Table 12 format', 'success');
+        }
+        toast(hsnSplit ? 'HSN CSV downloaded - B2B and B2C files, GSTR-1 Table 12 format' : 'HSN CSV downloaded - GSTR-1 Table 12 format', 'success');
     };
     const exportCDNR = () => {
         const cdnrBills = creditNotes.filter(b => b.data?.client?.gstin);
@@ -1159,6 +1148,8 @@ export default function GSTReturns() {
         downloadCSV('GSTR3B_Summary.csv', ['Description', 'Taxable Value', 'IGST', 'CGST', 'SGST', 'Total'], [
             ['3.1(a) Outward taxable supplies', outward31a.taxable.toFixed(2), outward31a.igst.toFixed(2), outward31a.cgst.toFixed(2), outward31a.sgst.toFixed(2), (outward31a.igst + outward31a.cgst + outward31a.sgst).toFixed(2)],
             ['3.1(b) Zero rated (exports, SEZ)', exportTotals.taxable.toFixed(2), exportTotals.igst.toFixed(2), '0.00', '0.00', exportTotals.igst.toFixed(2)],
+            ...(hasRcm ? [['3.1(d) Inward supplies liable to reverse charge (paid in cash)', rcm31d.txval.toFixed(2), rcm31d.iamt.toFixed(2), rcm31d.camt.toFixed(2), rcm31d.samt.toFixed(2), rcmTax.toFixed(2)],
+                ['4(A)(3) ITC on reverse charge', '', itcRcm.igst.toFixed(2), itcRcm.cgst.toFixed(2), itcRcm.sgst.toFixed(2), (itcRcm.igst + itcRcm.cgst + itcRcm.sgst).toFixed(2)]] : []),
             ['4(A) ITC Available', '', itcFromExpenses.igst.toFixed(2), itcFromExpenses.cgst.toFixed(2), itcFromExpenses.sgst.toFixed(2), (itcFromExpenses.igst + itcFromExpenses.cgst + itcFromExpenses.sgst).toFixed(2)],
             ['6.1 ITC utilised', '', setOff.used.igst.toFixed(2), setOff.used.cgst.toFixed(2), setOff.used.sgst.toFixed(2), (setOff.used.igst + setOff.used.cgst + setOff.used.sgst).toFixed(2)],
             ['6.1 Tax Payable in cash', '', netTax.igst.toFixed(2), netTax.cgst.toFixed(2), netTax.sgst.toFixed(2), (netTax.igst + netTax.cgst + netTax.sgst).toFixed(2)],
@@ -1193,43 +1184,36 @@ export default function GSTReturns() {
             },
             // v1.10.66 (#61) — exports, kept out of osup_det above. v1.10.83 - and SEZ supplies.
             osup_zero: { txval: round2(exportTotals.taxable), iamt: round2(exportTotals.igst), csamt: round2(exportTotals.cess) },
-            osup_nil_exmp: { txval: 0 },
+            osup_nil_exmp: { txval: round2(nilSum(r => r.treatment !== 'nongst')) }, // v1.10.84 - 3.1(c)
             // v1.10.31 — GST-M10: RCM inward supplies populated from purchases
             // flagged as reverse-charge (was hardcoded 0 → self-remit RCM liability
             // never reported → interest u/s 50).
-            isup_rev: (() => {
-                // v1.10.74 - only this return period's purchases; was every purchase ever
-                // recorded, so past reverse-charge tax was declared again each period.
-                const rcmPurchases = filteredPurchases.filter(p => !!p.reverseCharge);
-                if (rcmPurchases.length === 0)
-                    return { txval: 0, iamt: 0, camt: 0, samt: 0, csamt: 0 };
-                const t = rcmPurchases.reduce((acc, p) => ({
-                    txval: acc.txval + (Number(p.taxableAmount) || 0),
-                    iamt: acc.iamt + (p.interstate ? (Number(p.totalTax) || 0) : 0),
-                    camt: acc.camt + (p.interstate ? 0 : (Number(p.totalTax) || 0) / 2),
-                    samt: acc.samt + (p.interstate ? 0 : (Number(p.totalTax) || 0) / 2),
-                    csamt: acc.csamt + (Number(p.totalCess) || purchaseBookTotals(p).cess),
-                }), { txval: 0, iamt: 0, camt: 0, samt: 0, csamt: 0 });
-                return {
-                    txval: round2(t.txval), iamt: round2(t.iamt),
-                    camt: round2(t.camt), samt: round2(t.samt), csamt: round2(t.csamt),
-                };
-            })(),
-            osup_nongst: { txval: 0 },
+            // v1.10.74 - only this return period's purchases. v1.10.85 (#168) - less
+            // returns on reverse-charge bills, in the debit note's month.
+            // v1.10.86 - worked out once (rcm31d, utils/debitNotes.js rcmInward).
+            isup_rev: rcm31d,
+            osup_nongst: { txval: round2(nilSum(r => r.treatment === 'nongst')) }, // v1.10.84 - 3.1(e)
         };
         const itc_elg = {
             itc_avl: [
                 { ty: 'IMPG', iamt: 0, camt: 0, samt: 0, csamt: 0 },
                 { ty: 'IMPS', iamt: 0, camt: 0, samt: 0, csamt: 0 },
-                { ty: 'ISRC', iamt: 0, camt: 0, samt: 0, csamt: 0 },
+                // v1.10.86 - 4(A)(3): credit of the reverse-charge tax (0 without such bills).
+                { ty: 'ISRC', iamt: round2(itcRcm.igst), camt: round2(itcRcm.cgst), samt: round2(itcRcm.sgst), csamt: round2(itcRcm.cess) },
                 { ty: 'ISD', iamt: 0, camt: 0, samt: 0, csamt: 0 },
                 { ty: 'OTH',
-                    iamt: round2(itcFromExpenses.igst),
-                    camt: round2(itcFromExpenses.cgst),
-                    samt: round2(itcFromExpenses.sgst),
-                    csamt: round2(itcCessFromPurchases),
+                    iamt: round2(itcOther.igst),
+                    camt: round2(itcOther.cgst),
+                    samt: round2(itcOther.sgst),
+                    csamt: round2(itcOther.cess),
                 },
             ],
+            // v1.10.85 (#168) - only when purchase returns are more than the
+            // period's ITC; otherwise the file is exactly as before.
+            ...(hasReversal ? { itc_rev: [
+                    { ty: 'RUL', iamt: 0, camt: 0, samt: 0, csamt: 0 },
+                    { ty: 'OTH', iamt: round2(itcReversed.igst), camt: round2(itcReversed.cgst), samt: round2(itcReversed.sgst), csamt: round2(itcReversed.cess) },
+                ] } : {}),
             itc_inelg: [
                 { ty: 'RUL', iamt: 0, camt: 0, samt: 0, csamt: 0 },
                 { ty: 'OTH', iamt: 0, camt: 0, samt: 0, csamt: 0 },
@@ -1306,6 +1290,10 @@ export default function GSTReturns() {
         if (noRate.length > 0) {
             blocked.push(`${noRate.length} invoice(s) in a foreign currency have no exchange rate (${noRate.slice(0, 3).map(b => b.invoiceNumber).join(', ')}). Open each: if the amounts are really in rupees, set the currency to INR; otherwise enter the exchange rate.`);
         }
+        // v1.10.86 (#209) - a mistyped operator GSTIN in Table 14 is refused.
+        const badEco = bills.filter(b => b.data?.details?.ecoGstin && !gstinChecksumOk(b.data.details.ecoGstin));
+        if (badEco.length > 0)
+            blocked.push(`${badEco.length} invoice(s) have a wrong E-commerce operator GSTIN (${badEco.slice(0, 3).map(b => b.invoiceNumber).join(', ')}). Open each and fix it under More invoice details.`);
         const badInums = bills.filter(b => !INUM_REGEX.test(b.invoiceNumber || ''));
         if (badInums.length > 0) {
             blocked.push(`${badInums.length} invoice number(s) violate portal rules (≤16 chars, only letters, digits, "-" or "/"). First: ${badInums.slice(0, 3).map(b => b.invoiceNumber).join(', ')}`);
@@ -1370,14 +1358,12 @@ export default function GSTReturns() {
         b2bRegular.forEach(bill => {
             const { client, totals, items, details } = bill.data;
             const ctin = client.gstin;
-            if (!b2bMap[ctin])
-                b2bMap[ctin] = { ctin, inv: [] };
             const isInter = billIsInterstate(bill);
             const isIntraUT = billIsIntraUT(bill);
             const isRcm = !!bill.data?.invoiceOptions?.reverseCharge;
             const pos = getStateCode(details?.placeOfSupply || client?.state || '');
             const rateMap = {};
-            (items || []).forEach(item => {
+            (items || []).filter(taxableLine(bill)).forEach(item => {
                 const rate = item.taxPercent || 0;
                 if (!rateMap[rate])
                     rateMap[rate] = { txval: 0, iamt: 0, camt: 0, samt: 0, csamt: 0 };
@@ -1396,9 +1382,13 @@ export default function GSTReturns() {
             // applicable" text). Also GST-M9: SEZ + RCM combination — GSTN rejects
             // SEWP/SEWOP with rchrg='Y'. Coerce inv_typ to 'R' if rchrg='Y'.
             const isLUT = billIsLut(bill);
-            const invType = isRcm
-                ? 'R'
-                : (isSEZ ? (isLUT ? 'SEWOP' : 'SEWP') : 'R');
+            // v1.10.84 - deemed exports (the client's tick) are DE.
+            const invType = b2bInvType({ deemedExport: !!client?.isDeemedExport, rcm: isRcm, sez: isSEZ, lut: isLUT });
+            // An invoice whose lines are all nil-rated / exempt is only in Table 8.
+            if (!Object.keys(rateMap).length)
+                return;
+            if (!b2bMap[ctin])
+                b2bMap[ctin] = { ctin, inv: [] };
             // v1.10.31 — GST-C1: `val` per-invoice for RCM must reconcile with
             // per-rate iamt/camt/samt/csamt. When RCM, computeInvoiceTotals excludes
             // tax from `total`, but the per-rate map STILL emits the notional tax.
@@ -1425,7 +1415,7 @@ export default function GSTReturns() {
             const isIntraUT = billIsIntraUT(bill);
             const pos = getStateCode(details?.placeOfSupply || client?.state || prof?.state || '');
             const splyTy = isInter ? 'INTER' : 'INTRA';
-            (items || []).forEach(item => {
+            (items || []).filter(taxableLine(bill)).forEach(item => {
                 const rate = Number(item.taxPercent) || 0;
                 const key = `${splyTy}_${pos}_${rate}`;
                 if (!b2csMap[key])
@@ -1443,7 +1433,7 @@ export default function GSTReturns() {
         const cdnurArr = unregNotes.filter(isLargeNote).map(bill => {
             const { client, totals, items, details } = bill.data;
             const rateMap = {};
-            (items || []).forEach(item => {
+            (items || []).filter(taxableLine(bill)).forEach(item => {
                 const rate = Number(item.taxPercent) || 0;
                 if (!rateMap[rate])
                     rateMap[rate] = { txval: 0, iamt: 0, csamt: 0 };
@@ -1452,19 +1442,33 @@ export default function GSTReturns() {
                 rateMap[rate].iamt += split.igst;
                 rateMap[rate].csamt += split.cess;
             });
+            if (!Object.keys(rateMap).length)
+                return null;
             return { typ: 'B2CL', ntty: 'C', nt_num: bill.invoiceNumber, nt_dt: formatDateGST(bill.invoiceDate), val: round2(totals?.total || 0),
                 pos: getStateCode(details?.placeOfSupply || client?.state || ''),
                 itms: Object.entries(rateMap).map(([rt, d], i) => ({ num: i + 1, itm_det: { rt: Number(rt), txval: round2(d.txval), iamt: round2(d.iamt), csamt: round2(d.csamt) } })) };
+        }).filter(Boolean);
+        // v1.10.84 - Table 6A: export invoices; their credit notes go in cdnur as
+        // EXPWP / EXPWOP. They were left for the user to type in by hand.
+        const exportLines = (bill) => (bill.data?.items || []).map(item => {
+            const split = billSplit(bill, item, true, !!bill.data?.taxInclusive);
+            return { rt: Number(item.taxPercent) || 0, txval: split.taxable, iamt: split.igst, csamt: split.cess };
         });
+        const expArr = expTable(exportBills.map(bill => ({
+            inum: bill.invoiceNumber, idt: formatDateGST(bill.invoiceDate), val: bill.data?.totals?.total || 0,
+            wopay: exportWopay(bill), lines: exportLines(bill),
+        })));
+        creditNotes.filter(isExportBill).forEach(bill => cdnurArr.push(exportNote({
+            nt_num: bill.invoiceNumber, nt_dt: formatDateGST(bill.invoiceDate), val: bill.data?.totals?.total || 0,
+            wopay: exportWopay(bill), lines: exportLines(bill),
+        })));
         const b2csArr = Object.values(b2csMap).map(d => ({ ...d, txval: round2(d.txval), iamt: round2(d.iamt), camt: round2(d.camt), samt: round2(d.samt), csamt: round2(d.csamt) }));
         const b2clMap = {};
         b2cLarge.forEach(bill => {
             const { client, totals, items, details } = bill.data;
             const pos = getStateCode(details?.placeOfSupply || client?.state || '');
-            if (!b2clMap[pos])
-                b2clMap[pos] = { pos, inv: [] };
             const rateMap = {};
-            (items || []).forEach(item => {
+            (items || []).filter(taxableLine(bill)).forEach(item => {
                 const rate = item.taxPercent || 0;
                 if (!rateMap[rate])
                     rateMap[rate] = { txval: 0, iamt: 0, csamt: 0 };
@@ -1475,18 +1479,20 @@ export default function GSTReturns() {
                 rateMap[rate].iamt += split.igst;
                 rateMap[rate].csamt += split.cess; // rounded per line, as on the invoice
             });
+            if (!Object.keys(rateMap).length)
+                return;
+            if (!b2clMap[pos])
+                b2clMap[pos] = { pos, inv: [] };
             b2clMap[pos].inv.push({ inum: bill.invoiceNumber, idt: formatDateGST(bill.invoiceDate), val: round2(totals?.total || 0), itms: Object.entries(rateMap).map(([rt, d], i) => ({ num: i + 1, itm_det: { rt: Number(rt), txval: round2(d.txval), iamt: round2(d.iamt), csamt: round2(d.csamt) } })) });
         });
         const cdnrMap = {};
         creditNotes.filter(b => b.data?.client?.gstin && !isExportBill(b)).forEach(bill => {
             const { client, totals, items, details } = bill.data;
             const ctin = client.gstin;
-            if (!cdnrMap[ctin])
-                cdnrMap[ctin] = { ctin, nt: [] };
             const isInter = billIsInterstate(bill);
             const pos = getStateCode(details?.placeOfSupply || client?.state || '');
             const rateMap = {};
-            (items || []).forEach(item => {
+            (items || []).filter(taxableLine(bill)).forEach(item => {
                 const rate = item.taxPercent || 0;
                 if (!rateMap[rate])
                     rateMap[rate] = { txval: 0, iamt: 0, camt: 0, samt: 0, csamt: 0 };
@@ -1505,55 +1511,18 @@ export default function GSTReturns() {
             // v1.10.83 - same rules as B2B: the LUT tick first, "LUT" as a word, and
             // SEZ with reverse charge filed as R.
             const isLUT = billIsLut(bill);
-            const invType = rchrg === 'Y' ? 'R' : (isSEZ ? (isLUT ? 'SEWOP' : 'SEWP') : 'R');
+            const invType = b2bInvType({ deemedExport: !!client?.isDeemedExport, rcm: rchrg === 'Y', sez: isSEZ, lut: isLUT });
+            if (!Object.keys(rateMap).length)
+                return;
+            if (!cdnrMap[ctin])
+                cdnrMap[ctin] = { ctin, nt: [] };
             cdnrMap[ctin].nt.push({ ntty: 'C', nt_num: bill.invoiceNumber, nt_dt: formatDateGST(bill.invoiceDate), val: round2(totals?.total || 0), pos, rchrg, inv_typ: invType,
                 itms: Object.entries(rateMap).map(([rt, d], i) => ({ num: i + 1, itm_det: { rt: Number(rt), txval: round2(d.txval), iamt: round2(d.iamt), camt: round2(d.camt), samt: round2(d.samt), csamt: round2(d.csamt) } })) });
         });
-        const hsnJsonMap = {};
-        let unknownUnitCount = 0;
-        filteredBills.forEach(bill => {
-            const { items } = bill.data;
-            const isInter = billIsInterstate(bill);
-            const isIntraUT = billIsIntraUT(bill);
-            (items || []).forEach(item => {
-                // v1.10.43 — HSN Table 12 rule: portal rejects `hsn_sc: 'N/A'`
-                // or empty. Silently DROP items with no HSN so the file uploads;
-                // the pre-flight warning already told the user how many were
-                // dropped and to fix the source products.
-                const hsnRaw = String(item.hsn || '').trim();
-                if (!hsnRaw || hsnRaw === 'N/A')
-                    return;
-                const hsn = hsnRaw;
-                // One row per HSN, rate AND unit, as in the CSV: two units under one
-                // HSN used to add kilograms to pieces under the first row's unit.
-                const uqc = hsnUqc(item);
-                // v1.10.83 (#133) - Table 12 has a B2B list (buyers with a GSTIN, SEZ
-                // too) and a B2C list (no GSTIN, and exports).
-                const b2b = !!bill.data?.client?.gstin && !isExportBill(bill);
-                const rate = Number(item.taxPercent) || 0;
-                const key = `${b2b ? 'B2B' : 'B2C'}_${hsn}_${rate}_${uqc}`;
-                if (uqc === 'OTH' && item.unit)
-                    unknownUnitCount += 1;
-                if (!hsnJsonMap[key])
-                    hsnJsonMap[key] = { b2b, hsn_sc: hsn, desc: item.name || '', uqc, qty: 0, rt: rate, txval: 0, iamt: 0, camt: 0, samt: 0, csamt: 0 };
-                // UTGST goes in samt (it was dropped for intra-UT invoices, so the
-                // JSON's HSN table disagreed with B2B and with the CSV).
-                const split = billSplit(bill, item, isInter, !!bill.data?.taxInclusive, isIntraUT);
-                const sign = hsnSign(bill); // v1.10.74 - credit notes reduce the row
-                hsnJsonMap[key].qty += uqc === 'NA' ? 0 : sign * (item.quantity || 0);
-                hsnJsonMap[key].txval += sign * split.taxable;
-                hsnJsonMap[key].iamt += sign * split.igst;
-                hsnJsonMap[key].camt += sign * split.cgst;
-                hsnJsonMap[key].samt += sign * (split.sgst + split.utgst);
-                hsnJsonMap[key].csamt += sign * split.cess;
-            });
-        });
-        const byNature = {};
-        Object.values(docSummary).forEach((d) => { (byNature[d.nature] = byNature[d.nature] || []).push(d); });
-        const docDet = Object.entries(byNature).map(([nature, list]) => ({
-            doc_num: Number(nature),
-            docs: list.map((d, i) => ({ num: i + 1, from: d.from, to: d.to, totnum: d.total, cancel: d.cancelled, net_issue: d.total - d.cancelled })),
-        }));
+        // v1.10.43 - the portal rejects an HSN of 'N/A' or blank, so hsnSummary
+        // leaves those lines out; the pre-flight warning told the user how many.
+        const unknownUnitCount = hsnSum.customUnit;
+        const docDet = docIssueDetails(docSummary);
         // v1.10.83 (#133) - as India Compliance writes it (accepted by the portal):
         // gstin, fp, version and hash, then the tables. The turnover fields gt /
         // cur_gt were only for 2017-18 returns and are no longer sent. Blank values
@@ -1566,8 +1535,12 @@ export default function GSTReturns() {
             b2cl: Object.values(b2clMap),
             cdnr: Object.values(cdnrMap),
             cdnur: cdnurArr,
-            hsn: hsnTable(Object.values(hsnJsonMap).map((r) => ({ ...r, qty: roundQty(r.qty, 2), txval: round2(r.txval), iamt: round2(r.iamt), camt: round2(r.camt), samt: round2(r.samt), csamt: round2(r.csamt) })), fp),
+            exp: expArr,
+            nil: nilTable(nilRows),
+            hsn: hsnTable(hsnRows, fp),
             doc_issue: { doc_det: docDet },
+            // v1.10.86 (#209) - Table 14(a); left out when no invoice names an operator.
+            supeco: { clttx: ecoRows },
         });
         const blob = new Blob([JSON.stringify(gstr1, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
@@ -1592,31 +1565,20 @@ export default function GSTReturns() {
     };
     // ========== RENDER ==========
     const totalTax = grandTotals.cgst + grandTotals.sgst + grandTotals.igst;
-    const netPayable = netTax.igst + netTax.cgst + netTax.sgst;
+    // v1.10.86 - plus the reverse-charge tax, always paid in cash (3.1(d)).
+    const netPayable = netTax.igst + netTax.cgst + netTax.sgst + rcmTax;
     return (h("div", { className: "dashboard-container" },
-        h("div", { style: { display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', marginBottom: '1.25rem' } },
-            h("h1", { className: "page-title", style: { margin: 0 } }, "GST Returns"),
-            h(HelpButton, { title: "GST Returns \u2014 how to use", doc: "gst-returns" }),
-            h("div", { style: { display: 'flex', gap: '0.5rem', alignItems: 'center', flex: 1, flexWrap: 'wrap' } },
-                h("select", { className: "form-input", value: filterMode, onChange: e => setFilterMode(e.target.value), style: { width: 'auto', minWidth: '120px' } },
+        h(PageHeader, { title: "GST Returns", help: { title: 'GST Returns — how to use', doc: 'gst-returns' }, extras: h("span", { className: "page-bar-field" },
+                h("select", { className: "form-input page-bar-select", value: filterMode, onChange: e => setFilterMode(e.target.value), "aria-label": "Return period" },
                     h("option", { value: "month" }, "Monthly"),
                     h("option", { value: "quarter" }, "Quarterly (QRMP)"),
                     h("option", { value: "fy" }, "Full Year")),
-                filterMode === 'fy' ? (h("select", { className: "form-input", value: fyFilter, onChange: e => setFyFilter(e.target.value), style: { width: 'auto' } }, fyOptions.map(fy => h("option", { key: fy.value, value: fy.value }, fy.label)))) : filterMode === 'quarter' ? (h(Fragment, null,
-                    h("select", { className: "form-input", value: quarterFilter, onChange: e => setQuarterFilter(e.target.value), style: { width: 'auto' } }, QUARTERS.map(q => h("option", { key: q.id, value: q.id }, q.label))),
-                    h("select", { className: "form-input", value: yearFilter, onChange: e => setYearFilter(e.target.value), style: { width: 'auto', minWidth: '80px' } }, yearOptions.map(y => h("option", { key: y, value: y }, y))))) : (h(Fragment, null,
-                    h("select", { className: "form-input", value: monthFilter, onChange: e => setMonthFilter(e.target.value), style: { width: 'auto' } }, MONTHS.map((m, i) => h("option", { key: i, value: i }, m))),
-                    h("select", { className: "form-input", value: yearFilter, onChange: e => setYearFilter(e.target.value), style: { width: 'auto', minWidth: '80px' } }, yearOptions.map(y => h("option", { key: y, value: y }, y))))),
-                h("button", { type: "button", onClick: () => toggleFiled('gstr1'), title: periodFiling.gstr1 ? 'Click to mark as pending' : 'Click to mark as filed', style: { fontSize: '0.7rem', padding: '0.2rem 0.5rem', borderRadius: '10px', border: 'none', cursor: 'pointer', background: periodFiling.gstr1 ? '#ecfdf5' : '#fef2f2', color: periodFiling.gstr1 ? '#059669' : '#dc2626', fontWeight: 600 } },
-                    "R1 ",
-                    periodFiling.gstr1 ? 'Filed' : 'Pending'),
-                h("button", { type: "button", onClick: () => toggleFiled('gstr3b'), title: periodFiling.gstr3b ? 'Click to mark as pending' : 'Click to mark as filed', style: { fontSize: '0.7rem', padding: '0.2rem 0.5rem', borderRadius: '10px', border: 'none', cursor: 'pointer', background: periodFiling.gstr3b ? '#ecfdf5' : '#fef2f2', color: periodFiling.gstr3b ? '#059669' : '#dc2626', fontWeight: 600 } },
-                    "3B ",
-                    periodFiling.gstr3b ? 'Filed' : 'Pending'),
-                h(HelpButton, { title: "Return period and filed status", doc: "gst-returns#period", size: 16 })),
-            h("a", { href: "https://gst.gov.in", target: "_blank", rel: "noopener noreferrer", className: "btn btn-primary", style: { whiteSpace: 'nowrap' } },
-                h(ExternalLink, { size: 14 }),
-                " GST Portal")),
+                filterMode === 'fy' ? (h("select", { className: "form-input page-bar-select", value: fyFilter, onChange: e => setFyFilter(e.target.value), "aria-label": "Financial year" }, fyOptions.map(fy => h("option", { key: fy.value, value: fy.value }, fy.label)))) : filterMode === 'quarter' ? (h(Fragment, null,
+                    h("select", { className: "form-input page-bar-select", value: quarterFilter, onChange: e => setQuarterFilter(e.target.value), "aria-label": "Quarter" }, QUARTERS.map(q => h("option", { key: q.id, value: q.id }, q.label))),
+                    h("select", { className: "form-input page-bar-select", value: yearFilter, onChange: e => setYearFilter(e.target.value), "aria-label": "Year" }, yearOptions.map(y => h("option", { key: y, value: y }, y))))) : (h(Fragment, null,
+                    h("select", { className: "form-input page-bar-select", value: monthFilter, onChange: e => setMonthFilter(e.target.value), "aria-label": "Month" }, MONTHS.map((m, i) => h("option", { key: i, value: i }, m))),
+                    h("select", { className: "form-input page-bar-select", value: yearFilter, onChange: e => setYearFilter(e.target.value), "aria-label": "Year" }, yearOptions.map(y => h("option", { key: y, value: y }, y))))),
+                h(HelpButton, { title: "Return period", doc: "gst-returns#period", size: 16 })), secondary: h(BarButton, { icon: ExternalLink, label: "GST Portal", href: "https://gst.gov.in", target: "_blank", rel: "noopener noreferrer", title: "GST Portal: open gst.gov.in in your browser" }) }),
         warnings.filter(w => w.type === 'error').length > 0 && (h("div", { style: { padding: '0.5rem 0.75rem', marginBottom: '0.75rem', borderRadius: '8px', background: 'var(--danger-light, #fef2f2)', fontSize: '0.8rem', color: '#dc2626' } },
             h(AlertTriangle, { size: 13, style: { verticalAlign: '-2px', marginRight: '0.35rem' } }),
             warnings.filter(w => w.type === 'error').slice(0, 3).map(w => w.msg).join(' | '),
@@ -1662,7 +1624,15 @@ export default function GSTReturns() {
                 h(tab.icon, { size: 14 }),
                 " ",
                 tab.label))),
-            h(HelpButton, { title: "This tab", doc: { gstr1: 'gst-returns#gstr-1', gstr3b: 'gst-returns#gstr-3b', gstr2b: 'gst-returns#gstr-2b', tds: 'gst-returns#tds-tcs', guide: 'gst-returns#filing-guide' }[activeTab], size: 16, style: { alignSelf: 'center' } })),
+            h(HelpButton, { title: "This tab", doc: { gstr1: 'gst-returns#gstr-1', gstr3b: 'gst-returns#gstr-3b', gstr2b: 'gst-returns#gstr-2b', tds: 'gst-returns#tds-tcs', guide: 'gst-returns#filing-guide' }[activeTab], size: 16, style: { alignSelf: 'center' } }),
+            h("span", { style: { marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' } },
+                h("button", { type: "button", onClick: () => toggleFiled('gstr1'), title: periodFiling.gstr1 ? 'Click to mark as pending' : 'Click to mark as filed', style: { fontSize: '0.7rem', padding: '0.2rem 0.5rem', borderRadius: '10px', border: 'none', cursor: 'pointer', background: periodFiling.gstr1 ? '#ecfdf5' : '#fef2f2', color: periodFiling.gstr1 ? '#059669' : '#dc2626', fontWeight: 600 } },
+                    "R1 ",
+                    periodFiling.gstr1 ? 'Filed' : 'Pending'),
+                h("button", { type: "button", onClick: () => toggleFiled('gstr3b'), title: periodFiling.gstr3b ? 'Click to mark as pending' : 'Click to mark as filed', style: { fontSize: '0.7rem', padding: '0.2rem 0.5rem', borderRadius: '10px', border: 'none', cursor: 'pointer', background: periodFiling.gstr3b ? '#ecfdf5' : '#fef2f2', color: periodFiling.gstr3b ? '#059669' : '#dc2626', fontWeight: 600 } },
+                    "3B ",
+                    periodFiling.gstr3b ? 'Filed' : 'Pending'),
+                h(HelpButton, { title: "Filed status", doc: "gst-returns#period", size: 16 }))),
         activeTab === 'gstr1' && (h(Fragment, null,
             h("div", { style: { display: 'flex', gap: '0.4rem', marginBottom: '0.75rem', flexWrap: 'wrap', alignItems: 'center' } },
                 h("button", { className: "btn btn-primary", onClick: exportGSTR1JSON, style: { fontSize: '0.78rem', padding: '0.3rem 0.6rem' } },
@@ -1776,7 +1746,7 @@ export default function GSTReturns() {
                             h("td", { style: { textAlign: 'right' } }, r.missing ? '—' : formatCurrency(r.taxable)),
                             h("td", { style: { textAlign: 'right' } }, r.missing ? '—' : formatCurrency(r.igst)),
                             h("td", { style: { textAlign: 'right' }, className: "font-bold" }, r.missing ? '—' : formatCurrency(r.value)))))))),
-                h("p", { style: { padding: '0.6rem 1.25rem', margin: 0, fontSize: '0.78rem', color: 'var(--text-muted)' } }, "Enter these in Table 6A on the GST portal (they are not in the JSON file). For services no shipping bill is needed; for goods add the shipping bill number, date and port code."))),
+                h("p", { style: { padding: '0.6rem 1.25rem', margin: 0, fontSize: '0.78rem', color: 'var(--text-muted)' } }, "These are in Table 6A of the JSON file. For services nothing more is needed; for goods, add the shipping bill number, date and port code on the portal after uploading."))),
             creditNotes.length > 0 && (h("div", { className: "glass-panel mb-4" },
                 h("div", { className: "table-header" },
                     h("h3", null,
@@ -1877,37 +1847,25 @@ export default function GSTReturns() {
                         hsnRows.length,
                         " code",
                         hsnRows.length !== 1 ? 's' : '')),
-                hsnRows.length === 0 ? (h("p", { style: { padding: '1rem 1.25rem', margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)' } }, "No items found.")) : (h("div", { className: "table-scroll" },
-                    h("table", { className: "data-table" },
-                        h("thead", null,
-                            h("tr", null,
-                                h("th", null, "HSN"),
-                                h("th", null, "Description"),
-                                h("th", { style: { textAlign: 'right' } }, "Qty"),
-                                h("th", { style: { textAlign: 'right' } }, "Taxable"),
-                                h("th", { style: { textAlign: 'right' } }, "CGST"),
-                                h("th", { style: { textAlign: 'right' } }, "SGST"),
-                                h("th", { style: { textAlign: 'right' } }, "IGST"),
-                                h("th", { style: { textAlign: 'right' } }, "Total Tax"))),
-                        h("tbody", null, hsnRows.map((r, i) => (h("tr", { key: r.hsn || `hsn-${i}` },
-                            h("td", null,
-                                h("span", { className: "invoice-badge" }, r.hsn)),
-                            h("td", { className: "font-medium" }, r.description),
-                            h("td", { style: { textAlign: 'right' } }, r.quantity),
-                            h("td", { style: { textAlign: 'right' } }, formatCurrency(r.taxable)),
-                            h("td", { style: { textAlign: 'right' } }, formatCurrency(r.cgst)),
-                            h("td", { style: { textAlign: 'right' } }, formatCurrency(r.sgst)),
-                            h("td", { style: { textAlign: 'right' } }, formatCurrency(r.igst)),
-                            h("td", { style: { textAlign: 'right' }, className: "font-bold" }, formatCurrency(r.totalTax)))))),
-                        h("tfoot", null,
-                            h("tr", { style: { fontWeight: 'bold', borderTop: '2px solid var(--border)' } },
-                                h("td", { colSpan: 2 }, "Total"),
-                                h("td", { style: { textAlign: 'right' } }, hsnRows.reduce((s, r) => s + r.quantity, 0)),
-                                h("td", { style: { textAlign: 'right' } }, formatCurrency(hsnRows.reduce((s, r) => s + r.taxable, 0))),
-                                h("td", { style: { textAlign: 'right' } }, formatCurrency(hsnRows.reduce((s, r) => s + r.cgst, 0))),
-                                h("td", { style: { textAlign: 'right' } }, formatCurrency(hsnRows.reduce((s, r) => s + r.sgst, 0))),
-                                h("td", { style: { textAlign: 'right' } }, formatCurrency(hsnRows.reduce((s, r) => s + r.igst, 0))),
-                                h("td", { style: { textAlign: 'right' } }, formatCurrency(hsnRows.reduce((s, r) => s + r.totalTax, 0))))))))),
+                hsnSum.missingHsn > 0 && (h("p", { style: { padding: '0.5rem 0.75rem', margin: '0 1.25rem 0.5rem', borderRadius: '8px', fontSize: '0.8rem', background: 'var(--warn-bg)', color: 'var(--warn-text)' } },
+                    h(AlertTriangle, { size: 13, style: { verticalAlign: '-2px' } }),
+                    " ",
+                    hsnSum.missingHsn,
+                    " invoice line",
+                    hsnSum.missingHsn !== 1 ? 's have' : ' has',
+                    " no HSN code and ",
+                    hsnSum.missingHsn !== 1 ? 'are' : 'is',
+                    " left out of Table 12 - the portal needs an HSN for every line. Add the HSN to the product (Products page) and to the invoice.")),
+                hsnRows.length === 0 ? (h("p", { style: { padding: '1rem 1.25rem', margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)' } }, "No items found.")) : (hsnSplit ? [['B2B (buyers with a GSTIN)', hsnB2B], ['B2C', hsnB2C]] : [['', mergeHsnRows(hsnRows)]]).map(([title, rows]) => (h("div", { key: title || 'all' },
+                    title && h("h4", { style: { margin: 0, padding: '0.75rem 1.25rem 0.4rem', fontSize: '0.9rem' } },
+                        title,
+                        " ",
+                        h("span", { className: "text-muted", style: { fontWeight: 'normal', fontSize: '0.8rem' } },
+                            "- ",
+                            rows.length,
+                            " row",
+                            rows.length !== 1 ? 's' : '')),
+                    rows.length === 0 ? (h("p", { style: { padding: '0 1.25rem 0.75rem', margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)' } }, "None in this period.")) : h(HsnTable, { rows: rows }))))),
             h("div", { className: "glass-panel mb-4" },
                 h("div", { className: "table-header" },
                     h("h3", null,
@@ -1928,6 +1886,33 @@ export default function GSTReturns() {
                             h("td", { className: "text-muted" }, d.to),
                             h("td", { style: { textAlign: 'right' }, className: "font-bold" }, d.total),
                             h("td", { style: { textAlign: 'right' } }, d.cancelled))))))))),
+            ecoRows.length > 0 && (h("div", { className: "glass-panel mb-4" },
+                h("div", { className: "table-header" },
+                    h("h3", null,
+                        "Table 14: supplies through e-commerce operators",
+                        h(HelpButton, { title: "Table 14", doc: "gst-returns#table-14", size: 16 })),
+                    h("span", { className: "text-muted", style: { fontSize: '0.82rem' } },
+                        ecoRows.length,
+                        " operator",
+                        ecoRows.length !== 1 ? 's' : '')),
+                h("p", { className: "text-muted", style: { padding: '0 1.25rem', margin: '0 0 0.5rem', fontSize: '0.8rem' } }, "Invoices less credit notes, per operator. These sales also stay in B2B and B2C above."),
+                h("div", { className: "table-scroll" },
+                    h("table", { className: "data-table" },
+                        h("thead", null,
+                            h("tr", null,
+                                h("th", null, "Operator GSTIN"),
+                                h("th", { style: { textAlign: 'right' } }, "Net taxable value"),
+                                h("th", { style: { textAlign: 'right' } }, "IGST"),
+                                h("th", { style: { textAlign: 'right' } }, "CGST"),
+                                h("th", { style: { textAlign: 'right' } }, "SGST"),
+                                h("th", { style: { textAlign: 'right' } }, "Cess"))),
+                        h("tbody", null, ecoRows.map(r => (h("tr", { key: r.etin },
+                            h("td", { className: "font-medium" }, r.etin),
+                            h("td", { style: { textAlign: 'right' } }, formatCurrency(r.suppval)),
+                            h("td", { style: { textAlign: 'right' } }, formatCurrency(r.igst)),
+                            h("td", { style: { textAlign: 'right' } }, formatCurrency(r.cgst)),
+                            h("td", { style: { textAlign: 'right' } }, formatCurrency(r.sgst)),
+                            h("td", { style: { textAlign: 'right' } }, formatCurrency(r.cess)))))))))),
             h("div", { className: "glass-panel" },
                 h("div", { className: "table-header" },
                     h("h3", null,
@@ -2008,7 +1993,13 @@ export default function GSTReturns() {
                             h("tr", null,
                                 h("td", { className: "font-medium" }, "(c) Other outward supplies (nil rated, exempted)"),
                                 h("td", { style: { textAlign: 'right' } }, formatCurrency(0)),
-                                h("td", { colSpan: 3, style: { textAlign: 'center', color: 'var(--text-muted)' } }, "N/A")))))),
+                                h("td", { colSpan: 3, style: { textAlign: 'center', color: 'var(--text-muted)' } }, "N/A")),
+                            hasRcm && (h("tr", { className: "rcm-31d" },
+                                h("td", { className: "font-medium" }, "(d) Inward supplies liable to reverse charge (you pay this tax in cash)"),
+                                h("td", { style: { textAlign: 'right' } }, formatCurrency(rcm31d.txval)),
+                                h("td", { style: { textAlign: 'right' } }, formatCurrency(rcm31d.iamt)),
+                                h("td", { style: { textAlign: 'right' } }, formatCurrency(rcm31d.camt)),
+                                h("td", { style: { textAlign: 'right' } }, formatCurrency(rcm31d.samt)))))))),
             (() => {
                 const interStateB2C = {};
                 b2cBills.forEach(bill => {
@@ -2067,17 +2058,49 @@ export default function GSTReturns() {
                                 h("th", { style: { textAlign: 'right' } }, "CGST"),
                                 h("th", { style: { textAlign: 'right' } }, "SGST"))),
                         h("tbody", null,
+                            hasReturns && h(Fragment, null,
+                                h("tr", null,
+                                    h("td", { className: "font-medium" }, "ITC on purchase bills and expenses"),
+                                    h("td", { style: { textAlign: 'right' } }, formatCurrency(itcGross.igst)),
+                                    h("td", { style: { textAlign: 'right' } }, formatCurrency(itcGross.cgst)),
+                                    h("td", { style: { textAlign: 'right' } }, formatCurrency(itcGross.sgst))),
+                                h("tr", null,
+                                    h("td", { className: "font-medium", style: { color: '#dc2626' } }, "Less: purchase returns (debit notes)"),
+                                    h("td", { style: { textAlign: 'right', color: '#dc2626' } },
+                                        "-",
+                                        formatCurrency(returnsItc.igst)),
+                                    h("td", { style: { textAlign: 'right', color: '#dc2626' } },
+                                        "-",
+                                        formatCurrency(returnsItc.cgst)),
+                                    h("td", { style: { textAlign: 'right', color: '#dc2626' } },
+                                        "-",
+                                        formatCurrency(returnsItc.sgst)))),
+                            hasRcm && (h("tr", { className: "rcm-4a3" },
+                                h("td", { className: "font-medium" }, "(A)(3) ITC on reverse charge (the tax in 3.1(d))"),
+                                h("td", { style: { textAlign: 'right' } }, formatCurrency(itcRcm.igst)),
+                                h("td", { style: { textAlign: 'right' } }, formatCurrency(itcRcm.cgst)),
+                                h("td", { style: { textAlign: 'right' } }, formatCurrency(itcRcm.sgst)))),
                             h("tr", null,
-                                h("td", { className: "font-medium" }, "(A) ITC Available \u2014 All other ITC"),
-                                h("td", { style: { textAlign: 'right' } }, formatCurrency(itcFromExpenses.igst)),
-                                h("td", { style: { textAlign: 'right' } }, formatCurrency(itcFromExpenses.cgst)),
-                                h("td", { style: { textAlign: 'right' } }, formatCurrency(itcFromExpenses.sgst))),
+                                h("td", { className: "font-medium" },
+                                    "(A)(5) ITC Available \u2014 All other ITC",
+                                    hasReturns ? ' (net of returns)' : ''),
+                                h("td", { style: { textAlign: 'right' } }, formatCurrency(itcOther.igst)),
+                                h("td", { style: { textAlign: 'right' } }, formatCurrency(itcOther.cgst)),
+                                h("td", { style: { textAlign: 'right' } }, formatCurrency(itcOther.sgst))),
+                            hasReversal && (h("tr", null,
+                                h("td", { className: "font-medium", style: { color: '#dc2626' } }, "(B)(2) ITC reversed \u2014 returns more than this period's ITC (paid with the tax)"),
+                                h("td", { style: { textAlign: 'right', color: '#dc2626' } }, formatCurrency(itcReversed.igst)),
+                                h("td", { style: { textAlign: 'right', color: '#dc2626' } }, formatCurrency(itcReversed.cgst)),
+                                h("td", { style: { textAlign: 'right', color: '#dc2626' } }, formatCurrency(itcReversed.sgst)))),
                             h("tr", { className: "font-bold" },
                                 h("td", null, "Net ITC Available"),
                                 h("td", { style: { textAlign: 'right' } }, formatCurrency(itcFromExpenses.igst)),
                                 h("td", { style: { textAlign: 'right' } }, formatCurrency(itcFromExpenses.cgst)),
                                 h("td", { style: { textAlign: 'right' } }, formatCurrency(itcFromExpenses.sgst)))))),
-                h("p", { className: "field-hint", style: { padding: '0.75rem 1.25rem' } }, "ITC calculated from Expense Tracker and Purchase Bills entries with GST. Verify against GSTR-2B on the GST portal for actual eligible ITC.")),
+                h("p", { className: "field-hint", style: { padding: '0.75rem 1.25rem' } },
+                    "ITC calculated from Expense Tracker and Purchase Bills entries with GST",
+                    hasReturns ? ', less the GST on goods returned to suppliers (debit notes dated in this period; the supplier\'s credit note shows in your GSTR-2B)' : '',
+                    ". Verify against GSTR-2B on the GST portal for actual eligible ITC.")),
             h("div", { className: "glass-panel mb-4" },
                 h("div", { className: "table-header" },
                     h("h3", null,
@@ -2099,6 +2122,12 @@ export default function GSTReturns() {
                                 h("td", { style: { textAlign: 'right' } }, formatCurrency(outputTax.cgst)),
                                 h("td", { style: { textAlign: 'right' } }, formatCurrency(outputTax.sgst)),
                                 h("td", { style: { textAlign: 'right' }, className: "font-bold" }, formatCurrency(outputTax.igst + outputTax.cgst + outputTax.sgst))),
+                            hasReversal && (h("tr", null,
+                                h("td", { className: "font-medium", style: { color: '#dc2626' } }, "Add: ITC reversed, 4(B)(2)"),
+                                h("td", { style: { textAlign: 'right' } }, formatCurrency(itcReversed.igst)),
+                                h("td", { style: { textAlign: 'right' } }, formatCurrency(itcReversed.cgst)),
+                                h("td", { style: { textAlign: 'right' } }, formatCurrency(itcReversed.sgst)),
+                                h("td", { style: { textAlign: 'right' } }, formatCurrency(itcReversed.igst + itcReversed.cgst + itcReversed.sgst)))),
                             h("tr", null,
                                 h("td", { className: "font-medium", style: { color: '#059669' } }, "Less: ITC utilised"),
                                 h("td", { style: { textAlign: 'right', color: '#059669' } },
@@ -2120,6 +2149,12 @@ export default function GSTReturns() {
                                 h("td", { style: { textAlign: 'right' } }, formatCurrency(netTax.cgst)),
                                 h("td", { style: { textAlign: 'right' } }, formatCurrency(netTax.sgst)),
                                 h("td", { style: { textAlign: 'right', color: 'var(--primary)', fontSize: '1.1rem' } }, formatCurrency(netTax.igst + netTax.cgst + netTax.sgst))),
+                            hasRcm && (h("tr", { className: "rcm-cash" },
+                                h("td", null, "Add: reverse charge tax, 3.1(d) (cash only)"),
+                                h("td", { style: { textAlign: 'right' } }, formatCurrency(rcm31d.iamt)),
+                                h("td", { style: { textAlign: 'right' } }, formatCurrency(rcm31d.camt)),
+                                h("td", { style: { textAlign: 'right' } }, formatCurrency(rcm31d.samt)),
+                                h("td", { style: { textAlign: 'right', fontWeight: 700 } }, formatCurrency(rcmTax)))),
                             hasCarry && (h("tr", { style: { color: 'var(--text-muted)' } },
                                 h("td", null, "ITC carried forward"),
                                 h("td", { style: { textAlign: 'right' } }, formatCurrency(itcCarry.igst)),
@@ -2141,6 +2176,12 @@ export default function GSTReturns() {
                 return acc;
             }, { total: 0, matched: 0, amount_mismatch: 0, book_only: 0, twob_only: 0 });
             const visibleRows = gstr2bFilter === 'all' ? reconRows : reconRows.filter(r => r.status === gstr2bFilter);
+            // v1.10.86 - (#175) never saved here: the Purchases screen opens the form to check and Save.
+            const addTwoBAsBill = (r) => {
+                putTwoBDraft(purchaseFromTwoB(r.twoB.sup, r.twoB.inv, { ownGstin: gstr2bData?.gstin || profile.gstin, period: gstr2bData?.rtnprd || gstr2bData?.fp || '' }));
+                onOpenPurchases();
+            };
+            const noteCount = twoBNoteCount(gstr2bData);
             const exportReconCSV = () => {
                 if (reconRows.length === 0) {
                     toast('Nothing to export', 'warning');
@@ -2184,7 +2225,7 @@ export default function GSTReturns() {
                         h("button", { className: "btn btn-secondary", onClick: exportReconCSV, style: { fontSize: '0.78rem', padding: '0.3rem 0.6rem' } },
                             h(Download, { size: 13 }),
                             " Export reconciliation CSV"),
-                        h("button", { className: "btn btn-secondary", onClick: () => { setGstr2bData(null); setGstr2bFilter('all'); }, style: { fontSize: '0.78rem', padding: '0.3rem 0.6rem' } }, "Clear"),
+                        h("button", { className: "btn btn-secondary", onClick: () => { setGstr2bData(null); keepTwoBFile(null); setGstr2bFilter('all'); }, style: { fontSize: '0.78rem', padding: '0.3rem 0.6rem' } }, "Clear"),
                         h("span", { style: { fontSize: '0.75rem', color: 'var(--text-muted)', marginLeft: 'auto' } },
                             "Imported for ",
                             gstr2bData.gstin || '?',
@@ -2206,6 +2247,12 @@ export default function GSTReturns() {
                         ].map(s => (h("button", { key: s.k, onClick: () => setGstr2bFilter(s.k), className: gstr2bFilter === s.k ? 'type-chip type-chip-active' : 'type-chip', style: { display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.1rem', padding: '0.5rem 0.7rem', textAlign: 'left' } },
                             h("span", { style: { fontSize: '0.7rem', color: 'var(--text-muted)' } }, s.label),
                             h("strong", { style: { fontSize: '1.05rem', color: s.color } }, s.count)))))),
+                    noteCount > 0 && (h("p", { className: "twob-notes-skipped", style: { fontSize: '0.78rem', color: 'var(--text-muted)', margin: '0 0 0.6rem' } },
+                        "This 2B file also has ",
+                        noteCount,
+                        " credit / debit ",
+                        noteCount === 1 ? 'note' : 'notes',
+                        " from suppliers. They are not matched here: enter goods you sent back as a return on the purchase bill (Purchases, Return to supplier).")),
                     h("div", { className: "glass-panel", style: { padding: 0, overflowX: 'auto' } },
                         h("table", { className: "data-table", style: { width: '100%', minWidth: '900px' } },
                             h("thead", null,
@@ -2226,7 +2273,8 @@ export default function GSTReturns() {
                                 // v1.10.6 — audit L13: use invoice + GSTIN combo (stable across filters).
                                 h("tr", { key: `${r.gstin || 'x'}-${r.invoice || i}` },
                                     h("td", null,
-                                        h("span", { className: "status-pill", style: { '--pill-color': badge.color } }, badge.label)),
+                                        h("span", { className: "status-pill", style: { '--pill-color': badge.color } }, badge.label),
+                                        r.twoB && onOpenPurchases && (h("button", { type: "button", className: "btn btn-secondary", style: { display: 'block', marginTop: 4, fontSize: '0.72rem', padding: '0.2rem 0.5rem' }, title: "Opens a new purchase bill filled in from this 2B entry. Check it and Save.", onClick: () => addTwoBAsBill(r) }, "Add as purchase bill"))),
                                     h("td", null,
                                         h("div", { style: { fontWeight: 500 } }, r.supplier || '—'),
                                         h("div", { style: { fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'monospace' } }, r.ctin)),

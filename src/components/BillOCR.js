@@ -1,8 +1,12 @@
-import { useState, useRef, useEffect, h, Fragment } from '../vanilla/dom.js';
+import { h, Fragment } from '../vanilla/dom.js';
+import { useState, useRef, useEffect } from '../vanilla/dom.js';
 import { X, Upload, Loader, Wand2, Package, Sparkles, Trash2, Plus } from '../vanilla/icons.js';
 import { toast } from './Toast.js';
 import HelpButton from './HelpButton.js';
-// OCR utility is loaded on demand from the pinned browser ESM CDN import map.
+// v1.10.29 — Pull the installed tesseract.js version straight from its
+// package.json so that when we `npm update tesseract.js`, the CDN paths
+// track automatically. Vite handles JSON imports natively — no bundle
+// bloat beyond the version string.
 // v1.10.35 — Match extracted product names against the saved catalog
 // so users don't retype HSN + GST for products they already have.
 import { getAllProducts } from '../store.js';
@@ -27,8 +31,9 @@ import { getAllProducts } from '../store.js';
  * items themselves.
  *
  * Tesseract.js runs entirely client-side (WebAssembly). No network
- * calls to a paid OCR provider. The worker and English language data are
- * fetched from public CDNs on first use; later use may benefit from browser cache.
+ * calls to a paid OCR provider, so the offline-first + free positioning
+ * of the app is preserved. First run downloads ~2MB of language data
+ * to browser cache; subsequent runs are instant.
  */
 // GSTIN: 2-digit state code + 5 letters + 4 digits + 1 letter + entity
 // code (digit/letter) + 'Z' + check digit/letter. Real length: 15.
@@ -356,20 +361,49 @@ export default function BillOCR({ onClose, onExtracted }) {
             return;
         setStatus('ocr');
         setProgress(0);
-        // Tesseract runs in the browser. The worker, WASM core and language data
-        // are loaded from pinned public CDNs in this static no-build edition.
-        // OCR requires an internet connection the first time it is used.
+        // v1.10.29 — reported: "ocr is not working". Common failure modes with
+        // tesseract.js v7 in a Vite bundle:
+        //   (a) worker.js path resolution fails after production build
+        //   (b) eng.traineddata CDN fetch blocked by corporate proxy / offline
+        //   (c) SharedArrayBuffer unavailable without cross-origin-isolated headers
+        // Now: pin corePath / workerPath / langPath to jsdelivr CDN explicitly
+        // (tesseract.js's built-in path resolution is fragile in bundlers), catch
+        // the actual error message, and surface it to the user so they know
+        // whether to retry, check network, or report a bug.
         let worker = null;
         try {
             const Tesseract = await import('tesseract.js');
-            // Pin the worker and core to the same Tesseract 7 release so their
-            // worker protocol and WASM ABI remain compatible.
+            // v1.10.29 — Version pulled from tesseract's own package.json so CDN
+            // paths stay in sync on future npm updates.
+            // v1.10.31 — CORE VERSION FIX (root cause of "OCR is not working"
+            // through v1.10.30). tesseract.js v7 depends on tesseract.js-core@^7,
+            // not @6. Hardcoded @6.0.0 in the CDN URL 404'd (or loaded an ABI-
+            // incompatible core), causing the worker to fail during importScripts
+            // before recognition could start. Now derived from the SAME
+            // package.json so it tracks tesseract's version automatically. In the
+            // audit sanity check: node_modules/tesseract.js/package.json says
+            // "tesseract.js-core": "^7.0.0" — matches what's installed and what
+            // tesseract's own default corePath would resolve.
+            // v1.10.33 — All tesseract assets are now bundled with the app
+            // (see scripts/bundle-tesseract-assets.mjs). Prior CDN paths
+            // caused three failure modes: (a) CSP blocked blob workers even
+            // after fix, (b) cnd.jsdelivr resolved @${version} to a 404 when
+            // tesseract.js-core's version drifted from tesseract.js's, (c) a
+            // ~10MB traineddata download stalled at "0%" behind flaky mobile
+            // networks. Local paths eliminate all three. Zero network at run.
+            //
+            // Assets live under /tesseract/ (served from public/tesseract/):
+            //   /tesseract/worker.min.js
+            //   /tesseract/core/tesseract-core-*.wasm(.js)
+            //   /tesseract/lang/eng.traineddata
             worker = await Tesseract.createWorker('eng', 1, {
-                workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/worker.min.js',
-                corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@7.0.0',
-                langPath: 'https://tessdata.projectnaptha.com/4.0.0',
-                // Language data is distributed as gzip by the public tessdata CDN.
-                gzip: true,
+                workerPath: '/tesseract/worker.min.js',
+                corePath: '/tesseract/core',
+                langPath: '/tesseract/lang',
+                // v1.10.33 — traineddata is served as raw .traineddata (not .gz);
+                // tell tesseract not to expect gzip so it doesn't try to gunzip
+                // an already-plain file and fail with "invalid magic number".
+                gzip: false,
                 logger: (m) => {
                     if (typeof m?.progress === 'number') {
                         setProgress(Math.round(m.progress * 100));
@@ -472,7 +506,7 @@ export default function BillOCR({ onClose, onExtracted }) {
         }));
     };
     return (h("div", { className: "modal-overlay", onClick: onClose },
-        h("div", { className: "modal-content", onClick: e => e.stopPropagation(), style: { maxWidth: 'min(1080px, 96vw)', maxHeight: '92vh', overflow: 'auto' } },
+        h("div", { className: "modal-content", onClick: e => e.stopPropagation(), style: { maxWidth: 'min(1080px, calc(96vw / var(--ui-zoom, 1)))', maxHeight: 'calc(92vh / var(--ui-zoom, 1))', overflow: 'auto' } },
             h("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' } },
                 h("h3", { className: "section-title", style: { margin: 0, display: 'flex', alignItems: 'center', gap: 8 } },
                     h(Wand2, { size: 18 }),
@@ -503,7 +537,7 @@ export default function BillOCR({ onClose, onExtracted }) {
                         "Reading image\u2026 ",
                         progress,
                         "%"))),
-                parsed && (h("div", { style: { background: 'var(--bg-secondary)', padding: '0.85rem', borderRadius: 6, maxHeight: 'calc(88vh - 100px)', overflowY: 'auto' } },
+                parsed && (h("div", { style: { background: 'var(--bg-secondary)', padding: '0.85rem', borderRadius: 6, maxHeight: 'calc(88vh / var(--ui-zoom, 1) - 100px)', overflowY: 'auto' } },
                     h("h4", { style: { margin: '0 0 0.5rem', fontSize: '0.9rem' } },
                         "Extracted fields ",
                         h(HelpButton, { title: "Checking what was read", doc: "purchases#ocr-review", size: 16 })),

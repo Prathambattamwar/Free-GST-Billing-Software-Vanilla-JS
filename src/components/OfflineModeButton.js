@@ -1,18 +1,19 @@
+import { h, Fragment } from '../vanilla/dom.js';
 // v1.10.83 - the Wi-Fi button at the top right (asked for: "on top a button
 // to make our software offline, and it shows what will happen when offline").
 // Same switch as Settings → Privacy & internet; what it stops must match
 // src/utils/offlineMode.js and docs-site/pages/security.mjs#offline-mode.
-import { useState, h, Fragment } from '../vanilla/dom.js';
+import { useState } from '../vanilla/dom.js';
 import { Wifi, WifiOff, Check } from '../vanilla/icons.js';
 import HelpButton from './HelpButton.js';
 import { useOfflineMode } from '../utils/offlineMode.js';
 const STOPS = [
-    'No automatic check for updates. Use Check for Updates in Settings when you want one.',
-    'Business data remains available locally. Automatic internet requests such as update checks are paused.',
+    'The app does not automatically check for new releases or sync business records to a cloud account.',
+    'Your invoices and saved PDFs remain in this browser profile.',
 ];
 const KEEPS = [
-    'You can create and save records locally, even when you are offline.',
-    'Links you click (help pages, WhatsApp, the GST portal) still open in your browser.',
+    'Invoices, PDFs, printing, payments, stock, reports, GST returns and local backups remain available.',
+    'Your browser may still need internet to load uncached app libraries or open external links.',
 ];
 export default function OfflineModeButton({ className, onOpenSettings }) {
     const [on, setOn] = useOfflineMode();
@@ -27,8 +28,8 @@ export default function OfflineModeButton({ className, onOpenSettings }) {
                     " Offline mode",
                     h(HelpButton, { title: "Offline mode", doc: "security#offline-mode", size: 16 })),
                 h("p", { style: { margin: '0 0 1rem', fontSize: '0.9rem', color: 'var(--text-secondary)' } }, on
-                    ? 'On. Automatic internet requests such as update checks are paused. Local business data continues to work.'
-                    : 'Off. Optional online resources can load automatically. Your business records remain stored locally either way.'),
+                    ? 'On. The app keeps business data in this browser and does not perform automatic release checks or cloud sync.'
+                    : 'Off. Business data is still stored only in this browser. The switch controls optional online actions; first-time or uncached libraries may still require internet.'),
                 h("div", { style: { fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.3rem' } }, on ? 'While it is on' : 'When it is on'),
                 h("ul", { style: { margin: '0 0 0.8rem', paddingLeft: '1.1rem', fontSize: '0.85rem', lineHeight: 1.55 } }, STOPS.map((t) => h("li", { key: t }, t))),
                 h("div", { style: { fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.3rem' } }, "What stays the same"),

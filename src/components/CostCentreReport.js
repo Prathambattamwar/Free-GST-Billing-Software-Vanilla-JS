@@ -1,9 +1,10 @@
+import { h, Fragment } from '../vanilla/dom.js';
 // v1.10.83 (#112) - Reports > By cost centre: sales, purchases, expenses and
 // profit for each branch, site or project in the period chosen above. The
 // maths is costCentreReport() in utils/costCentres.js (tested in
 // scripts/costcentre-test.mjs).
-import { useState, useEffect, h, Fragment } from '../vanilla/dom.js';
-import { getAllPurchases } from '../store.js';
+import { useState, useEffect } from '../vanilla/dom.js';
+import { getAllPurchases, getAllDebitNotes } from '../store.js';
 import { formatCurrency, belongsToProfile } from '../utils.js';
 import { costCentreReport, centreLabel } from '../utils/costCentres.js';
 import { billCurrency } from '../utils/partyOutstanding.js';
@@ -17,14 +18,20 @@ const HEADERS = ['Cost centre', 'Sales (taxable)', 'GST on sales', 'Sales total'
 export default function CostCentreReport({ bills, expenses, profile, from, to, currency, subtitle, periodLabel }) {
     const { centres } = useCostCentres(profile);
     const [purchases, setPurchases] = useState([]);
+    const [debitNotes, setDebitNotes] = useState([]);
     useEffect(() => {
         getAllPurchases()
             .then((rows) => setPurchases((rows || []).filter((p) => belongsToProfile(p, profile))))
             .catch(() => toast('Failed to load purchases', 'error'));
+        // v1.10.85 (#168) - purchase returns come off the purchases.
+        getAllDebitNotes()
+            .then((rows) => setDebitNotes((rows || []).filter((p) => belongsToProfile(p, profile))))
+            .catch(() => setDebitNotes([]));
     }, [profile]);
     const { rows, total } = costCentreReport({
         bills: bills.filter((b) => billCurrency(b) === currency),
         purchases: currency === 'INR' ? purchases : [],
+        debitNotes: currency === 'INR' ? debitNotes : [],
         expenses: expenses.filter((e) => (e.currency || 'INR') === currency),
         centres, from, to,
     });

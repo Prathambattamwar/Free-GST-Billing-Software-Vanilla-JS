@@ -1,21 +1,23 @@
+import { h, Fragment } from '../vanilla/dom.js';
 // v1.10.83 (#112) - Settings > Cost centres: add, rename and archive the
 // branches, sites or projects of the business shown. There is no delete: old
 // documents and reports still point at a centre, so it is archived instead
 // (it stops showing in the pickers, and stays in lists and reports).
-import { useState, useEffect, h, Fragment } from '../vanilla/dom.js';
-import { Plus, Save, Edit3, Archive, RotateCcw, X } from '../vanilla/icons.js';
+import { useState, useEffect } from '../vanilla/dom.js';
+import { Plus, Edit3, Archive, RotateCcw } from '../vanilla/icons.js';
 import { getCostCentres, saveCostCentres } from '../store.js';
 import { businessKeyOf } from '../utils.js';
 import { centresForBusiness, centreLabel } from '../utils/costCentres.js';
 import { toast } from './Toast.js';
 import HelpButton from './HelpButton.js';
+import EditDialog from './EditDialog.js';
 const MAX_NAME = 60;
 const newId = () => `cc_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 export default function CostCentreSettings({ profile }) {
     const [all, setAll] = useState([]);
     const [name, setName] = useState('');
     const [code, setCode] = useState('');
-    const [editingId, setEditingId] = useState(null);
+    const [editing, setEditing] = useState(null); // v1.10.86 - { id, name, code } in the Edit window
     const [busy, setBusy] = useState(false);
     useEffect(() => { getCostCentres().then(setAll).catch(() => toast('Could not load cost centres', 'error')); }, []);
     const mine = centresForBusiness(all, profile);
@@ -37,28 +39,41 @@ export default function CostCentreSettings({ profile }) {
             setBusy(false);
         }
     };
-    const reset = () => { setName(''); setCode(''); setEditingId(null); };
-    const submit = async (e) => {
-        e.preventDefault();
-        const n = name.trim().replace(/\s+/g, ' ');
-        const c = code.trim();
+    // The tidied name, or null (and a message) when it cannot be used.
+    const checkName = (raw, id) => {
+        const n = raw.trim().replace(/\s+/g, ' ');
         if (!n) {
             toast('Enter a name for the cost centre', 'warning');
-            return;
+            return null;
         }
         if (n.length > MAX_NAME) {
             toast(`Keep the name under ${MAX_NAME} letters`, 'warning');
-            return;
+            return null;
         }
-        if (mine.some((x) => x.id !== editingId && x.name.toLowerCase() === n.toLowerCase())) {
+        if (mine.some((x) => x.id !== id && x.name.toLowerCase() === n.toLowerCase())) {
             toast('A cost centre with this name already exists', 'warning');
-            return;
+            return null;
         }
-        const ok = editingId
-            ? await update((list) => list.map((x) => (x.id === editingId ? { ...x, name: n, code: c } : x)), 'Cost centre saved')
-            : await update((list) => [...list, { id: newId(), name: n, code: c, archived: false, business: businessKeyOf(profile) }], 'Cost centre added');
-        if (ok)
-            reset();
+        return n;
+    };
+    const submit = async (e) => {
+        e.preventDefault();
+        const n = checkName(name, null);
+        if (!n)
+            return;
+        const ok = await update((list) => [...list, { id: newId(), name: n, code: code.trim(), archived: false, business: businessKeyOf(profile) }], 'Cost centre added');
+        if (ok) {
+            setName('');
+            setCode('');
+        }
+    };
+    const saveEdit = async () => {
+        const n = checkName(editing.name, editing.id);
+        if (!n)
+            return;
+        const c = editing.code.trim();
+        if (await update((list) => list.map((x) => (x.id === editing.id ? { ...x, name: n, code: c } : x)), 'Cost centre saved'))
+            setEditing(null);
     };
     const setArchived = (id, archived) => update((list) => list.map((x) => (x.id === id ? { ...x, archived } : x)), archived ? 'Archived. Old documents keep it.' : 'Cost centre is active again');
     return (h("div", { className: "glass-panel p-6 mb-6" },
@@ -78,14 +93,17 @@ export default function CostCentreSettings({ profile }) {
             h("div", { className: "form-group", style: { margin: 0, flex: '1 1 120px' } },
                 h("label", { className: "form-label", htmlFor: "cc-code" }, "Code (optional)"),
                 h("input", { id: "cc-code", className: "form-input", value: code, maxLength: 20, onChange: (e) => setCode(e.target.value), placeholder: "e.g. LDH" })),
-            h("button", { type: "submit", className: "btn btn-primary", disabled: busy }, editingId ? h(Fragment, null,
-                h(Save, { size: 16 }),
-                " Save cost centre") : h(Fragment, null,
+            h("button", { type: "submit", className: "btn btn-primary", disabled: busy },
                 h(Plus, { size: 16 }),
                 " Add cost centre")),
-            editingId && h("button", { type: "button", className: "btn btn-secondary", onClick: reset },
-                h(X, { size: 16 }),
-                " Cancel")),
+        editing && (h(EditDialog, { title: "Edit cost centre", help: "reports#cost-centres", saving: busy, onSave: saveEdit, onClose: () => setEditing(null) },
+            h("div", { className: "ed-grid" },
+                h("div", { className: "form-group ed-wide" },
+                    h("label", { className: "form-label", htmlFor: "cc-edit-name" }, "Name"),
+                    h("input", { id: "cc-edit-name", className: "form-input", value: editing.name, maxLength: MAX_NAME, onChange: (e) => setEditing((x) => ({ ...x, name: e.target.value })), placeholder: "e.g. Site A - Ludhiana" })),
+                h("div", { className: "form-group" },
+                    h("label", { className: "form-label", htmlFor: "cc-edit-code" }, "Code (optional)"),
+                    h("input", { id: "cc-edit-code", className: "form-input", value: editing.code, maxLength: 20, onChange: (e) => setEditing((x) => ({ ...x, code: e.target.value })), placeholder: "e.g. LDH" }))))),
         mine.length === 0 ? (h("p", { style: { fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0 } }, "No cost centres yet.")) : (h("div", { className: "table-scroll" },
             h("table", { className: "data-table", style: { minWidth: 0 } },
                 h("thead", null,
@@ -98,7 +116,7 @@ export default function CostCentreSettings({ profile }) {
                     h("td", null, c.archived ? 'Archived' : 'Active'),
                     h("td", null,
                         h("div", { className: "table-actions" },
-                            h("button", { type: "button", className: "icon-btn icon-btn-blue", disabled: busy, title: "Edit", "aria-label": `Edit ${c.name}`, onClick: () => { setEditingId(c.id); setName(c.name); setCode(c.code || ''); } },
+                            h("button", { type: "button", className: "icon-btn icon-btn-blue", disabled: busy, title: "Edit", "aria-label": `Edit ${c.name}`, onClick: () => setEditing({ id: c.id, name: c.name, code: c.code || '' }) },
                                 h(Edit3, { size: 15 })),
                             c.archived ? (h("button", { type: "button", className: "icon-btn", disabled: busy, title: "Restore", "aria-label": `Restore ${c.name}`, onClick: () => setArchived(c.id, false) },
                                 h(RotateCcw, { size: 15 }))) : (h("button", { type: "button", className: "icon-btn icon-btn-red", disabled: busy, title: "Archive", "aria-label": `Archive ${c.name}`, onClick: () => setArchived(c.id, true) },

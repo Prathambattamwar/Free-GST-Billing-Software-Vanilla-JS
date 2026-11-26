@@ -15,10 +15,11 @@
  * a payment to it). They are paired the way the Dashboard reconciles them, and
  * a pair is one line. See scripts/cashbook-test.mjs.
  *
- * Pure: no UI runtime, no storage, so the server validates with the same rules.
+ * Pure: no React, no storage, so the server validates with the same rules.
  * ponytail: rupees only; a foreign-currency invoice or receipt is left out.
  */
 import { belongsToProfile, getFinancialYearStart, toLocalIsoDate } from '../utils.js';
+import { expensePaid } from './expensePayment.js';
 
 export const CASH_CATEGORIES = ['Opening balance', 'Sales', 'Advance', 'Salary', 'Tea & snacks', 'Transport', 'Owner drawing', 'Deposit to bank', 'Other'];
 
@@ -67,7 +68,7 @@ export function cleanCashEntry(e) {
   };
 }
 
-const isCash = (mode) => String(mode || '').trim().toLowerCase() === 'cash';
+export const isCash = (mode) => String(mode || '').trim().toLowerCase() === 'cash';
 const inRupees = (currency) => !currency || currency === 'INR';
 const billCurrency = (b) => b?.currency || b?.data?.invoiceOptions?.currency || 'INR';
 // As the Dashboard compares them: 'Bank Transfer' on a receipt is 'bank-transfer' on a payment.
@@ -125,11 +126,13 @@ export function linkedCashLines({ bills = [], receipts = [], expenses = [], purc
     });
   }
   for (const e of expenses) {
-    if (!isCash(e.paymentMode) || !inRupees(e.currency) || !(Number(e.amount) > 0)) continue;
+    // v1.10.85 (#165) - only what was paid: an Unpaid expense took no cash out.
+    const paid = expensePaid(e);
+    if (!isCash(e.paymentMode) || !inRupees(e.currency) || !(paid > 0)) continue;
     lines.push({
       key: `expense:${e.id}`,
       source: 'expense', view: 'expenses', label: 'Expense',
-      type: 'out', date: e.date || '', amount: r2(e.amount),
+      type: 'out', date: e.date || '', amount: r2(paid),
       name: e.vendorName || e.description || '',
       note: [e.vendorName ? e.description : '', e.note].filter(Boolean).join(' · '),
       category: e.category || '', at: '',

@@ -1,11 +1,12 @@
+import { h, Fragment } from '../vanilla/dom.js';
 // v1.10.83 (#123) - record, change and delete payments to the supplier on a
 // purchase bill, with its payment history. Laid out like Record Payment on the
 // Dashboard. The maths is in utils/purchasePayments.js (unit-tested).
-import { useState, h, Fragment } from '../vanilla/dom.js';
+import { useState } from '../vanilla/dom.js';
 import { Edit3, Trash2 } from '../vanilla/icons.js';
 import { savePurchase } from '../store.js';
 import { formatCurrency, localToday } from '../utils.js';
-import { PURCHASE_PAYMENT_MODES, PURCHASE_STATUS_LABEL, OVERPAY_SLACK, purchasePaymentModeName, purchaseTotal, purchaseOwed, purchasePaid, purchasePaymentDue, purchaseStatus, hasPurchasePayments, validatePurchasePayment, withPurchasePayments, newPurchasePaymentId, } from '../utils/purchasePayments.js';
+import { PURCHASE_PAYMENT_MODES, PURCHASE_STATUS_LABEL, OVERPAY_SLACK, purchasePaymentModeName, purchaseTotal, purchaseOwed, purchasePaid, purchaseRcmTax, purchasePaymentDue, purchaseStatus, hasPurchasePayments, validatePurchasePayment, withPurchasePayments, newPurchasePaymentId, } from '../utils/purchasePayments.js';
 import HelpButton from './HelpButton.js';
 import { toast } from './Toast.js';
 import { confirmAction } from './ConfirmModal.js';
@@ -91,7 +92,8 @@ export default function PurchasePaymentModal({ purchase, onClose, onChanged }) {
         setForm(blankFor(updated));
     };
     const balance = r2(owed - paid);
-    const tds = r2(total - owed);
+    const rcm = purchaseRcmTax(bill); // v1.10.86 - reverse charge: GST you pay, not the supplier
+    const tds = r2(total - rcm - owed);
     return (h("div", { className: "modal-overlay", onClick: onClose },
         h("div", { className: "modal-content", onClick: (e) => e.stopPropagation(), style: { maxWidth: 620 } },
             h("h3", { className: "section-title" },
@@ -106,6 +108,9 @@ export default function PurchasePaymentModal({ purchase, onClose, onChanged }) {
                 h("br", null),
                 "Total: ",
                 h("strong", null, formatCurrency(total)),
+                rcm > 0.005 && h(Fragment, null,
+                    " | Less GST you pay (reverse charge): ",
+                    h("strong", null, formatCurrency(rcm))),
                 tds > 0.005 && h(Fragment, null,
                     " | Less TDS: ",
                     h("strong", null, formatCurrency(tds))),

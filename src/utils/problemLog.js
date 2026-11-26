@@ -1,3 +1,4 @@
+/* global __APP_VERSION__ */
 // v1.10.83 - the Problem log. Every storage access is wrapped: this code runs
 // while something else is already failing, and must never add a second error
 // (private windows and "block site data" make localStorage throw).
@@ -5,9 +6,9 @@ import { makeEntry, pushEntry, buildIssueUrl } from './errorReport.js';
 
 const KEY = 'fgsb_problem_log';
 const EVENT = 'fgsb-problem-logged';
-// Static app version is embedded by the root HTML entry so problem reports
-// still identify the exact release without contacting an application server.
-export const APP_VERSION = window.FGSB_APP_VERSION || '1.10.83';
+// Injected by vite.config.js from package.json, so a report names the version
+// of the bundle that actually failed, even when the server cannot be reached.
+export const APP_VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '1.10.86';
 
 // Kept in memory too, so the log still works when storage is blocked.
 let memory = [];

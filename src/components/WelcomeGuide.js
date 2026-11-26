@@ -1,7 +1,10 @@
-import { useState, h, Fragment } from '../vanilla/dom.js';
+import { h, Fragment } from '../vanilla/dom.js';
+import { useState } from '../vanilla/dom.js';
 import { Building2, FileText, BarChart3, Shield, ChevronRight, ChevronLeft, Check, ArrowRight, Image, PenTool } from '../vanilla/icons.js';
-import { saveProfile, setRegionMode } from '../store.js';
-import { getStatesForCountry, getCountryConfig, detectCountryFromBrowser, createEmptyAccount } from '../utils.js';
+import { saveProfile, setRegionMode, getEnabledModules, setEnabledModules, setBusinessType, patchInvoiceDefaults, applyTypeTerms } from '../store.js';
+import { getStatesForCountry, getCountryConfig, detectCountryFromBrowser, createEmptyAccount, gstinFill } from '../utils.js';
+import { BUSINESS_TYPES, applyBusinessType, wizardResult } from '../utils/businessTypes.js';
+import { getPrintSettings, savePrintSettings } from '../utils/printSettings.js';
 import { toast } from './Toast.js';
 import HelpButton from './HelpButton.js';
 import SafePrivateNote from './SafePrivateNote.js';
@@ -27,11 +30,29 @@ export default function WelcomeGuide({ onComplete }) {
     // a Windows set to en-US started people on "Outside India" with a United
     // States company profile. The other two options are one click away.
     const [region, setRegion] = useState('india');
+    // v1.10.86 - the business type is asked here (it was a second wizard after
+    // this one): it sets the features, the print style and the starting terms.
+    const [biz, setBiz] = useState('');
     const [saving, setSaving] = useState(false);
     const cc = getCountryConfig(profile.country);
     const stateOptions = getStatesForCountry(profile.country);
     const handleChange = (e) => {
-        setProfile({ ...profile, [e.target.name]: e.target.value });
+        const { name, value } = e.target;
+        // v1.10.86 - a full GSTIN fills in the state and PAN (empty ones only).
+        setProfile(p => ({ ...p, [name]: value, ...(name === 'gstin' && p.country === 'India' ? gstinFill(p, value) : {}) }));
+    };
+    // v1.10.86 - the business type, as the old second wizard applied it, plus
+    // the starting terms. Also marks the first-run setup done.
+    const applySetup = () => {
+        if (biz) {
+            setEnabledModules(applyBusinessType(biz, getEnabledModules()));
+            setBusinessType(biz);
+            applyTypeTerms(biz).catch(() => { });
+        }
+        const { printSettings, invoiceDefaults } = wizardResult(getPrintSettings(), { biz });
+        savePrintSettings(printSettings);
+        if (biz)
+            patchInvoiceDefaults(invoiceDefaults);
     };
     const handleFileUpload = (field) => {
         const input = document.createElement('input');
@@ -74,6 +95,7 @@ export default function WelcomeGuide({ onComplete }) {
                     }],
             } : profile;
             await saveProfile(profileToSave);
+            applySetup();
             localStorage.setItem('freegstbill_onboarded', 'true');
             toast('Setup complete! Start creating invoices.', 'success');
             onComplete(profileToSave);
@@ -84,6 +106,7 @@ export default function WelcomeGuide({ onComplete }) {
         setSaving(false);
     };
     const handleSkip = () => {
+        applySetup();
         localStorage.setItem('freegstbill_onboarded', 'true');
         onComplete(null);
     };
@@ -92,34 +115,32 @@ export default function WelcomeGuide({ onComplete }) {
             return profile.businessName.trim().length > 0;
         return true;
     };
-    return (h("div", { style: { minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem', background: 'var(--bg-primary)' } },
-        h("div", { style: { maxWidth: '640px', width: '100%' } },
-            h("div", { style: { display: 'flex', gap: '0.5rem', marginBottom: '2rem', justifyContent: 'center' } }, STEPS.map((s, i) => (h("div", { key: s.id, style: {
+    return (h("div", { style: { minHeight: 'calc(100vh / var(--ui-zoom, 1))', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 'clamp(0.75rem, 3vw, 2rem)', background: 'var(--bg-primary)' } },
+        h("div", { style: { maxWidth: '680px', width: '100%' } },
+            h("div", { style: { display: 'flex', gap: '0.5rem', marginBottom: '1.25rem', justifyContent: 'center' } }, STEPS.map((s, i) => (h("div", { key: s.id, style: {
                     width: i === step ? '3rem' : '2rem', height: '4px', borderRadius: '2px',
                     background: i <= step ? 'var(--primary)' : 'var(--border-color)',
                     transition: 'all 0.3s ease',
                 } })))),
-            h("div", { className: "glass-panel", style: { padding: '2.5rem' } },
-                step === 0 && (h("div", { style: { textAlign: 'center' } },
-                    h("div", { style: { width: '64px', height: '64px', borderRadius: '16px', background: 'var(--primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem' } },
-                        h(FileText, { size: 32, color: "white" })),
-                    h("h1", { style: { fontSize: '1.75rem', fontWeight: 700, marginBottom: '0.75rem', color: 'var(--text-primary)' } },
-                        "Welcome to GST Billing Software ",
-                        h(HelpButton, { title: "Welcome", doc: "first-run#welcome", size: 16 })),
-                    h("p", { style: { color: 'var(--text-secondary)', marginBottom: '2rem', lineHeight: 1.6 } }, "Open-source GST billing software. Your business records stay in this browser on this device. No Google sign-in is required."),
-                    h("div", { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '2rem', textAlign: 'left' } }, [
-                        { title: 'Create Invoices', desc: 'Tax Invoice, Proforma, Credit Note, Bill of Supply, Delivery Challan' },
-                        { title: 'Auto GST Calculation', desc: 'CGST/SGST for same state, IGST for different state — automatic' },
-                        { title: 'GST Filing Ready', desc: 'GSTR-1, GSTR-3B, HSN reports auto-generated. Download CSVs for portal.' },
-                        { title: 'Private local storage', desc: 'Business records are saved in this browser profile using IndexedDB. No Google account or shared app database.' },
-                    ].map((item, i) => (h("div", { key: i, style: { padding: '1rem', borderRadius: '8px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' } },
-                        h("div", { style: { fontWeight: 600, fontSize: '0.85rem', marginBottom: '0.25rem', color: 'var(--text-primary)' } }, item.title),
-                        h("div", { style: { fontSize: '0.75rem', color: 'var(--text-muted)', lineHeight: 1.4 } }, item.desc))))),
-                    h(SafePrivateNote, { style: { marginBottom: '1.5rem' } }),
-                    h("p", { style: { fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1.5rem' } }, "Let's set up your business profile so your invoices look professional. Takes about 2 minutes."),
-                    h("div", { style: { marginTop: '1rem', padding: '1rem', borderRadius: '10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', textAlign: 'left' } },
+            h("div", { className: "glass-panel", style: { padding: 'clamp(1.1rem, 4vw, 2.25rem)', paddingBottom: 0 } },
+                step === 0 && (h("div", null,
+                    h("div", { style: { display: 'flex', alignItems: 'center', gap: '0.85rem', marginBottom: '0.6rem' } },
+                        h("div", { style: { width: '48px', height: '48px', borderRadius: '12px', background: 'var(--primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 } },
+                            h(FileText, { size: 26, color: "white" })),
+                        h("h1", { style: { fontSize: 'clamp(1.25rem, 4vw, 1.6rem)', fontWeight: 700, margin: 0, color: 'var(--text-primary)' } },
+                            "Welcome to GST Billing Software ",
+                            h(HelpButton, { title: "Welcome", doc: "first-run#welcome", size: 16 }))),
+                    h("p", { style: { color: 'var(--text-secondary)', margin: '0 0 1rem', lineHeight: 1.5, fontSize: '0.9rem' } }, "GST billing that runs in your browser. Two minutes of setup and you can make your first bill."),
+                    h("p", { style: { fontWeight: 600, fontSize: '0.95rem', margin: '0 0 0.5rem', color: 'var(--text-primary)' } },
+                        "What kind of business do you run? ",
+                        h(HelpButton, { title: "Business type", doc: "first-run#business-type", size: 16 })),
+                    h("div", { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '0.45rem' } }, BUSINESS_TYPES.map(t => (h("button", { key: t.id, type: "button", onClick: () => setBiz(biz === t.id ? '' : t.id), "aria-pressed": biz === t.id, className: `type-chip ${biz === t.id ? 'type-chip-active' : ''}`, style: { display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '0.5rem 0.7rem', gap: '0.1rem', textAlign: 'left' } },
+                        h("span", { style: { fontWeight: 600 } }, t.label),
+                        h("span", { style: { fontSize: '0.68rem', color: biz === t.id ? 'inherit' : 'var(--text-muted)', fontWeight: 400, lineHeight: 1.3 } }, t.hint))))),
+                    h("p", { style: { fontSize: '0.7rem', color: 'var(--text-muted)', margin: '0.45rem 0 0' } }, "It picks the screens you see, the print style and the terms printed on your bills. Nothing is ever deleted; change it any time in Settings \u2192 Company \u2192 Business type."),
+                    h("div", { style: { marginTop: '0.9rem', padding: '0.75rem 0.9rem', borderRadius: '10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', textAlign: 'left' } },
                         h("p", { style: { fontWeight: 600, fontSize: '0.9rem', marginBottom: '0.6rem', color: 'var(--text-primary)' } }, "Where will you be invoicing from?"),
-                        h("div", { style: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem' } }, [
+                        h("div", { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: '0.5rem' } }, [
                             { id: 'india', label: '🇮🇳 India', desc: 'GST, GSTR-1/3B, UPI' },
                             { id: 'international', label: '🌍 Outside India', desc: 'VAT/SST/MwSt' },
                             { id: 'both', label: '🌐 Both', desc: 'India + foreign clients' },
@@ -132,7 +153,8 @@ export default function WelcomeGuide({ onComplete }) {
                             }, className: `type-chip ${region === opt.id ? 'type-chip-active' : ''}`, style: { display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '0.55rem 0.7rem', gap: '0.15rem' } },
                             h("span", { style: { fontWeight: 600 } }, opt.label),
                             h("span", { style: { fontSize: '0.68rem', color: region === opt.id ? 'inherit' : 'var(--text-muted)', fontWeight: 400 } }, opt.desc))))),
-                        h("p", { style: { fontSize: '0.7rem', color: 'var(--text-muted)', margin: '0.6rem 0 0' } }, "You can change this any time in Settings \u2192 Region Preference.")))),
+                        h("p", { style: { fontSize: '0.7rem', color: 'var(--text-muted)', margin: '0.6rem 0 0' } }, "You can change this any time in Settings \u2192 Print & PDF \u2192 Region.")),
+                    h(SafePrivateNote, { style: { marginTop: '0.9rem' } }))),
                 step === 1 && (h("div", null,
                     h("h2", { style: { fontSize: '1.25rem', fontWeight: 700, marginBottom: '0.5rem', color: 'var(--text-primary)' } },
                         "Business Details ",
@@ -147,17 +169,19 @@ export default function WelcomeGuide({ onComplete }) {
                             h("textarea", { name: "address", className: "form-input", rows: 2, value: profile.address, onChange: handleChange, placeholder: "e.g. 42, MG Road, Sector 15, Gurugram 122001" })),
                         h("div", { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' } },
                             h("div", { className: "form-group" },
+                                h("label", { className: "form-label" }, cc.taxIdLabel),
+                                h("input", { type: "text", name: "gstin", className: "form-input", value: profile.gstin, onChange: handleChange, placeholder: cc.taxIdPlaceholder, maxLength: 20, style: { textTransform: 'uppercase' } }),
+                                h("span", { className: "field-hint" },
+                                    "Leave blank if not registered for tax.",
+                                    profile.country === 'India' && ' Typing your GSTIN fills in the state and PAN.')),
+                            h("div", { className: "form-group" },
                                 h("label", { className: "form-label" }, cc.stateLabel),
                                 stateOptions.length > 0 ? (h("select", { name: "state", className: "form-input", value: profile.state, onChange: handleChange },
                                     h("option", { value: "" },
                                         "Select ",
                                         cc.stateLabel.toLowerCase()),
                                     stateOptions.map(s => h("option", { key: s, value: s }, s)))) : (h("input", { type: "text", name: "state", className: "form-input", value: profile.state, onChange: handleChange, placeholder: cc.stateLabel })),
-                                profile.country === 'India' && h("span", { className: "field-hint" }, "Needed for auto CGST/SGST vs IGST")),
-                            h("div", { className: "form-group" },
-                                h("label", { className: "form-label" }, cc.taxIdLabel),
-                                h("input", { type: "text", name: "gstin", className: "form-input", value: profile.gstin, onChange: handleChange, placeholder: cc.taxIdPlaceholder, maxLength: 20, style: { textTransform: 'uppercase' } }),
-                                h("span", { className: "field-hint" }, "Leave blank if not registered for tax"))),
+                                profile.country === 'India' && h("span", { className: "field-hint" }, "Needed for auto CGST/SGST vs IGST"))),
                         h("div", { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' } },
                             h("div", { className: "form-group" },
                                 h("label", { className: "form-label" }, "PAN"),
@@ -228,10 +252,10 @@ export default function WelcomeGuide({ onComplete }) {
                             h("div", { style: { fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.15rem' } }, item.desc)))))),
                     h("div", { style: { padding: '1rem', borderRadius: '8px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', marginBottom: '1.5rem' } },
                         h("div", { style: { fontSize: '0.8rem', color: 'var(--text-muted)', lineHeight: 1.5 } },
-                            "Your business data is stored in the ",
-                            h("strong", null, "GST Billing Software"),
-                            " in this browser profile. To access your records on another device, download a JSON backup from Settings and import it there.")))),
-                h("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '2rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border-color)' } },
+                            "All your data is stored locally in the ",
+                            h("code", { style: { background: 'var(--border-color)', padding: '0.1rem 0.3rem', borderRadius: '3px' } }, "data/"),
+                            " folder on this computer. Nothing is sent to any server. You can export a full backup anytime from Settings.")))),
+                h("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginTop: '1.25rem', padding: '0.85rem 0', borderTop: '1px solid var(--border-color)', position: 'sticky', bottom: 0, background: 'linear-gradient(var(--card-bg), var(--card-bg)), var(--bg-primary)', zIndex: 1 } },
                     h("div", null,
                         step === 0 && (h("button", { className: "btn btn-secondary", onClick: handleSkip, style: { fontSize: '0.85rem' } }, "Skip Setup")),
                         step > 0 && step < 3 && (h("button", { className: "btn btn-secondary", onClick: () => setStep(step - 1) },
@@ -247,5 +271,5 @@ export default function WelcomeGuide({ onComplete }) {
                             saving ? 'Saving...' : 'Start Billing',
                             " ",
                             h(ArrowRight, { size: 16 })))))),
-            h("div", { style: { display: 'flex', justifyContent: 'center', gap: '2rem', marginTop: '1rem' } }, STEPS.map((s, i) => (h("div", { key: s.id, style: { fontSize: '0.7rem', color: i === step ? 'var(--primary)' : 'var(--text-muted)', fontWeight: i === step ? 600 : 400, transition: 'all 0.3s' } }, s.title)))))));
+            h("div", { style: { display: 'flex', justifyContent: 'center', gap: '0.5rem 1.5rem', flexWrap: 'wrap', marginTop: '1rem' } }, STEPS.map((s, i) => (h("div", { key: s.id, style: { fontSize: '0.7rem', color: i === step ? 'var(--primary)' : 'var(--text-muted)', fontWeight: i === step ? 600 : 400, transition: 'all 0.3s' } }, s.title)))))));
 }

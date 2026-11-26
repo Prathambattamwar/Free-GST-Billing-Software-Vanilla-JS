@@ -1,8 +1,14 @@
-import { useState, useEffect, h, Fragment } from '../vanilla/dom.js';
+import { h, Fragment } from '../vanilla/dom.js';
+import { useState, useEffect } from '../vanilla/dom.js';
 import { ChevronUp, ChevronDown } from '../vanilla/icons.js';
 import { FEATURE_GROUPS, isModuleEnabled } from '../utils.js';
-import { BUSINESS_TYPES, businessTypeById, applyBusinessType, featureChanges, moduleLabel, orderedMenu, moveMenuItem, invoiceDefaultsForType } from '../utils/businessTypes.js';
-import { getEnabledModules, setEnabledModules, getBusinessType, setBusinessType, getMenuOrder, setMenuOrder, getAllRecurring, patchInvoiceDefaults } from '../store.js';
+import { BUSINESS_TYPES, businessTypeById, applyBusinessType, featureChanges, moduleLabel, orderedMenu, moveMenuItem, invoiceDefaultsForType, printStyleForType } from '../utils/businessTypes.js';
+import { getPrintSettings, savePrintSettings, PRINT_SETTINGS_EVENT } from '../utils/printSettings.js';
+import { menuGroups, normalOrder, stepGroup, hiddenItems } from '../utils/menuGroups.js';
+import { openCustomiseMenu } from './MenuCustomise.js';
+import { getEnabledModules, setEnabledModules, getBusinessType, setBusinessType, getMenuOrder, setMenuOrder, onMenuChanged, setMenuClosed, getMenuHidden, setMenuHidden, getAllRecurring, patchInvoiceDefaults, getPriceLevelNames, setPriceLevelNames, applyTypeTerms } from '../store.js';
+import { PriceLevelNames } from './PriceLevelFields.js';
+import { levelNameProblem } from '../utils/listCsv.js';
 import { toast } from './Toast.js';
 import HelpButton from './HelpButton.js';
 // v1.10.83 - Settings → Business type and Settings → Features.
@@ -13,8 +19,10 @@ import HelpButton from './HelpButton.js';
 // "Save all changes" bar applies it (and lists it as unsaved until then,
 // like the Company form). The sidebar follows the saved copy only.
 const muted = { fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.4 };
-const readSaved = () => ({ modules: getEnabledModules(), type: getBusinessType(), order: getMenuOrder() });
-const orderKey = (order) => orderedMenu(order).map(m => m.id).join();
+// v1.10.85 - levels: the price level names (shown under Price levels).
+const readSaved = () => ({ modules: getEnabledModules(), type: getBusinessType(), order: getMenuOrder(), levels: getPriceLevelNames() });
+// v1.10.86 - groups included (utils/menuGroups.js).
+const orderKey = (order) => normalOrder(order).join();
 // Draft + saved copy for both tabs. SettingsView adds `unsaved` to its bar
 // and calls save() / discard() from "Save all changes" / "Discard".
 export function useFeatureDraft() {
@@ -22,25 +30,53 @@ export function useFeatureDraft() {
     const [draft, setDraft] = useState(saved);
     const changes = featureChanges(saved.modules, draft.modules);
     const typeChanged = draft.type !== saved.type;
-    const featuresChanged = changes.turnOn.length > 0 || changes.turnOff.length > 0 || orderKey(draft.order) !== orderKey(saved.order);
+    const levelsChanged = draft.levels.join('|') !== saved.levels.join('|');
+    const featuresChanged = changes.turnOn.length > 0 || changes.turnOff.length > 0 || orderKey(draft.order) !== orderKey(saved.order) || levelsChanged;
     const unsaved = [typeChanged && 'Business type', featuresChanged && 'Features'].filter(Boolean);
     const save = () => {
+        // v1.10.85 - a level name that would clash in the Products CSV is refused.
+        const levelProblem = isModuleEnabled('priceLevels', draft.modules) ? levelNameProblem(draft.levels) : '';
+        if (featuresChanged && levelProblem) {
+            toast(`Features not saved. ${levelProblem}`, 'error');
+            return;
+        }
         if (featuresChanged) {
             setEnabledModules(draft.modules);
             setMenuOrder(draft.order);
+            setPriceLevelNames(draft.levels);
+            // v1.10.86 - Reset menu also opens every group and shows every item.
+            if (!draft.order.length && orderKey(saved.order) !== orderKey([])) {
+                setMenuClosed([]);
+                setMenuHidden([]);
+            }
         }
         if (typeChanged && draft.type) {
             setBusinessType(draft.type);
             patchInvoiceDefaults(invoiceDefaultsForType(draft.type));
+            // v1.10.86 - one Business type picker: it also sets the print style
+            // (Print & PDF shows which) and rewords the starting Standard Terms.
+            savePrintSettings(printStyleForType(getPrintSettings(), draft.type));
+            window.dispatchEvent(new Event(PRINT_SETTINGS_EVENT));
+            applyTypeTerms(draft.type).catch(() => { });
         }
         setSaved(draft);
         toast('Features saved. The menu now shows your choices.', 'success');
     };
     const discard = () => setDraft(saved);
+    // v1.10.86 - the menu can now be arranged in Customise menu; this list follows
+    // it straight away, unless the order here has unsaved changes of its own.
+    useEffect(() => onMenuChanged(() => {
+        const order = getMenuOrder();
+        if (orderKey(order) === orderKey(saved.order))
+            return;
+        if (orderKey(draft.order) === orderKey(saved.order))
+            setDraft(d => ({ ...d, order }));
+        setSaved(sv => ({ ...sv, order }));
+    }), [saved.order, draft.order]);
     return { draft, setDraft, saved, changes, unsaved, save, discard };
 }
-// In the browser edition, due recurring invoices are generated when the
-// user next opens the app; no background server runs while the app is closed.
+// Recurring invoices are made by the server (server.js processDueRecurring)
+// whether or not the Recurring screen is shown, so say so where it is hidden.
 function useActiveRecurringCount() {
     const [count, setCount] = useState(0);
     useEffect(() => {
@@ -48,7 +84,7 @@ function useActiveRecurringCount() {
     }, []);
     return count;
 }
-const recurringNote = (n) => `You have ${n} recurring invoice${n === 1 ? '' : 's'}. Any invoices that become due are generated the next time you open the app. Manage or pause ${n === 1 ? 'it' : 'them'} on the Recurring screen.`;
+const recurringNote = (n) => `You have ${n} recurring invoice${n === 1 ? '' : 's'}; ${n === 1 ? 'it keeps' : 'they keep'} being made while Recurring is hidden. Pause ${n === 1 ? 'it' : 'them'} on the Recurring screen to stop.`;
 // "Not saved yet: Turn on … Turn off …" - shown on both tabs while the draft differs.
 function PendingChanges({ features }) {
     if (!features.unsaved.length)
@@ -77,7 +113,7 @@ export function BusinessTypePanel({ features }) {
         h("h3", { className: "section-title", style: { marginTop: 0, marginBottom: '0.25rem' } },
             "Business type ",
             h(HelpButton, { title: "Business type", doc: "settings#business-type", size: 16, style: { marginLeft: 6 } })),
-        h("p", { style: { fontSize: '0.8rem', color: 'var(--text-muted)', margin: 0 } }, "Pick what kind of business you run. The tick boxes in Features are filled in for that business; nothing changes until you save."),
+        h("p", { style: { fontSize: '0.8rem', color: 'var(--text-muted)', margin: 0 } }, "Pick what kind of business you run. The tick boxes in Features are filled in for that business, and the print style and the starting terms follow it; nothing changes until you save."),
         h("p", { style: { fontSize: '0.85rem', margin: '0.85rem 0' } },
             "Your business type: ",
             h("strong", null, chosen ? chosen.label : 'Not chosen yet')),
@@ -99,6 +135,11 @@ function Check({ id, label, help, modules, onToggle, note }) {
 export function FeaturesPanel({ features, regionMode }) {
     const { draft, setDraft } = features;
     const recurring = useActiveRecurringCount();
+    // v1.10.86 - items taken out of the menu in Customise menu (menu only, the
+    // switch here stays as it is); redrawn when that window changes them.
+    const [, setMenuTick] = useState(0);
+    useEffect(() => onMenuChanged(() => setMenuTick(t => t + 1)), []);
+    const menuHidden = hiddenItems(getMenuHidden());
     const notes = { recurring: recurring > 0 ? recurringNote(recurring) : '' };
     const type = businessTypeById(draft.type);
     const setModules = (modules) => setDraft({ ...draft, modules });
@@ -109,24 +150,39 @@ export function FeaturesPanel({ features, regionMode }) {
     // shows up here, so a module added later needs no change to this screen.
     const menu = orderedMenu(draft.order);
     const menuModules = FEATURE_GROUPS.find(g => g.id === 'menu')?.modules || [];
-    const renderSection = (section, title) => {
-        const items = menu.filter(m => m.section === section);
-        return (h("div", { className: "surface-card" },
-            h("div", { style: { fontWeight: 600, fontSize: '0.82rem', marginBottom: '0.5rem' } }, title),
-            h("div", { style: { display: 'flex', flexDirection: 'column', gap: '0.45rem' } }, items.map((item, i) => {
-                const mod = menuModules.find(m => m.id === item.module);
-                return (h("div", { key: item.id, "data-menu-item": item.id, style: { display: 'flex', alignItems: 'flex-start', gap: '0.4rem' } },
-                    h("span", { style: { display: 'flex', gap: 2, flexShrink: 0 } },
-                        h("button", { type: "button", className: "icon-btn", disabled: i === 0, onClick: () => move(item.id, -1), "aria-label": `Move ${item.label} up`, title: "Move up", style: { padding: 2 } },
-                            h(ChevronUp, { size: 16 })),
-                        h("button", { type: "button", className: "icon-btn", disabled: i === items.length - 1, onClick: () => move(item.id, 1), "aria-label": `Move ${item.label} down`, title: "Move down", style: { padding: 2 } },
-                            h(ChevronDown, { size: 16 }))),
-                    mod && !mod.core ? (h(Check, { id: mod.id, label: item.label, help: item.help, modules: draft.modules, onToggle: toggle, note: notes[mod.id] })) : (h("span", { style: { fontSize: '0.8rem', flex: 1, minWidth: 0 } },
-                        h("span", { style: { fontWeight: 600 } }, item.label),
-                        h("span", { style: { ...muted, marginLeft: '0.4rem' } }, "(always shown)"),
-                        h("span", { style: { ...muted, display: 'block' } }, item.help)))));
-            }))));
-    };
+    const moveGroup = (id, dir) => setDraft({ ...draft, order: stepGroup(draft.order, id, dir) });
+    // v1.10.86 - the top part in its groups; an item's arrows go on into the
+    // next group at the end of one, as in Customise menu.
+    const groups = menuGroups(draft.order);
+    const renderSection = (section, title) => (h("div", { className: "surface-card" },
+        h("div", { style: { fontWeight: 600, fontSize: '0.82rem', marginBottom: '0.5rem' } }, title),
+        section === 'main' ? groups.map((g, gi) => (h("div", { key: g.id, "data-menu-group": g.id, style: { marginTop: gi ? '0.85rem' : 0 } },
+            h("div", { style: { display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.45rem' } },
+                h("span", { style: { display: 'flex', gap: 4, flexShrink: 0 } },
+                    h("button", { type: "button", className: "icon-btn", disabled: gi === 0, onClick: () => moveGroup(g.id, -1), "aria-label": `Move the ${g.label} group up`, title: "Move the group up", style: { padding: 2 } },
+                        h(ChevronUp, { size: 16 })),
+                    h("button", { type: "button", className: "icon-btn", disabled: gi === groups.length - 1, onClick: () => moveGroup(g.id, 1), "aria-label": `Move the ${g.label} group down`, title: "Move the group down", style: { padding: 2 } },
+                        h(ChevronDown, { size: 16 }))),
+                h("span", { style: { fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-muted)' } }, g.label)),
+            g.items.length ? renderItems(g.items.map(id => menu.find(m => m.id === id))) : h("div", { style: { ...muted, marginLeft: '2.6rem' } }, "Empty: move an item here with the arrows.")))) : renderItems(menu.filter(m => m.section === section))));
+    // An arrow is off when it would change nothing.
+    const stuck = (id, dir) => orderKey(moveMenuItem(draft.order, id, dir)) === orderKey(draft.order);
+    function renderItems(items) {
+        return (h("div", { style: { display: 'flex', flexDirection: 'column', gap: '0.45rem' } }, items.map((item) => {
+            const mod = menuModules.find(m => m.id === item.module);
+            return (h("div", { key: item.id, "data-menu-item": item.id, style: { display: 'flex', alignItems: 'flex-start', gap: '0.4rem' } },
+                h("span", { style: { display: 'flex', gap: 4, flexShrink: 0 } },
+                    h("button", { type: "button", className: "icon-btn", disabled: stuck(item.id, -1), onClick: () => move(item.id, -1), "aria-label": `Move ${item.label} up`, title: "Move up", style: { padding: 2 } },
+                        h(ChevronUp, { size: 16 })),
+                    h("button", { type: "button", className: "icon-btn", disabled: stuck(item.id, 1), onClick: () => move(item.id, 1), "aria-label": `Move ${item.label} down`, title: "Move down", style: { padding: 2 } },
+                        h(ChevronDown, { size: 16 }))),
+                mod && !mod.core ? (h(Check, { id: mod.id, label: item.label, help: item.help, modules: draft.modules, onToggle: toggle, note: notes[mod.id] })) : (h("span", { style: { fontSize: '0.8rem', flex: 1, minWidth: 0 } },
+                    h("span", { style: { fontWeight: 600 } }, item.label),
+                    h("span", { style: { ...muted, marginLeft: '0.4rem' } }, "(always shown)"),
+                    h("span", { style: { ...muted, display: 'block' } }, item.help))),
+                menuHidden.includes(item.id) && h("span", { style: { ...muted, flexShrink: 0, marginTop: 2 } }, "Not in the menu")));
+        })));
+    }
     return (h("div", { id: "section-modules", className: "glass-panel p-6 mb-6", style: { order: 5 } },
         h("div", { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' } },
             h("div", null,
@@ -144,9 +200,10 @@ export function FeaturesPanel({ features, regionMode }) {
                 "Menu ",
                 h(HelpButton, { title: "Menu: show, hide and order", doc: "settings#features-menu", size: 16, style: { marginLeft: 6 } })),
             h("span", { style: muted },
-                "Use the arrows to change the order of the menu.",
+                "Use the arrows to change the order and the groups.",
                 ' ',
-                draft.order.length > 0 && h("button", { type: "button", onClick: () => setDraft({ ...draft, order: [] }), style: { fontSize: '0.72rem', background: 'none', border: 0, color: 'var(--primary)', cursor: 'pointer', padding: 0 } }, "Default order"))),
+                draft.order.length > 0 && h("button", { type: "button", onClick: () => setDraft({ ...draft, order: [] }), style: { fontSize: '0.72rem', background: 'none', border: 0, color: 'var(--primary)', cursor: 'pointer', padding: 0 } }, "Reset menu")),
+            h("button", { type: "button", className: "btn btn-secondary", onClick: openCustomiseMenu, style: { fontSize: '0.78rem', padding: '0.35rem 0.7rem', marginLeft: 'auto' } }, "Customise menu\u2026")),
         h("div", { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '0.75rem' } },
             renderSection('main', 'Top of the menu'),
             renderSection('bottom', 'Bottom of the menu'),
@@ -161,6 +218,8 @@ export function FeaturesPanel({ features, regionMode }) {
                 return null;
             return (h("div", { key: group.id, className: "surface-card" },
                 h("div", { style: { fontWeight: 600, fontSize: '0.82rem', marginBottom: '0.5rem' } }, group.label),
-                h("div", { style: { display: 'flex', flexDirection: 'column', gap: '0.45rem' } }, mods.map(mod => h(Check, { key: mod.id, id: mod.id, label: mod.label, help: mod.help, modules: draft.modules, onToggle: toggle, note: notes[mod.id] })))));
+                h("div", { style: { display: 'flex', flexDirection: 'column', gap: '0.45rem' } }, mods.map(mod => (h(Fragment, { key: mod.id },
+                    h(Check, { id: mod.id, label: mod.label, help: mod.help, modules: draft.modules, onToggle: toggle, note: notes[mod.id] }),
+                    mod.id === 'priceLevels' && isModuleEnabled(mod.id, draft.modules) && (h(PriceLevelNames, { names: draft.levels, problem: levelNameProblem(draft.levels), onChange: (levels) => setDraft({ ...draft, levels }) }))))))));
         }))));
 }

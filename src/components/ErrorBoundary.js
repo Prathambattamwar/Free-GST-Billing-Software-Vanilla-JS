@@ -1,18 +1,19 @@
+import { h, Fragment } from '../vanilla/dom.js';
 // v1.10.83 - Never a white screen. Before this there was no error boundary:
 // one screen throwing while rendering (an old invoice with an unexpected
-// field, ERR-043) unmounted the whole app and left a blank page. App.js
+// field, ERR-043) unmounted the whole app and left a blank page. App.jsx
 // wraps the screen area in one of these (keyed by screen, so the sidebar keeps
-// working and moving to another screen clears it), and main.js wraps the
+// working and moving to another screen clears it), and main.jsx wraps the
 // whole app as a last line.
 //
 // The panel itself must never throw, so it only renders plain markup and
 // strings that were made safe in componentDidCatch.
-import { Component, h, Fragment } from '../vanilla/dom.js';
+import { Component } from '../vanilla/dom.js';
 import { logProblem, copyText, openReport } from '../utils/problemLog.js';
 import { isChunkLoadError, knownProblemFor, reportText } from '../utils/errorReport.js';
 const RELOAD_KEY = 'fgsb_chunk_reload_at';
-// A lazy screen whose file vanished after an update. The view boundary catches that here,
-// so main.js's window listener never sees it: reload once, as it would have.
+// A lazy screen whose file vanished after an update. React catches that here,
+// so main.jsx's window listener never sees it: reload once, as it would have.
 function reloadForChunkError() {
     try {
         const last = Number(sessionStorage.getItem(RELOAD_KEY) || 0);
@@ -71,7 +72,7 @@ export default class ErrorBoundary extends Component {
                 h("b", null, "Try again"),
                 ", or go back to the Dashboard. If it keeps happening, please report it so it can be fixed."),
             known && (h("div", { className: "problem-known" },
-                h("a", { href: known.url, target: "_blank", rel: "noopener noreferrer" }, "This is a known problem: how to fix it"),
+                h("strong", null, "Suggested fix"),
                 h("div", null, known.fix))),
             entry && h("code", null, String(entry.message)),
             h("div", { className: "problem-panel-actions" },

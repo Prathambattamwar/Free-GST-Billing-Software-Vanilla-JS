@@ -1,15 +1,18 @@
+import { h, Fragment } from '../vanilla/dom.js';
 // v1.10.77 (#85) - closing stock and its value at the end of any month.
 // Calculation lives in utils/products.js (unit-tested); this file only shows
 // and exports it. Products and stock are shared by all your businesses, so
 // this report reads every invoice and purchase, not just the open company's.
-import { useEffect, useState, h, Fragment } from '../vanilla/dom.js';
-import { Package } from '../vanilla/icons.js';
-import { getAllBills, getAllProducts, getAllPurchases, getAllProductions } from '../store.js';
+import { useEffect, useState } from '../vanilla/dom.js';
+import { Package, Trash2 } from '../vanilla/icons.js';
+import { getAllBills, getAllProducts, getAllPurchases, getAllProductions, getAllDebitNotes, getAllStockAdjustments, deleteStockAdjustment } from '../store.js';
 import { localToday } from '../utils.js';
 import { closingStock, stockValueOf } from '../utils/products.js';
 import { toast } from './Toast.js';
 import TableExport from './TableExport.js';
 import HelpButton from './HelpButton.js';
+import { confirmAction } from './ConfirmModal.js';
+import { categoryOptions, brandOptions, productMatches, reasonLabel } from '../utils/stock.js';
 const amt = (n) => n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 // Last day of a YYYY-MM month, or today while that month is still running.
 const monthEnd = (ym) => {
@@ -21,24 +24,31 @@ const monthEnd = (ym) => {
 export default function StockReport({ businessName }) {
     const [data, setData] = useState(null);
     const [month, setMonth] = useState(localToday().slice(0, 7));
+    // v1.10.85 (#142) - item, category (with its sub-levels) and brand.
+    const [filter, setFilter] = useState({ item: '', category: '', brand: '' });
+    const [reload, setReload] = useState(0);
     useEffect(() => {
         // v1.10.83 (#115) - production entries move stock too (always read, even
         // with the feature off: entries saved earlier still moved stock).
-        Promise.all([getAllProducts(), getAllBills(), getAllPurchases(), getAllProductions().catch(() => [])])
-            .then(([products, bills, purchases, productions]) => setData({
+        // v1.10.85 (#168) - and purchase returns (debit notes).
+        // v1.10.85 - and stock adjustments (damaged, found, ...).
+        Promise.all([getAllProducts(), getAllBills(), getAllPurchases(), getAllProductions().catch(() => []), getAllDebitNotes().catch(() => []), getAllStockAdjustments().catch(() => [])])
+            .then(([products, bills, purchases, productions, debitNotes, adjustments]) => setData({
             products: products || [],
             bills: bills || [],
             purchases: purchases || [],
             productions: productions || [],
+            debitNotes: debitNotes || [],
+            adjustments: adjustments || [],
         }))
             .catch(() => toast('Failed to load stock', 'error'));
-    }, []);
+    }, [reload]);
     if (!data)
         return h("div", { className: "glass-panel", style: { padding: '1.25rem' } }, "Loading stock\u2026");
     const asOf = monthEnd(month);
-    const qty = closingStock(data.products, data.bills, data.purchases, asOf, data.productions);
+    const qty = closingStock(data.products, data.bills, data.purchases, asOf, data.productions, data.debitNotes, data.adjustments);
     const rows = data.products
-        .filter((p) => qty.has(p.id)) // services have no stock (#121)
+        .filter((p) => qty.has(p.id) && productMatches(p, filter)) // services have no stock (#121)
         .map((p) => ({ p, q: qty.get(p.id) ?? 0, ...stockValueOf(p, qty.get(p.id)) }))
         .sort((a, b) => String(a.p.name || '').localeCompare(String(b.p.name || '')));
     const total = rows.reduce((s, r) => s + (r.q > 0 ? r.value : 0), 0);
@@ -49,6 +59,24 @@ export default function StockReport({ businessName }) {
     ];
     const num = { textAlign: 'right', whiteSpace: 'nowrap' };
     // A select, not <input type="month">: Firefox shows that as a plain text box.
+    // The month's stock adjustments, for the products shown.
+    const shownIds = new Set(rows.map((r) => r.p.id));
+    const monthAdj = data.adjustments.filter((a) => String(a.date || '').slice(0, 7) === month && shownIds.has(a.productId));
+    const cats = categoryOptions(data.products);
+    const brands = brandOptions(data.products);
+    const setF = (k, v) => setFilter((prev) => ({ ...prev, [k]: v }));
+    const removeAdj = async (a) => {
+        if (!(await confirmAction({ title: 'Delete this stock adjustment?', message: `${a.productName}: ${a.quantity > 0 ? '+' : ''}${a.quantity} (${reasonLabel(a.reason)}). The stock goes back by the same quantity.`, confirmLabel: 'Delete', tone: 'danger' })))
+            return;
+        try {
+            await deleteStockAdjustment(a);
+            toast('Adjustment deleted; stock put back', 'success');
+            setReload((n) => n + 1);
+        }
+        catch (err) {
+            toast(err?.message || 'Could not delete it', 'error');
+        }
+    };
     const lastMonths = Array.from({ length: 36 }, (_, i) => {
         const d = new Date();
         d.setDate(1);
@@ -62,11 +90,18 @@ export default function StockReport({ businessName }) {
                 asOfLabel,
                 h(HelpButton, { title: "Closing stock", doc: "reports#stock", size: 16 })),
             h("div", { style: { display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' } },
+                h("input", { type: "text", className: "form-input", style: { width: 160 }, "aria-label": "Item", placeholder: "Item name...", value: filter.item, onChange: (e) => setF('item', e.target.value) }),
+                cats.length > 0 && (h("select", { className: "form-input", style: { width: 'auto', maxWidth: 240 }, "aria-label": "Category", value: filter.category, onChange: (e) => setF('category', e.target.value) },
+                    h("option", { value: "" }, "All categories"),
+                    cats.map((c) => h("option", { key: c, value: c }, c)))),
+                brands.length > 0 && (h("select", { className: "form-input", style: { width: 'auto' }, "aria-label": "Brand", value: filter.brand, onChange: (e) => setF('brand', e.target.value) },
+                    h("option", { value: "" }, "All brands"),
+                    brands.map((b) => h("option", { key: b, value: b }, b)))),
                 h("select", { className: "form-input", style: { width: 'auto' }, value: month, "aria-label": "Month", onChange: (e) => setMonth(e.target.value) }, lastMonths.map(([v, label]) => h("option", { key: v, value: v }, label))),
                 h(TableExport, { title: `Closing stock ${asOfLabel}`, filename: `Closing-stock-${asOf}`, subtitle: `${businessName ? `${businessName}, ` : ''}closing stock as on ${asOfLabel}, valued at purchase price`, headers: ['Product', 'HSN/SAC', 'Unit', 'Closing qty', 'Rate', 'Value'], rows: rows.length ? exportRows : [] }))),
         rows.length === 0 ? (h("div", { className: "empty-state" },
             h(Package, { size: 48 }),
-            h("p", null, "No products yet. Add them under Products."))) : (h("div", { className: "table-scroll" },
+            h("p", null, data.products.length ? 'No products match the filters.' : 'No products yet. Add them under Products.'))) : (h("div", { className: "table-scroll" },
             h("table", { className: "data-table", style: { minWidth: 640 } },
                 h("thead", null,
                     h("tr", null,
@@ -89,8 +124,35 @@ export default function StockReport({ businessName }) {
                     h("tr", { style: { fontWeight: 700, background: 'var(--bg-secondary)' } },
                         h("td", { colSpan: 5 }, "Total stock value"),
                         h("td", { style: num }, amt(total))))))),
+        monthAdj.length > 0 && (h("div", { style: { padding: '0.5rem 1.25rem 0.75rem' } },
+            h("h4", { style: { margin: '0 0 0.4rem', fontSize: '0.9rem' } },
+                "Stock adjustments this month ",
+                h(HelpButton, { title: "Stock adjustments", doc: "products#stock-adjust", size: 14 })),
+            h("table", { className: "data-table", style: { minWidth: 0, fontSize: '0.84rem' }, "aria-label": "Stock adjustments" },
+                h("thead", null,
+                    h("tr", null,
+                        h("th", null, "Date"),
+                        h("th", null, "Product"),
+                        h("th", { style: num }, "Quantity"),
+                        h("th", null, "Reason"),
+                        h("th", null, "Note"),
+                        h("th", null))),
+                h("tbody", null, monthAdj.map((a) => (h("tr", { key: a.id },
+                    h("td", null, a.date),
+                    h("td", null, a.productName),
+                    h("td", { style: { ...num, color: a.quantity < 0 ? 'var(--danger)' : 'var(--success)' } },
+                        a.quantity > 0 ? '+' : '',
+                        a.quantity,
+                        " ",
+                        a.unit || ''),
+                    h("td", null, reasonLabel(a.reason)),
+                    h("td", { className: "text-muted" }, a.note || ''),
+                    h("td", null,
+                        h("button", { type: "button", className: "icon-btn icon-btn-red", title: "Delete (puts the stock back)", "aria-label": `Delete adjustment of ${a.productName}`, onClick: () => removeAdj(a) },
+                            h(Trash2, { size: 14 })))))))))),
         h("p", { style: { fontSize: '0.75rem', color: 'var(--text-muted)', padding: '0 1.25rem 1rem', margin: 0 } },
             "Worked back from today's stock using the dates of your invoices, purchase bills",
-            data.productions.length ? ' and production entries' : '',
+            data.productions.length ? ', production entries' : '',
+            data.adjustments.length ? ' and stock adjustments' : '',
             ". Stock you typed in by hand on the Products screen has no date, so it counts as if it changed today. Value is at purchase price; * means no purchase price is saved, so the selling price is used. Negative stock is shown in red and not counted in the total.")));
 }

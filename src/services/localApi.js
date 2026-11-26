@@ -3,8 +3,9 @@
 // Google account, Node.js process, or remote application database is used.
 
 import { templateTotals, clientYearToDate, businessKeyOf, numberSeriesFor, counterKeyFor, nextCounterValue, startFor, formatDocNumber, getFinancialYearLabel, parseLocalDate, INVOICE_TYPES } from '../utils.js';
+import { lockProblem, isLockDate } from '../utils/periodLock.js';
 
-const APP_VERSION = '1.10.83';
+const APP_VERSION = '1.10.86';
 // Legacy database name is intentionally preserved so existing browser data remains available.
 const DB_NAME = 'free-gst-billing-local';
 const DB_VERSION = 1;
@@ -13,7 +14,7 @@ const FILES_STORE = 'files';
 const ARRAY_KEYS = [
   'bills', 'clients', 'termsTemplates', 'products', 'productions', 'expenses',
   'purchases', 'purchaseOrders', 'cashBook', 'recurring', 'receipts', 'profiles',
-  'trash', 'backups', 'savedPdfs', 'errorLog',
+  'trash', 'backups', 'savedPdfs', 'errorLog', 'debitNotes', 'stockAdjustments', 'bankStatements', 'editHistory',
 ];
 
 const defaultDatabase = () => ({
@@ -24,6 +25,7 @@ const defaultDatabase = () => ({
   },
   profiles: [], bills: [], clients: [], termsTemplates: [], products: [], productions: [],
   expenses: [], purchases: [], purchaseOrders: [], cashBook: [], recurring: [], receipts: [],
+  debitNotes: [], stockAdjustments: [], bankStatements: [], editHistory: [],
   meta: {}, localPrefs: {}, trash: [], backups: [], savedPdfs: [], errorLog: [], lock: null,
 });
 
@@ -183,6 +185,21 @@ function remove(collection, id) {
   const rows = db[collection] || [];
   db[collection] = rows.filter((row) => String(row?.id) !== String(id));
 }
+
+function recordEditHistory(kind, action, before, after, id) {
+  const rec = after || before || {};
+  db.editHistory.unshift({
+    at: new Date().toISOString(), kind, action, id: String(id || rec.id || '').slice(0, 120),
+    number: String(rec.invoiceNumber || rec.dnNumber || rec.receiptNo || rec.description || rec.name || rec.productName || rec.id || '').slice(0, 80),
+    date: String((kind === 'bills' ? rec.invoiceDate : rec.date) || '').slice(0, 10),
+    ...(before ? { totalBefore: Number(before.totalAmount ?? before.total ?? before.amount ?? before.data?.totals?.total) || 0, dateBefore: String((kind === 'bills' ? before.invoiceDate : before.date) || '').slice(0, 10) } : {}),
+    ...(after ? { total: Number(after.totalAmount ?? after.total ?? after.amount ?? after.data?.totals?.total) || 0 } : {}),
+    from: 'browser',
+  });
+  db.editHistory = db.editHistory.slice(0, 1000);
+}
+const LOCK_KIND = { bills: 'bills', purchases: 'purchases', expenses: 'expenses', receipts: 'receipts', debitNotes: 'debit-notes', cashBook: 'cash-book', stockAdjustments: 'stock-adjustments' };
+
 function creditDependents(id) {
   const hits = [];
   for (const bill of db.bills) {
@@ -230,6 +247,10 @@ function backupContent() {
     cashBook: content.cashBook,
     purchases: content.purchases,
     purchaseOrders: content.purchaseOrders,
+    debitNotes: content.debitNotes,
+    stockAdjustments: content.stockAdjustments,
+    bankStatements: content.bankStatements,
+    editHistory: content.editHistory,
     recurring: content.recurring,
     receipts: content.receipts,
     meta: stripSensitiveLock(content.meta || {}),
@@ -267,10 +288,12 @@ async function handleApi(url, init = {}) {
   const parts = path.split('/').filter(Boolean).map(decodeURIComponent);
   const body = await parseBody(init);
   const id = parts[1];
+  if (method === 'HEAD' && (path === 'profile' || path === 'health')) return new Response(null, { status: 200, headers: { 'Cache-Control': 'no-store' } });
   const collectionMap = {
     bills: 'bills', clients: 'clients', templates: 'termsTemplates', products: 'products',
     productions: 'productions', expenses: 'expenses', recurring: 'recurring', receipts: 'receipts',
     purchases: 'purchases', 'purchase-orders': 'purchaseOrders', 'cash-book': 'cashBook', profiles: 'profiles',
+    'debit-notes': 'debitNotes', 'stock-adjustments': 'stockAdjustments', 'bank-statements': 'bankStatements',
   };
 
   // Main application collections
@@ -285,12 +308,15 @@ async function handleApi(url, init = {}) {
         purchases: sortDateDesc('date'), 'purchase-orders': (a, b) => String(b.date || '').localeCompare(String(a.date || '')) || String(b.poNumber || '').localeCompare(String(a.poNumber || '')),
         'cash-book': (a, b) => String(b.date || '').localeCompare(String(a.date || '')) || String(b.createdAt || '').localeCompare(String(a.createdAt || '')),
         profiles: sortName('businessName'),
+        'debit-notes': sortDateDesc('date'), 'stock-adjustments': sortDateDesc('date'), 'bank-statements': sortDateDesc('importedAt'),
       };
       if (parts[0] === 'templates' && db[collection].length === 0) {
         db[collection].push({ id: 'default', name: 'Standard Terms', content: '1. Payment is due within 15 days of invoice date unless otherwise agreed in writing.\n2. Interest @ 18% p.a. will be charged on overdue payments beyond the due date.\n3. The scope of work is limited to what is explicitly mentioned in the project proposal/agreement. Any additional requirements will be quoted and billed separately.\n4. This invoice is subject to the jurisdiction of courts at the seller\'s registered location.\n5. E. & O.E.' });
         await persist();
       }
-      return response(list(collection, sorters[parts[0]]));
+      const rows = list(collection, sorters[parts[0]]);
+      if (collection === 'profiles') return response(rows.map((profile) => profile.hideLock ? { id: profile.id, businessName: 'Hidden business', hidden: true, isActive: !!profile.isActive } : profile));
+      return response(rows);
     }
     if (method === 'POST' && parts.length === 1) {
       const item = body && typeof body === 'object' ? body : {};
@@ -308,6 +334,17 @@ async function handleApi(url, init = {}) {
           if (product.kind !== 'service') product.stock = Math.round(((Number(product.stock) || 0) + change) * 1000) / 1000;
         }
       }
+      if (collection === 'debitNotes' && (!Array.isArray(item.items) || !item.items.length)) return errorResponse('A debit note needs at least one returned item', 400);
+      if (collection === 'bankStatements') {
+        const states = ['open', 'matched', 'ignored', 'expense'];
+        if (!Array.isArray(item.lines) || item.lines.length > 2000 || item.lines.some((line) => !line || !/^\d{4}-\d{2}-\d{2}$/.test(String(line.date || '')) || !(Number(line.credit) >= 0) || !(Number(line.debit) >= 0) || !states.includes(line.status))) return errorResponse('A bank statement needs valid lines (2,000 at most per part)', 400);
+      }
+      if (collection === 'stockAdjustments') {
+        if (!item.productId || !Number.isFinite(Number(item.quantity)) || !Number(item.quantity) || !/^\d{4}-\d{2}-\d{2}$/.test(String(item.date || ''))) return errorResponse('A stock adjustment needs a product, quantity and date', 400);
+        if (db.stockAdjustments.some((row) => row.id === item.id)) return errorResponse('This stock adjustment is already saved', 409);
+        item.stockApplied = { [item.productId]: Number(item.quantity) };
+        item.createdAt ||= new Date().toISOString();
+      }
       if (collection === 'cashBook') {
         // CashBook.js stores the transaction direction as `type` ('in'|'out').
         // Accept the older `direction` field as a compatibility fallback, but
@@ -324,12 +361,28 @@ async function handleApi(url, init = {}) {
         const total = item.payments.reduce((sum, payment) => sum + (Number(payment?.amount) || 0), 0);
         if (total > (Number(item.grandTotal || item.total || item.amount) || 0) + 1) return errorResponse('Supplier payments exceed the purchase bill total', 400);
       }
+      const lockKind = LOCK_KIND[collection];
+      const before = item.id ? (db[collection] || []).find((row) => String(row.id) === String(item.id)) || null : null;
+      const lockedUpTo = db.meta.periodLock?.upTo || '';
+      if (lockKind && lockedUpTo) {
+        const problem = lockProblem(lockKind, before, item, lockedUpTo);
+        if (problem) return errorResponse(problem, 423, { code: 'period-locked', lockedUpTo });
+      }
       const newId = upsert(collection, item, collection.slice(0, 3));
+      if (lockKind) recordEditHistory(lockKind, before ? 'changed' : 'added', before, item, newId);
       await persist();
       if (collection === 'cashBook') return response({ success: true, id: newId, entry: { ...item, id: newId } });
+      if (collection === 'stockAdjustments') return response({ success: true, id: newId, record: { ...item, id: newId } });
       return response({ success: true, id: newId });
     }
     if (method === 'DELETE' && id) {
+      const removedRecord = db[collection].find((row) => String(row?.id) === String(id));
+      const lockKind = LOCK_KIND[collection];
+      const lockedUpTo = db.meta.periodLock?.upTo || '';
+      if (lockKind && lockedUpTo) {
+        const problem = lockProblem(lockKind, removedRecord || null, null, lockedUpTo);
+        if (problem) return errorResponse(problem, 423, { code: 'period-locked', lockedUpTo });
+      }
       if (collection === 'bills') {
         const bill = db.bills.find((row) => row.id === id);
         if (bill && query.get('permanent') !== '1') {
@@ -347,9 +400,44 @@ async function handleApi(url, init = {}) {
         }
       }
       remove(collection, id);
+      if (lockKind && removedRecord) recordEditHistory(lockKind, 'deleted', removedRecord, null, id);
       await persist();
-      return response({ success: true, trashed: collection === 'bills' && query.get('permanent') !== '1', permanent: collection === 'bills' && query.get('permanent') === '1' });
+      return response({ success: true, ...(collection === 'stockAdjustments' ? { record: removedRecord || null } : {}), trashed: collection === 'bills' && query.get('permanent') !== '1', permanent: collection === 'bills' && query.get('permanent') === '1' });
     }
+  }
+
+  if (path === 'profiles' && method === 'GET') {
+    return response(list('profiles', sortName('businessName')).map((profile) => profile.hideLock
+      ? { id: profile.id, businessName: 'Hidden business', hidden: true, isActive: !!profile.isActive }
+      : profile));
+  }
+  if (path === 'profiles/unlock' && method === 'POST') {
+    const pin = String(body?.pin ?? '');
+    const matches = [];
+    for (const profile of db.profiles) {
+      if (!profile.hideLock) continue;
+      const actual = await sha256(`${profile.hideLock.salt}:${pin}`);
+      if (actual === profile.hideLock.hash) matches.push(profile);
+    }
+    if (!matches.length) return errorResponse('wrong-pin', 401, { ok: false });
+    return response({ ok: true, ids: matches.map((profile) => profile.id), profiles: matches.map((profile) => ({ ...profile, key: 'local-hidden-key' })) });
+  }
+  if (parts[0] === 'profiles' && parts[1] && parts[2] === 'hide-pin' && method === 'POST') {
+    const profile = db.profiles.find((row) => String(row.id) === String(parts[1]));
+    if (!profile) return errorResponse('not-found', 404);
+    const pin = body?.pin;
+    if (pin !== null && !/^\d{4,12}$/.test(String(pin ?? ''))) return errorResponse('bad-request', 400);
+    if (profile.hideLock) {
+      const actual = await sha256(`${profile.hideLock.salt}:${String(body?.currentPin ?? '')}`);
+      if (actual !== profile.hideLock.hash) return errorResponse('wrong-pin', 401);
+    }
+    if (pin === null) delete profile.hideLock;
+    else {
+      const salt = crypto.randomUUID();
+      profile.hideLock = { salt, hash: await sha256(`${salt}:${pin}`), length: String(pin).length };
+    }
+    await persist();
+    return response({ ok: true, hidden: pin !== null, ...(pin !== null ? { key: 'local-hidden-key', profile: { ...profile } } : {}) });
   }
 
   if (path === 'profile') {
@@ -359,6 +447,12 @@ async function handleApi(url, init = {}) {
 
   if (parts[0] === 'meta' && parts[1]) {
     const key = parts[1];
+    if (parts[2] === 'raise' && method === 'POST') {
+      if (!/^counter_/.test(key)) return errorResponse('forbidden', 403);
+      const value = Math.floor(Number(body?.value));
+      if (!Number.isFinite(value) || value < 1 || value > 999999999) return errorResponse('bad-request', 400);
+      db.meta[key] = Math.max(Number(db.meta[key]) || 0, value); await persist(); return response({ value: db.meta[key] });
+    }
     if (parts[2] === 'increment' && method === 'POST') {
       const start = Number(body?.start) || 1;
       const value = Math.max(Number(db.meta[key]) || 0, start - 1) + 1;
@@ -366,6 +460,30 @@ async function handleApi(url, init = {}) {
     }
     if (method === 'GET') return response({ value: db.meta[key] ?? null });
     if (method === 'POST') { db.meta[key] = body?.value ?? null; await persist(); return response({ success: true }); }
+  }
+
+  if (path === 'products/price-update' && method === 'POST') {
+    const changes = Array.isArray(body?.changes) ? body.changes : [];
+    if (changes.length > 10000) return errorResponse('Too many product updates', 400);
+    const conflicts = [];
+    for (const change of changes) {
+      const product = db.products.find((row) => String(row.id) === String(change?.id));
+      if (!product) { conflicts.push({ id: change?.id, reason: 'Product not found' }); continue; }
+      for (const [field, expected] of Object.entries(change.expected || {})) {
+        const current = field === 'sellingPrice' ? (product.sellingPrice ?? product.rate ?? 0) : (product[field] ?? '');
+        if (String(current) !== String(expected ?? '')) conflicts.push({ id: change.id, field, reason: 'Product changed since the CSV was prepared' });
+      }
+    }
+    if (conflicts.length) return errorResponse('Some products changed after the CSV was prepared. Export a fresh list and try again.', 409, { conflicts });
+    let updated = 0;
+    for (const change of changes) {
+      const product = db.products.find((row) => String(row.id) === String(change.id));
+      Object.assign(product, change.prices || {});
+      if (Object.prototype.hasOwnProperty.call(change.prices || {}, 'sellingPrice')) product.rate = change.prices.sellingPrice;
+      updated++;
+    }
+    await persist();
+    return response({ success: true, updated });
   }
 
   if (path === 'number-series/rename' && method === 'POST') {
@@ -376,6 +494,27 @@ async function handleApi(url, init = {}) {
     series[to] = series[from]; delete series[from]; db.meta.invoiceNumberSeries = series;
     for (const key of Object.keys(db.meta)) if (key.includes(`@${from}`)) { const next = key.replace(`@${from}`, `@${to}`); if (db.meta[next] == null) db.meta[next] = db.meta[key]; delete db.meta[key]; }
     await persist(); return response({ moved: true });
+  }
+
+  if (path === 'period-lock') {
+    if (method === 'GET') return response({ upTo: db.meta.periodLock?.upTo || '' });
+    if (method === 'POST') {
+      const upTo = String(body?.upTo ?? '');
+      if (upTo && !isLockDate(upTo)) return errorResponse('bad-request', 400);
+      if (db.lock) {
+        const actual = await sha256(`${db.lock.salt}:${String(body?.pin ?? '')}`);
+        if (actual !== db.lock.hash) return errorResponse('wrong-pin', 401);
+      }
+      if (upTo) db.meta.periodLock = { upTo, at: new Date().toISOString() };
+      else delete db.meta.periodLock;
+      db.editHistory.unshift({ at: new Date().toISOString(), kind: 'books', action: upTo ? 'closed' : 'opened', id: '', number: '', date: upTo, from: 'browser' });
+      db.editHistory = db.editHistory.slice(0, 1000);
+      await persist(); return response({ ok: true, upTo });
+    }
+  }
+  if (path === 'edit-history' && method === 'GET') {
+    const limit = Math.min(1000, Math.max(1, Number(query.get('limit')) || 200));
+    return response((db.editHistory || []).slice(0, limit));
   }
 
   if (path === 'local-prefs') {
@@ -389,6 +528,13 @@ async function handleApi(url, init = {}) {
 
   if (path === 'lock') {
     if (method === 'GET') return response({ enabled: !!db.lock, length: db.lock?.length || 0 });
+  }
+  if (path === 'lock/reset' && method === 'POST') {
+    // Explicit user action: clear only the convenience screen-lock PIN.
+    // Business records remain untouched in the same IndexedDB database.
+    db.lock = null;
+    await persist();
+    return response({ ok: true, enabled: false });
   }
   if (path === 'lock/verify' && method === 'POST') {
     if (!db.lock) return response({ ok: true });
@@ -416,7 +562,7 @@ async function handleApi(url, init = {}) {
       bills: db.bills, profile: db.profile, profiles: db.profiles, clients: db.clients,
       termsTemplates: db.termsTemplates, products: db.products, productions: db.productions,
       expenses: db.expenses, cashBook: db.cashBook, recurring: db.recurring, receipts: db.receipts,
-      purchases: db.purchases, purchaseOrders: db.purchaseOrders, meta: stripSensitiveLock(db.meta),
+      purchases: db.purchases, purchaseOrders: db.purchaseOrders, debitNotes: db.debitNotes, stockAdjustments: db.stockAdjustments, bankStatements: db.bankStatements, editHistory: db.editHistory, meta: stripSensitiveLock(db.meta),
     });
   }
 
@@ -426,6 +572,7 @@ async function handleApi(url, init = {}) {
       ['bills', 'bill'], ['clients', 'client'], ['termsTemplates', 'template'], ['products', 'product'],
       ['expenses', 'expense'], ['recurring', 'recurring'], ['receipts', 'receipt'], ['profiles', 'profile'],
       ['purchases', 'purchase'], ['productions', 'production'], ['purchaseOrders', 'purchaseOrder'], ['cashBook', 'cashBook'],
+      ['debitNotes', 'debitNote'], ['stockAdjustments', 'stockAdjustment'], ['bankStatements', 'bankStatement'], ['editHistory', 'editHistory'],
     ];
     const counts = {};
     for (const [key, singular] of specs) {
@@ -493,33 +640,7 @@ async function handleApi(url, init = {}) {
 
   if (path === 'health' && method === 'GET') return response({ ok: true, storage: 'indexeddb', ready, version: APP_VERSION });
   if (path === 'version' && method === 'GET') return response({ current: APP_VERSION });
-  if (path === 'check-update' && method === 'GET') {
-    const fallback = { current: APP_VERSION, latest: APP_VERSION, updateAvailable: false, checkedAt: new Date().toISOString() };
-    try {
-      const releaseResponse = await nativeFetch('https://api.github.com/repos/IamRamgarhia/Free-GST-Billing-Software/releases/latest', {
-        headers: { Accept: 'application/vnd.github+json' }, cache: 'no-store',
-      });
-      if (!releaseResponse.ok) return response({ ...fallback, error: `GitHub release check failed (${releaseResponse.status}).` });
-      const release = await releaseResponse.json();
-      const latest = String(release.tag_name || release.name || APP_VERSION).replace(/^v/i, '').trim();
-      const versionParts = (value) => String(value).split(/[.+-]/).slice(0, 3).map((part) => Number.parseInt(part, 10) || 0);
-      const currentParts = versionParts(APP_VERSION);
-      const latestParts = versionParts(latest);
-      let comparison = 0;
-      for (let index = 0; index < 3; index++) {
-        const latestPart = latestParts[index] || 0;
-        const currentPart = currentParts[index] || 0;
-        if (latestPart !== currentPart) { comparison = latestPart > currentPart ? 1 : -1; break; }
-      }
-      const newer = comparison > 0;
-      return response({
-        ...fallback, latest, updateAvailable: newer, releaseUrl: release.html_url || 'https://github.com/IamRamgarhia/Free-GST-Billing-Software/releases/latest',
-        releasePublishedAt: release.published_at || null, releaseNotes: String(release.body || '').slice(0, 12000),
-      });
-    } catch (error) {
-      return response({ ...fallback, error: error?.message || 'Could not check GitHub releases.' });
-    }
-  }
+  if (path === 'check-update' && method === 'GET') return response({ current: APP_VERSION, latest: APP_VERSION, updateAvailable: false, checkedAt: new Date().toISOString(), static: true });
   if (path === 'changelog' && method === 'GET') {
     try {
       const changelogResponse = await nativeFetch(new URL('./CHANGELOG.md', window.location.href), { cache: 'no-store' });

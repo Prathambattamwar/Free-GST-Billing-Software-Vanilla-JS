@@ -1,8 +1,7 @@
 import { h, Fragment } from '../vanilla/dom.js';
-import { useState, useEffect, useCallback } from '../vanilla/dom.js';
+import React, { useState, useEffect, useCallback } from '../vanilla/dom.js';
 import { CheckCircle, XCircle, AlertTriangle, Info, X } from '../vanilla/icons.js';
 import { lastProblemWithin, openReport } from '../utils/problemLog.js';
-import { knownProblemFor } from '../utils/errorReport.js';
 const ICONS = {
     success: CheckCircle,
     error: XCircle,
@@ -19,7 +18,7 @@ let toastId = 0;
 let addToastFn = null;
 // v1.10.83 - `actions` is an optional list of { label, onClick } or
 // { label, href }. An error toast shown right after a problem was logged (a
-// failed save, a crash) gets "Report" - and "How to fix" when it is a known
+// failed save, a crash) gets a "Report" action when relevant
 // problem - by itself, so no caller has to change. Toasts with buttons stay
 // up longer: nobody can click a button that vanished after 3.5 seconds.
 export function toast(message, type = 'info', duration = 3500, actions = null) {
@@ -29,9 +28,7 @@ export function toast(message, type = 'info', duration = 3500, actions = null) {
     if (!acts && type === 'error') {
         const p = lastProblemWithin(5000);
         if (p) {
-            const known = knownProblemFor(p);
             acts = [
-                ...(known ? [{ label: 'How to fix', href: known.url }] : []),
                 { label: 'Report', onClick: () => openReport(p) },
             ];
         }
@@ -71,7 +68,7 @@ export default function ToastContainer() {
                 borderLeft: `4px solid ${color.icon}`,
                 color: color.text
             } },
-            h(Icon, { size: 18, style: { color: color.icon, flexShrink: 0 } }),
+            h(Icon, { size: 18, className: t.type === 'success' ? 'toast-tick' : undefined, style: { color: color.icon, flexShrink: 0 } }),
             h("span", { className: "toast-message" }, t.message),
             t.actions?.map((a) => (a.href
                 ? h("a", { key: a.label, className: "toast-action", href: a.href, target: "_blank", rel: "noopener noreferrer" }, a.label)

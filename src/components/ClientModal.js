@@ -1,20 +1,34 @@
-import { useState, useEffect, h, Fragment } from '../vanilla/dom.js';
+import { h, Fragment } from '../vanilla/dom.js';
+import { useState, useEffect } from '../vanilla/dom.js';
 import { X } from '../vanilla/icons.js';
-import { getCountryConfig, getStatesForCountry, validateTaxId, detectCountryFromBrowser, getCountriesForRegion, PAPER_SIZES, decodeGstin, COUNTRIES } from '../utils.js';
-import { getRegionMode } from '../store.js';
+import { getCountryConfig, getStatesForCountry, validateTaxId, detectCountryFromBrowser, getCountriesForRegion, PAPER_SIZES, decodeGstin, COUNTRIES, localToday } from '../utils.js';
+import { fyStartDate, openingFields } from '../utils/clientLedger.js';
+import { getRegionMode, activePriceLevels } from '../store.js';
+import { PriceLevelSelect } from './PriceLevelFields.js';
 import HelpButton from './HelpButton.js';
-export default function ClientModal({ show, onClose, onSave, client, isEditing, defaultCountry }) {
+// v1.10.86 (#214) - businessKey: the business an opening balance typed here is with.
+export default function ClientModal({ show, onClose, onSave, client, isEditing, defaultCountry, businessKey = '' }) {
     // Country defaults: explicit prop (active business profile) → browser locale → 'India'.
     const fallbackCountry = defaultCountry || detectCountryFromBrowser();
     const emptyForm = {
         name: '', address: '', city: '', pin: '', state: '', gstin: '', email: '', phone: '',
-        country: fallbackCountry, isSEZ: false,
+        country: fallbackCountry, isSEZ: false, isDeemedExport: false,
         // v1.9.1 — per-client print preferences. When set, they auto-populate
         // invoiceOptions when the user creates a new invoice for this client.
         // Left blank = use app-wide defaults.
         preferredPaperSize: '', // '' | 'a4' | 'a5' | 'thermal80' | ...
         preferredCurrency: '', // '' | 'INR' | 'USD' | ...
         autoPrint: false, // per-client auto-print override
+        // v1.10.85 - optional: a warning on New Invoice above this outstanding,
+        // and the price level (Settings -> Features -> Price levels).
+        creditLimit: '',
+        priceLevel: '',
+        // v1.10.86 (#214) - optional: what they owed you (or paid in advance)
+        // when you started; as on 1 April of this financial year unless changed.
+        openingBalance: '',
+        openingBalanceDate: fyStartDate(localToday()),
+        openingBalanceType: 'receivable',
+        openingBalanceBusiness: '',
     };
     const [form, setForm] = useState({ ...emptyForm });
     const [taxIdWarning, setTaxIdWarning] = useState('');
@@ -25,16 +39,23 @@ export default function ClientModal({ show, onClose, onSave, client, isEditing, 
                 pin: client.pin || '', state: client.state || '', gstin: client.gstin || '',
                 email: client.email || '', phone: client.phone || '', country: client.country || fallbackCountry,
                 isSEZ: !!client.isSEZ,
+                isDeemedExport: !!client.isDeemedExport,
                 preferredPaperSize: client.preferredPaperSize || '',
                 preferredCurrency: client.preferredCurrency || '',
                 autoPrint: !!client.autoPrint,
+                creditLimit: client.creditLimit || '',
+                priceLevel: client.priceLevel || '',
+                openingBalance: client.openingBalance || '',
+                openingBalanceDate: client.openingBalanceDate || fyStartDate(localToday()),
+                openingBalanceType: client.openingBalanceType === 'advance' ? 'advance' : 'receivable',
+                openingBalanceBusiness: client.openingBalanceBusiness || '',
             });
         }
         else if (show) {
             setForm({ ...emptyForm });
         }
         setTaxIdWarning('');
-        // eslint-disable-next-line vanilla-runtime/exhaustive-deps
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [show, client]);
     if (!show)
         return null;
@@ -71,8 +92,10 @@ export default function ClientModal({ show, onClose, onSave, client, isEditing, 
     const handleSave = () => {
         if (!form.name.trim())
             return;
-        onSave(form);
+        const limit = Number(form.creditLimit);
+        onSave({ ...form, creditLimit: Number.isFinite(limit) && limit > 0 ? Math.round(limit * 100) / 100 : '', ...openingFields(form, businessKey, localToday()) });
     };
+    const levels = activePriceLevels();
     return (h("div", { className: "modal-overlay" },
         h("div", { className: "modal-content", style: { maxWidth: '520px' } },
             h("div", { className: "flex justify-between items-center mb-4" },
@@ -135,7 +158,33 @@ export default function ClientModal({ show, onClose, onSave, client, isEditing, 
                         h("input", { type: "checkbox", checked: !!form.isSEZ, onChange: e => setForm(prev => ({ ...prev, isSEZ: e.target.checked })), style: { width: 16, height: 16, accentColor: 'var(--primary)' } }),
                         h("span", null,
                             h("strong", null, "SEZ unit / Developer"),
-                            " \u2014 supplies will be charged IGST regardless of state (Section 16, IGST Act).")))),
+                            " \u2014 supplies will be charged IGST regardless of state (Section 16, IGST Act).")),
+                    h("label", { style: { display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', cursor: 'pointer', marginTop: '0.4rem' } },
+                        h("input", { type: "checkbox", checked: !!form.isDeemedExport, onChange: e => setForm(prev => ({ ...prev, isDeemedExport: e.target.checked })), style: { width: 16, height: 16, accentColor: 'var(--primary)' } }),
+                        h("span", null,
+                            h("strong", null, "Deemed export"),
+                            " \u2014 for example an EOU, or supplies against Advance Authorisation. GST is charged as usual; GSTR-1 files them as deemed exports.")))),
+                h("div", { className: "form-group", style: { gridColumn: 'span 2', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem', paddingTop: '0.5rem', borderTop: '1px solid var(--border)', marginTop: '0.5rem' } },
+                    h("div", null,
+                        h("label", { htmlFor: "client-credit-limit", style: { display: 'block', fontSize: '0.75rem', fontWeight: 600, marginBottom: 3 } },
+                            "Credit limit (optional) ",
+                            h(HelpButton, { title: "Credit limit", doc: "clients#credit-limit", size: 14 })),
+                        h("input", { id: "client-credit-limit", type: "number", min: "0", step: "any", className: "form-input", style: { fontSize: '0.8rem', padding: '0.35rem' }, value: form.creditLimit, placeholder: "No limit", onChange: e => setForm(prev => ({ ...prev, creditLimit: e.target.value })), title: "New Invoice warns when what they owe plus the new invoice goes over this. It never stops you." })),
+                    h(PriceLevelSelect, { levels: levels, value: form.priceLevel, onChange: (v) => setForm(prev => ({ ...prev, priceLevel: v })) })),
+                h("div", { className: "form-group", style: { gridColumn: 'span 2', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.6rem' } },
+                    h("div", null,
+                        h("label", { htmlFor: "client-opening", style: { display: 'block', fontSize: '0.75rem', fontWeight: 600, marginBottom: 3 } },
+                            "Opening balance (optional) ",
+                            h(HelpButton, { title: "Opening balance", doc: "clients#opening-balance", size: 14 })),
+                        h("input", { id: "client-opening", type: "number", min: "0", step: "any", className: "form-input", style: { fontSize: '0.8rem', padding: '0.35rem' }, value: form.openingBalance, placeholder: "0", onChange: e => setForm(prev => ({ ...prev, openingBalance: e.target.value })), title: "What this client owed you, or had paid you in advance, when you started using this app." })),
+                    h("div", null,
+                        h("label", { htmlFor: "client-opening-date", style: { display: 'block', fontSize: '0.75rem', fontWeight: 600, marginBottom: 3 } }, "As on"),
+                        h("input", { id: "client-opening-date", type: "date", className: "form-input", style: { fontSize: '0.8rem', padding: '0.35rem' }, value: form.openingBalanceDate, onChange: e => setForm(prev => ({ ...prev, openingBalanceDate: e.target.value })) })),
+                    h("div", null,
+                        h("label", { htmlFor: "client-opening-type", style: { display: 'block', fontSize: '0.75rem', fontWeight: 600, marginBottom: 3 } }, "It is"),
+                        h("select", { id: "client-opening-type", className: "form-input", style: { fontSize: '0.8rem', padding: '0.35rem' }, value: form.openingBalanceType, onChange: e => setForm(prev => ({ ...prev, openingBalanceType: e.target.value })) },
+                            h("option", { value: "receivable" }, "Owed to you"),
+                            h("option", { value: "advance" }, "Their advance")))),
                 h("div", { className: "form-group", style: { gridColumn: 'span 2', paddingTop: '0.5rem', borderTop: '1px solid var(--border)', marginTop: '0.5rem' } },
                     h("div", { style: { fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.35rem' } },
                         "Print preferences (optional) ",

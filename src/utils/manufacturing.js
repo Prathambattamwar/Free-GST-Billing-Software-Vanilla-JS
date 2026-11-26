@@ -1,7 +1,7 @@
 // v1.10.83 (#115) - simple manufacturing: a bill of materials (BOM) on a
 // product and production entries ("Make") that use it. Pure functions only,
 // unit-tested in scripts/manufacturing-test.mjs; the screens are in
-// components/Manufacturing.js and the server applies the stock.
+// components/Manufacturing.jsx and the server applies the stock.
 //
 // A product made here carries  madeHere: true, bom: [{ productId, qty }]
 // where qty is how much of that raw material goes into ONE unit made.

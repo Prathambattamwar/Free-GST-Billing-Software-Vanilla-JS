@@ -14,7 +14,7 @@
  * as invoices do; Unpaid takes that payment back and keeps the ones you
  * entered. Mode Other keeps it out of the cash book: how it was paid is unknown.
  *
- * Pure: no UI runtime, no storage, so the server checks with the same rules.
+ * Pure: no React, no storage, so the server checks with the same rules.
  */
 import { purchaseTotals } from './purchaseOrders.js';
 
@@ -45,29 +45,48 @@ export function purchaseTotal(p) {
   if (Array.isArray(p?.items) && p.items.length) return r2(purchaseTotals(p.items, !!p.applyRoundOff).finalTotal);
   return r2(p?.totalAmount);
 }
-// What the supplier is to be paid: the total less TDS you keep back.
+// v1.10.86 - reverse charge: you pay the bill's GST (and cess) to the
+// government yourself, so it is not owed to the supplier. 0 on other bills.
+export function purchaseRcmTax(p) {
+  if (!p?.reverseCharge) return 0;
+  if (Array.isArray(p.items) && p.items.length) { const t = purchaseTotals(p.items); return r2(t.tax + t.cess); }
+  return r2((Number(p.totalTax) || 0) + (Number(p.totalCess) || 0));
+}
+// What the supplier is to be paid: the total less TDS you keep back
+// (and less the GST on a reverse-charge bill).
 export function purchaseOwed(p) {
-  const total = purchaseTotal(p);
+  const total = r2(purchaseTotal(p) - purchaseRcmTax(p));
   const tds = Math.min(Math.max(0, Number(p?.tdsAmount) || 0), Math.max(0, total));
   return r2(total - tds);
 }
 export const purchasePaid = (p) => r2(paymentsOf(p).reduce((s, x) => s + (Number(x?.amount) || 0), 0));
 
+// v1.10.85 (#168) - goods sent back on debit notes are not paid for: what
+// the debit notes against a bill take off it (set in memory by withReturns in
+// utils/debitNotes.js; never saved). Payments are still checked against the
+// whole bill (validatePurchasePayments), since a bill paid in full before the
+// return stays paid and the supplier owes you the refund.
+const returnedOn = (p) => Math.max(0, Number(p?._returned) || 0);
+
 // 'Paid' | 'Partial' | 'Unpaid'.
 export function purchaseStatus(p) {
-  if (!hasPurchasePayments(p)) return ['Paid', 'Partial'].includes(p?.paymentStatus) ? p.paymentStatus : 'Unpaid';
+  const returned = returnedOn(p);
+  if (!hasPurchasePayments(p)) {
+    if (returned > 0.005 && returned >= purchaseOwed(p) - 0.005) return 'Paid';
+    return ['Paid', 'Partial'].includes(p?.paymentStatus) ? p.paymentStatus : 'Unpaid';
+  }
   const paid = purchasePaid(p);
-  if (paid >= purchaseOwed(p) - 0.005) return 'Paid';
+  if (paid + returned >= purchaseOwed(p) - 0.005) return 'Paid';
   return paid > 0.005 ? 'Partial' : 'Unpaid';
 }
 
 // Still to pay, for the list and reports. An old bill marked Paid owes nothing.
 export function purchaseBalance(p) {
   if (!hasPurchasePayments(p) && purchaseStatus(p) === 'Paid') return 0;
-  return Math.max(0, r2(purchaseOwed(p) - purchasePaid(p)));
+  return Math.max(0, r2(purchaseOwed(p) - purchasePaid(p) - returnedOn(p)));
 }
-// Still to pay going by the payments alone: the amount a new payment starts at.
-export const purchasePaymentDue = (p) => Math.max(0, r2(purchaseOwed(p) - purchasePaid(p)));
+// Still to pay going by the payments (and returns): the amount a new payment starts at.
+export const purchasePaymentDue = (p) => Math.max(0, r2(purchaseOwed(p) - purchasePaid(p) - returnedOn(p)));
 
 // '' when a payment can be saved, else what to fix, in words for the user.
 export function validatePurchasePayment(x) {
@@ -105,12 +124,13 @@ export function withPurchasePayments(p, payments) {
 export const newPurchasePaymentId = (now = Date.now()) => `ppay_${now.toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
 // "Mark as paid": one payment for what is still owed.
-export function markPurchasePaid(p, today, now = new Date()) {
+// v1.10.85 (#184) - mode: how it was paid (askPaidMode); a cash one reaches the Cash book.
+export function markPurchasePaid(p, today, now = new Date(), mode = 'other') {
   const payments = paymentsOf(p);
   const due = purchasePaymentDue(p);
   if (due <= 0.005) return payments.length ? withPurchasePayments(p, payments) : { ...p, paymentStatus: 'Paid' };
   return withPurchasePayments(p, [...payments, {
-    id: newPurchasePaymentId(now.getTime()), amount: due, date: today, mode: 'other',
+    id: newPurchasePaymentId(now.getTime()), amount: due, date: today, mode: mode || 'other',
     reference: '', note: 'Marked paid', recordedAt: now.toISOString(), auto: true,
   }]);
 }

@@ -1,7 +1,7 @@
 // ============================================================================
 // Thermal Print Settings — app-wide defaults, stored in localStorage.
 // Consumed by InvoicePreview (as fallback under per-invoice options) and
-// PrintSettings.js (as the UI form state).
+// PrintSettings.jsx (as the UI form state).
 // ============================================================================
 
 export const DEFAULT_PRINT_SETTINGS = {
@@ -131,7 +131,7 @@ export const DEFAULT_PRINT_SETTINGS = {
 
   // -- PDF template style. Accepts 5 values but only 3 physical render
   // paths exist: `corporate` → classic + CSS class variant,
-  // `minimalist` → minimal + CSS class variant. See InvoicePreview.js
+  // `minimalist` → minimal + CSS class variant. See InvoicePreview.jsx
   // `pdfStyleRaw` mapping (audit L8 comment fix). --
   pdfTemplate: 'modern',     // 'modern' | 'classic' | 'minimal' | 'corporate' | 'minimalist'
 
@@ -187,7 +187,7 @@ export const DEFAULT_PRINT_SETTINGS = {
   // v1.10.36 — Removed labelShipTo / labelAuthorizedSignatory /
   // labelSubtotal / labelTotal / labelInvoice. All five were declared
   // as overridable label fields, but grep-verified they were never
-  // consumed — InvoicePreview.js calls getLabel() only for billTo,
+  // consumed — InvoicePreview.jsx calls getLabel() only for billTo,
   // placeOfSupply, amountInWords, bankDetails, terms, notes. The
   // dead ones just added noise to every localStorage payload and
   // gave users controls that did nothing when they tried to rename.
@@ -247,6 +247,7 @@ export const DEFAULT_PRINT_SETTINGS = {
     'composition': '',      // default 'COMP'
     'credit-note': '',      // default 'CN'
     'delivery-challan': '', // default 'DC'
+    'sales-order': '',      // default 'SO' (v1.10.85)
   },
 
   // v1.10.11 — Compact upper-header mode. Reduces the padding + spacing
@@ -308,6 +309,19 @@ export function getPrintSettings() {
     return { ...DEFAULT_PRINT_SETTINGS };
   }
 }
+
+// v1.10.86 - (#194) the brand colour for jsPDF reports (statement PDFs), as
+// [r, g, b]; the default blue when custom colours are off.
+export function pdfAccentRGB() {
+  const ps = getPrintSettings();
+  const hex = String(ps.pdfAccent || '').replace('#', '');
+  if (ps.userColorsEnabled && /^[0-9a-f]{6}$/i.test(hex)) return [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  return [30, 64, 175];
+}
+
+// v1.10.86 - fired when print settings change outside Print & PDF (Settings →
+// Company → Business type), so the open Print & PDF panel reloads them.
+export const PRINT_SETTINGS_EVENT = 'fgsb:print-settings';
 
 export function savePrintSettings(settings) {
   try {

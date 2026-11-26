@@ -1,4 +1,5 @@
-import { useState, useEffect, h, Fragment } from '../vanilla/dom.js';
+import { h, Fragment } from '../vanilla/dom.js';
+import { useState, useEffect } from '../vanilla/dom.js';
 import { RefreshCw, Plus, Edit3, Trash2, Play, Pause, X, Save } from '../vanilla/icons.js';
 import { getAllRecurring, saveRecurring, deleteRecurring, getAllClients, getProfile, generateRecurringNow } from '../store.js';
 import { formatCurrency, INVOICE_TYPES, belongsToProfile, isUnassignedToBusiness, templateTotals, localToday, toLocalIsoDate, parseLocalDate } from '../utils.js';
@@ -6,6 +7,7 @@ import UnassignedBanner from './UnassignedBanner.js';
 import { toast } from './Toast.js';
 import { confirmAction } from './ConfirmModal.js';
 import HelpButton from './HelpButton.js';
+import PageHeader from './PageHeader.js';
 const FREQUENCIES = [
     { value: 'weekly', label: 'Weekly' },
     { value: 'monthly', label: 'Monthly' },
@@ -214,16 +216,9 @@ export default function RecurringInvoices() {
     };
     const dueTemplates = getDueTemplates();
     return (h("div", { className: "dashboard-container" },
-        h("div", { className: "page-header" },
-            h("div", { style: { display: 'flex', alignItems: 'center', gap: 6 } },
-                h("div", null,
-                    h("h1", { className: "page-title" },
-                        "Recurring Invoices ",
-                        h(HelpButton, { title: "Recurring invoices \u2014 how to use", doc: "recurring", size: 16 })),
-                    h("p", { className: "page-subtitle" }, "Auto-generate invoices for retainer clients"))),
-            h("button", { className: "btn btn-primary", onClick: openAdd },
+        h(PageHeader, { title: "Recurring Invoices", help: { title: 'Recurring invoices — how to use', doc: 'recurring' }, subtitle: "Auto-generate invoices for retainer clients", primary: h("button", { className: "btn btn-primary", onClick: openAdd },
                 h(Plus, { size: 18 }),
-                " New Template")),
+                " New Template") }),
         h(UnassignedBanner, { count: unassignedTemplates.length, businessName: ownerProfile?.businessName, noun: "recurring template", onAssign: assignUnassignedTemplates }),
         dueTemplates.length > 0 && (h("div", { className: "glass-panel p-4 mb-6", style: { borderLeft: '4px solid #f59e0b', background: 'var(--warn-bg)', color: 'var(--warn-text)' } },
             h("h4", { style: { marginBottom: '0.5rem', color: 'var(--warn-text)' } },
@@ -239,7 +234,7 @@ export default function RecurringInvoices() {
                 " \u2014 ",
                 FREQUENCIES.find(f => f.value === tpl.frequency)?.label)))))),
         showForm && (h("div", { className: "modal-overlay", onClick: closeForm },
-            h("div", { className: "modal-content", onClick: e => e.stopPropagation(), style: { maxWidth: '680px', maxHeight: '90vh' } },
+            h("div", { className: "modal-content", onClick: e => e.stopPropagation(), style: { maxWidth: '680px', maxHeight: 'calc(90vh / var(--ui-zoom, 1))' } },
                 h("h3", { className: "section-title" },
                     editingId ? 'Edit Template' : 'New Recurring Invoice',
                     h(HelpButton, { title: editingId ? 'Edit Template' : 'New Recurring Invoice', doc: editingId ? 'recurring#edit-template' : 'recurring#template-form', size: 16 })),
@@ -282,7 +277,7 @@ export default function RecurringInvoices() {
                         h("input", { type: "number", min: "1", className: "form-input", value: form.maxOccurrences, placeholder: "e.g. 12", onChange: e => updateField('maxOccurrences', e.target.value) }))),
                     h("div", { className: "form-group" },
                         h("label", { className: "form-label" }, "Invoice Type"),
-                        h("select", { className: "form-input", value: form.invoiceType, onChange: e => updateField('invoiceType', e.target.value) }, Object.entries(INVOICE_TYPES).map(([k, v]) => h("option", { key: k, value: k }, v.label))))),
+                        h("select", { className: "form-input", value: form.invoiceType, onChange: e => updateField('invoiceType', e.target.value) }, Object.entries(INVOICE_TYPES).filter(([k]) => k !== 'sales-order').map(([k, v]) => h("option", { key: k, value: k }, v.label))))),
                 h("h4", { style: { marginTop: '1rem', marginBottom: '0.5rem', fontSize: '0.85rem', fontWeight: 600 } },
                     "Line Items",
                     h(HelpButton, { title: "Line Items", doc: "recurring#line-items", size: 14 })),
@@ -332,7 +327,7 @@ export default function RecurringInvoices() {
                             h("th", null, "Status"),
                             h("th", { className: "col-center" }, "Actions"))),
                     h("tbody", null, templates.map(tpl => {
-                        // The same calculation the browser-local data adapter uses when generating invoices.
+                        // The same calculation the server makes the invoice with.
                         const total = templateTotals(tpl, ownerProfile).total;
                         const isDue = tpl.active !== false && tpl.nextDate && tpl.nextDate <= localToday();
                         return (h("tr", { key: tpl.id, className: isDue ? 'row-warning' : '' },

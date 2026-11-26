@@ -1,9 +1,9 @@
-// v1.10.77 (#84) - Settings panel for the optional PIN lock (see AppLock.js).
-import { useEffect, useState, h, Fragment } from '../vanilla/dom.js';
+import { h, Fragment } from '../vanilla/dom.js';
+// v1.10.77 (#84) - Settings panel for the optional PIN lock (see AppLock.jsx).
+import { useEffect, useState } from '../vanilla/dom.js';
 import { Lock } from '../vanilla/icons.js';
 import { getLockStatus, setLockPin } from '../store.js';
 import { toast } from './Toast.js';
-import HelpButton from './HelpButton.js';
 import { lockNow, UNLOCKED_KEY, lockSettingsChanged } from '../utils/appLock.js';
 const digits = (v, n) => v.replace(/\D/g, '').slice(0, n);
 export default function AppLockSettings() {
@@ -62,14 +62,13 @@ export default function AppLockSettings() {
     return (h("div", null,
         h("h3", { className: "section-title", style: { marginTop: 0, display: 'flex', alignItems: 'center', gap: 8 } },
             h(Lock, { size: 18 }),
-            " App lock (PIN) ",
-            h(HelpButton, { title: "App lock (PIN)", doc: "settings#lock", size: 16 })),
+            " App lock (PIN) "),
         h("p", { style: { fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: 0 } },
             status.enabled
                 ? `On: ${status.length === 8 ? "an" : "a"} ${status.length} digit PIN is asked when the app opens.`
                 : 'Off. Turn it on to ask for a 6 or 8 digit PIN when the app opens, for a PC other people also use.',
             ' ',
-            "It locks the screen only; it does not encrypt your files. Forgot it? Put a file named RESET-PIN in the GST-Billing folder and reload."),
+            "It locks the screen only; it does not encrypt your files. If you forget the PIN, use the Forgot PIN option on the lock screen to remove the PIN without deleting your records."),
         !mode && (h("div", { style: { display: 'flex', gap: '0.5rem', flexWrap: 'wrap' } },
             h("button", { type: "button", className: "btn btn-secondary", onClick: () => setMode('set') }, status.enabled ? 'Change PIN' : 'Turn on PIN lock'),
             status.enabled && h("button", { type: "button", className: "btn btn-secondary", onClick: () => setMode('off') }, "Turn off"),

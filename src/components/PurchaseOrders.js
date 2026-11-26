@@ -1,13 +1,14 @@
+import { h, Fragment } from '../vanilla/dom.js';
 // v1.10.83 (#112) - the Purchase orders tab of Purchases: the list, View, and
 // the PO as a PDF to print or send. The form is the purchase bill form in PO
-// mode (PurchaseBills.js), which owns saving, Convert and Cancel.
-import { useState, h, Fragment } from '../vanilla/dom.js';
+// mode (PurchaseBills.jsx), which owns saving, Convert and Cancel.
+import { useState } from '../vanilla/dom.js';
 import { ClipboardList, Search, X, Eye, Edit3, Copy, Ban, FileText, Download, Printer, MessageCircle, Mail } from '../vanilla/icons.js';
 import ActionsMenu from './ActionsMenu.js';
 import { formatCurrency, splitPurchaseTax, parseLocalDate, numberToWords } from '../utils.js';
-import { purchaseTotals, poStatus, PO_STATUS_LABELS } from '../utils/purchaseOrders.js';
+import { purchaseTotals, poStatus, PO_STATUS_LABELS, purchaseLineTax } from '../utils/purchaseOrders.js';
 import { getPrintSettings } from '../utils/printSettings.js';
-import { openWhatsAppShare } from '../utils/share.js';
+import { sendPdfOnWhatsApp } from '../utils/share.js';
 import { toast } from './Toast.js';
 import HelpButton from './HelpButton.js';
 const STATUS_COLORS = {
@@ -18,7 +19,8 @@ const STATUS_COLORS = {
 };
 const showDate = (d) => (d ? parseLocalDate(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '');
 const fmt = (n) => (Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const lineAmount = (it) => (Number(it.quantity) || 0) * (Number(it.rate) || 0);
+// v1.10.85 (#171) - after any line discount.
+const lineAmount = (it) => purchaseLineTax({ ...it, quantity: Number(it.quantity) || 0, rate: Number(it.rate) || 0 }).amount;
 // Same accent colour the purchase bill PDF uses.
 function accentRGB(ps) {
     const hex = String(ps?.userColorsEnabled ? ps.pdfAccent || '' : '').replace('#', '');
@@ -239,19 +241,12 @@ export default function PurchaseOrders({ orders, purchases, ownerProfile, onNew,
             toast('Could not make the PDF', 'error');
         }
     };
-    // On a phone that can share files, the PDF goes along; otherwise the text.
-    const shareWhatsApp = async (po) => {
-        const text = poMessage(po, ownerProfile);
-        try {
-            const file = new File([(await buildPoPdf(po, ownerProfile)).output('blob')], pdfName(po), { type: 'application/pdf' });
-            if (navigator.canShare?.({ files: [file] }) && /Android|iPhone|iPad/i.test(navigator.userAgent)) {
-                await navigator.share({ files: [file], text: text.replace(/\*/g, '') });
-                return;
-            }
-        }
-        catch { /* fall back to the text */ }
-        openWhatsAppShare('', text);
-    };
+    // v1.10.86 - the PDF goes along: the Share sheet on a phone, copied for
+    // Ctrl+V in the chat on the PC (utils/share.js sendPdfOnWhatsApp).
+    const shareWhatsApp = (po) => sendPdfOnWhatsApp({
+        phone: '', toast,
+        prepare: async () => ({ blob: (await buildPoPdf(po, ownerProfile)).output('blob'), fileName: pdfName(po), message: poMessage(po, ownerProfile) }),
+    });
     const shareEmail = (po) => {
         const subject = `Purchase order ${po.poNumber}${ownerProfile?.businessName ? ` from ${ownerProfile.businessName}` : ''}`;
         const body = `Dear ${po.supplierName || 'Sir/Madam'},\n\nPlease supply the following.\n\n${poMessage(po, ownerProfile).replace(/\*/g, '')}\n\nRegards`;

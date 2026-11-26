@@ -1,7 +1,8 @@
+import { h, Fragment } from '../vanilla/dom.js';
 // v1.10.83 (#111) - e-invoicing screens: the per-invoice panel in the editor
 // (download the JSON, paste the IRN back) and the list of problems / import
 // results shown after a bulk export or an IRN import on the Dashboard.
-import { useState, h, Fragment } from '../vanilla/dom.js';
+import { useState } from '../vanilla/dom.js';
 import { FileText, X } from '../vanilla/icons.js';
 import { buildEInvoice, einvoiceFromInput, downloadJson, einvoiceFileName } from '../utils/einvoice.js';
 import HelpButton from './HelpButton.js';

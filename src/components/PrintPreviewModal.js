@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState, h, Fragment } from '../vanilla/dom.js';
+import { h, Fragment } from '../vanilla/dom.js';
+import { useCallback, useEffect, useRef, useState } from '../vanilla/dom.js';
 import { X, Printer, Download, Loader, ZoomIn, ZoomOut } from '../vanilla/icons.js';
 import InvoicePreview from './InvoicePreview.js';
 import HelpButton from './HelpButton.js';
@@ -23,7 +24,7 @@ import { getPaperSize } from '../utils.js';
 //
 // So: the modal is what the user LOOKS at, and the parent's existing
 // on-screen preview is what the printer receives. Since both are
-// rendered by the same same view component with the same props, the pixels
+// rendered by the same React component with the same props, the pixels
 // are the same. No CSS drift risk.
 export default function PrintPreviewModal({ isOpen, onClose, onPrint, onDownloadPdf, profile, client, details, items, totals, invoiceType, customTerms, customNotes, extraSections, invoiceOptions, cancelled = false, einvoice = null, }) {
     const [printing, setPrinting] = useState(false);
@@ -70,7 +71,7 @@ export default function PrintPreviewModal({ isOpen, onClose, onPrint, onDownload
             // appear over a clean editor view instead of layered over our
             // modal.
             onClose?.();
-            // Small tick so the view updates the close before onPrint kicks off
+            // Small tick so React commits the close before onPrint kicks off
             // its own layout / html2canvas work.
             await new Promise(r => requestAnimationFrame(() => setTimeout(r, 20)));
             await onPrint?.();
@@ -105,8 +106,8 @@ export default function PrintPreviewModal({ isOpen, onClose, onPrint, onDownload
     return (h("div", { className: "modal-overlay print-preview-overlay", role: "dialog", "aria-modal": "true", "aria-labelledby": "print-preview-title", onClick: (e) => { if (e.target === e.currentTarget && !printing)
             onClose(); }, style: { zIndex: 10001 } },
         h("div", { ref: modalRef, className: "modal-content print-preview-content", onClick: (e) => e.stopPropagation(), style: {
-                maxWidth: isThermal ? 'min(520px, 96vw)' : 'min(900px, 96vw)',
-                maxHeight: 'min(92vh, 92dvh)',
+                maxWidth: isThermal ? 'min(520px, calc(96vw / var(--ui-zoom, 1)))' : 'min(900px, calc(96vw / var(--ui-zoom, 1)))',
+                maxHeight: 'calc(min(92vh, 92dvh) / var(--ui-zoom, 1))',
                 padding: 0,
                 display: 'flex', flexDirection: 'column',
                 overflow: 'hidden',

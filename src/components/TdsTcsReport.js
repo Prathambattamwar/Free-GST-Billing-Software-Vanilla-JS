@@ -1,8 +1,9 @@
+import { h, Fragment } from '../vanilla/dom.js';
 // v1.10.83 - Reports › TDS & TCS: TDS your clients deducted from your sales
 // (with a "certificate received" tick to reconcile with Form 26AS / AIS), TCS
 // you collected, and TDS you deducted from suppliers on purchase bills. The
 // sums are in utils/tdsTcs.js.
-import { useState, useEffect, h, Fragment } from '../vanilla/dom.js';
+import { useState, useEffect } from '../vanilla/dom.js';
 import { getAllPurchases, getProfile, saveBill } from '../store.js';
 import { formatCurrency, getFYOptions, belongsToProfile } from '../utils.js';
 import { salesTaxRows, purchaseTdsRows, totalsBy, fyQuarterRange } from '../utils/tdsTcs.js';

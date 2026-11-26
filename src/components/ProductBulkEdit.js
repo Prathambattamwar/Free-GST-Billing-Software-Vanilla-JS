@@ -1,9 +1,10 @@
+import { h, Fragment } from '../vanilla/dom.js';
 // v1.10.77 (#85) - edit many products at once: the list becomes a grid of
 // inputs (name, HSN/SAC, purchase price, selling price, GST %, unit, stock),
 // and one Save writes only the rows that changed. Same rules as the single
 // product form (a name is required; GST % 0-100; selling price is mirrored to
 // `rate` for older readers).
-import { useMemo, useState, h, Fragment } from '../vanilla/dom.js';
+import { useMemo, useState } from '../vanilla/dom.js';
 import { Save, X } from '../vanilla/icons.js';
 import { getAllProducts, saveProduct } from '../store.js';
 import { toast } from './Toast.js';

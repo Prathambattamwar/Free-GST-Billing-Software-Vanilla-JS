@@ -14,9 +14,13 @@ import { h, Fragment } from '../vanilla/dom.js';
 // PDF page breaks: buildPDF only ends a page on an element edge it knows about.
 // Every block and every table row here carries data-pdf-page-boundary, so a
 // page can end between rows or blocks but never cuts through one.
-import { filledOrderDetails, getStateCode, printedSubtotal, roundQty } from '../utils.js';
+import React from '../vanilla/dom.js';
+import { filledOrderDetails, getStateCode, printedSubtotal, roundQty, sectionPrint } from '../utils.js';
 import SignatureImages from './SignatureImages.js';
 import { purposeCodeText } from '../utils/purposeCodes.js';
+import { sizeLabel, sizePieces, lineSqft, sizeHasDims } from '../utils/glass.js';
+// #140 - the size of a glass / mirror line, under its name in the grid designs.
+const sizeLine = (item) => `Size ${sizeLabel(item.size)} in, ${sizePieces(item)} pcs = ${lineSqft(item).toFixed(2)} sq.ft`;
 const LINE = '#1f2937';
 const B = `1px solid ${LINE}`;
 const cell = { border: B, padding: '4px 6px', verticalAlign: 'top' };
@@ -72,7 +76,7 @@ function taxRows(ctx) {
     if (totals.cess > 0)
         rows.push(['Cess', totals.cess]);
     if (totals.tcsAmount > 0)
-        rows.push([`TCS${options.tcsSection ? ` (${options.tcsSection} @ ${options.tcsRate}%)` : ''}`, totals.tcsAmount]);
+        rows.push([`TCS${sectionPrint(options.tcsSection, options.tcsRate)}`, totals.tcsAmount]);
     if (totals.invoiceDiscountAmount > 0)
         rows.push(['Less : Discount on total', -totals.invoiceDiscountAmount]);
     if (totals.roundOff)
@@ -234,6 +238,7 @@ function TallyLayout({ ctx }) {
         t.dueDate && details?.dueDate && ['Due Date', ctx.shortDate(details.dueDate)],
         ctx.showReverseChargeLine && ['Reverse Charge', ctx.reverseChargeText],
         t.placeOfSupply && ctx.placeOfSupply && ['Place of Supply', stateWithCode(ctx.placeOfSupply)],
+        ...filledOrderDetails(details).filter((f) => f.custom).map((f) => [f.label, f.value]), // #126
     ].filter(Boolean);
     const refCell = (k, v) => (h("td", { style: { ...cell, width: '25%', height: 34 } },
         h("div", { style: small }, k),
@@ -245,7 +250,8 @@ function TallyLayout({ ctx }) {
     // Sl No + Description + Amount, plus the optional columns.
     // v1.10.83 - the "per" (unit) column goes with the unit option.
     const perCol = t.rate && t.itemUnit;
-    const colCount = 3 + (t.hsn ? 1 : 0) + (t.itemQty ? 1 : 0) + (t.rate ? 1 : 0) + (perCol ? 1 : 0) + (ctx.hasAnyDiscount ? 1 : 0);
+    // v1.10.86 - (#189, #192) MRP column (Customize), off unless chosen.
+    const colCount = 3 + (t.hsn ? 1 : 0) + (t.itemQty ? 1 : 0) + (t.mrp ? 1 : 0) + (t.rate ? 1 : 0) + (perCol ? 1 : 0) + (ctx.hasAnyDiscount ? 1 : 0);
     const spacer = Math.max(0, 260 - items.length * 26 - rows.length * 20);
     return (h("div", { className: "grid-inv grid-inv-tally", style: { padding: '7mm 8mm', color: '#111827', fontSize: '0.78rem', lineHeight: 1.35 } },
         h("div", { ...blockProps, style: { textAlign: 'center', fontWeight: 800, fontSize: '1.15rem', marginBottom: 4 } }, invoiceTitle),
@@ -292,6 +298,7 @@ function TallyLayout({ ctx }) {
                         ctx.isServices ? 'Services' : 'Goods'),
                     t.hsn && h("th", { style: th }, ctx.isServices ? 'SAC' : 'HSN/SAC'),
                     t.itemQty && h("th", { style: th }, "Quantity"),
+                    t.mrp && h("th", { style: th }, "MRP"),
                     t.rate && h("th", { style: th }, "Rate"),
                     perCol && h("th", { style: th }, "per"),
                     ctx.hasAnyDiscount && h("th", { style: th }, "Disc."),
@@ -301,17 +308,17 @@ function TallyLayout({ ctx }) {
                     const l = lineCalc(item);
                     return (h("tr", { key: item.id || i },
                         h("td", { style: { ...vc, ...center } }, i + 1),
-                        h("td", { style: vc },
+                        h("td", { className: "grid-desc", style: vc },
                             h("strong", null, item.name || '-'),
-                            item.description && h("div", { style: { ...small, whiteSpace: 'pre-wrap' } }, item.description)),
+                            item.description && h("div", { style: { ...small, whiteSpace: 'pre-wrap' } }, item.description),
+                            item.size && sizeHasDims(item.size) && h("div", { style: small }, sizeLine(item))),
                         t.hsn && h("td", { style: { ...vc, ...center } }, item.hsn || ''),
                         t.itemQty && h("td", { style: { ...vc, ...right } },
-                            h("strong", null,
-                                item.quantity,
-                                t.itemUnit && item.unit ? ` ${item.unit}` : '')),
-                        t.rate && h("td", { style: { ...vc, ...right } }, num(item.rate)),
+                            h("strong", null, item.unit === 'NA' ? '-' : `${item.quantity}${t.itemUnit && item.unit ? ` ${item.unit}` : ''}`)),
+                        t.mrp && h("td", { style: { ...vc, ...right } }, Number(item.mrp) > 0 ? num(Number(item.mrp)) : ''),
+                        t.rate && h("td", { style: { ...vc, ...right } }, num(l.shownRate)),
                         perCol && h("td", { style: { ...vc, ...center } }, item.unit || ''),
-                        ctx.hasAnyDiscount && h("td", { style: { ...vc, ...right } }, l.discount > 0 ? num(l.discount) : ''),
+                        ctx.hasAnyDiscount && h("td", { style: { ...vc, ...right } }, l.discount > 0 ? num(l.shownDiscount) : ''),
                         h("td", { style: { ...vc, ...right } },
                             h("strong", null, num(l.taxable)))));
                 }),
@@ -331,6 +338,7 @@ function TallyLayout({ ctx }) {
                     h("td", { style: { ...cell, ...right } }, "Total"),
                     t.hsn && h("td", { style: cell }),
                     t.itemQty && h("td", { style: { ...cell, ...right } }, showQtyTotal ? `${totalQty}${t.itemUnit && units[0] ? ` ${units[0]}` : ''}` : ''),
+                    t.mrp && h("td", { style: cell }),
                     t.rate && h("td", { style: cell }),
                     perCol && h("td", { style: cell }),
                     ctx.hasAnyDiscount && h("td", { style: cell }),
@@ -342,7 +350,7 @@ function TallyLayout({ ctx }) {
             h("div", { style: { fontStyle: 'italic', whiteSpace: 'nowrap' } }, "E. & O.E")),
         totals.tdsAmount > 0 && (h("div", { ...blockProps, style: { ...cell, borderTop: 'none', ...small } },
             "Less: TDS",
-            ctx.options.tdsSection ? ` (${ctx.options.tdsSection} @ ${ctx.options.tdsRate}%)` : '',
+            sectionPrint(ctx.options.tdsSection, ctx.options.tdsRate),
             " ",
             fmt(totals.tdsAmount),
             " \u00B7 Net Receivable ",
@@ -390,7 +398,7 @@ function BoxedLayout({ ctx }) {
     const filler = Math.max(0, BOXED_MIN_ROWS - items.length);
     // v1.10.83 - the UNIT column goes with the unit option.
     const unitCol = t.itemQty && t.itemUnit;
-    const colCount = 3 + (t.hsn ? 1 : 0) + (t.itemQty ? 1 : 0) + (unitCol ? 1 : 0) + (t.rate ? 1 : 0) + (ctx.hasAnyDiscount ? 1 : 0);
+    const colCount = 3 + (t.hsn ? 1 : 0) + (t.itemQty ? 1 : 0) + (unitCol ? 1 : 0) + (t.mrp ? 1 : 0) + (t.rate ? 1 : 0) + (ctx.hasAnyDiscount ? 1 : 0);
     const shipTo = ctx.shipTo;
     return (h("div", { className: "grid-inv grid-inv-boxed", style: { padding: '7mm 8mm', color: '#111827', fontSize: '0.8rem', lineHeight: 1.35 } },
         h("div", { style: { border: B } },
@@ -436,6 +444,7 @@ function BoxedLayout({ ctx }) {
                         t.hsn && h("th", { style: th }, ctx.isServices ? 'SAC' : 'HSN/SAC'),
                         unitCol && h("th", { style: th }, "UNIT"),
                         t.itemQty && h("th", { style: th }, "QTY"),
+                        t.mrp && h("th", { style: th }, "MRP"),
                         t.rate && h("th", { style: th }, "Rate"),
                         ctx.hasAnyDiscount && h("th", { style: th }, "Disc."),
                         h("th", { style: { ...th, borderRight: 'none' } }, "Amount"))),
@@ -444,14 +453,16 @@ function BoxedLayout({ ctx }) {
                         const l = lineCalc(item);
                         return (h("tr", { key: item.id || i },
                             h("td", { style: { ...cell, ...center, borderLeft: 'none' } }, i + 1),
-                            h("td", { style: cell },
+                            h("td", { className: "grid-desc", style: cell },
                                 item.name || '-',
-                                item.description && h("div", { style: { ...small, whiteSpace: 'pre-wrap' } }, item.description)),
+                                item.description && h("div", { style: { ...small, whiteSpace: 'pre-wrap' } }, item.description),
+                                item.size && sizeHasDims(item.size) && h("div", { style: small }, sizeLine(item))),
                             t.hsn && h("td", { style: { ...cell, ...center } }, item.hsn || ''),
                             unitCol && h("td", { style: { ...cell, ...center } }, item.unit || ''),
-                            t.itemQty && h("td", { style: { ...cell, ...center } }, item.quantity),
-                            t.rate && h("td", { style: { ...cell, ...right } }, num(item.rate)),
-                            ctx.hasAnyDiscount && h("td", { style: { ...cell, ...right } }, l.discount > 0 ? num(l.discount) : ''),
+                            t.itemQty && h("td", { style: { ...cell, ...center } }, item.unit === 'NA' ? '-' : item.quantity),
+                            t.mrp && h("td", { style: { ...cell, ...right } }, Number(item.mrp) > 0 ? num(Number(item.mrp)) : ''),
+                            t.rate && h("td", { style: { ...cell, ...right } }, num(l.shownRate)),
+                            ctx.hasAnyDiscount && h("td", { style: { ...cell, ...right } }, l.discount > 0 ? num(l.shownDiscount) : ''),
                             h("td", { style: { ...cell, ...right, borderRight: 'none' } }, num(l.taxable))));
                     }),
                     Array.from({ length: filler }, (_, i) => (h("tr", { key: `fill-${i}`, "data-pdf-spacer": "row" }, Array.from({ length: colCount }, (__, c) => (h("td", { key: c, style: { ...cell, height: 26, ...(c === 0 ? { borderLeft: 'none' } : {}), ...(c === colCount - 1 ? { borderRight: 'none' } : {}) } })))))))),

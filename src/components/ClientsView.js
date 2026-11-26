@@ -1,12 +1,24 @@
-import { useState, useEffect, useMemo, h, Fragment } from '../vanilla/dom.js';
-import { Users, Search, FileText, ChevronDown, ChevronUp, Trash2, X, MessageCircle, Mail, Plus, Edit3, Copy, Upload, Download } from '../vanilla/icons.js';
+import { h, Fragment } from '../vanilla/dom.js';
+import { useState, useEffect, useMemo } from '../vanilla/dom.js';
+import { Users, Search, FileText, ChevronDown, ChevronUp, Trash2, X, MessageCircle, Mail, Plus, Edit3, Copy, Upload, Download, Eye, IndianRupee, Send, UserPlus } from '../vanilla/icons.js';
 import HelpButton from './HelpButton.js';
-import { getAllClients, getAllBills, deleteClient, saveClient, deleteBill, saveBill, getProfile, deleteReceipt, applyStockChanges, trashSavedPdf } from '../store.js';
-import { formatCurrency, INVOICE_TYPES, markPaidPatch, markUnpaidPatch, salesSign, countsAsSales, isCancelledBill, amountDue, localToday, parseLocalDate, appliedStock, stockDelta } from '../utils.js';
+import PageHeader, { BarButton } from './PageHeader.js';
+import { getAllClients, getAllBills, deleteClient, saveClient, saveBill, getProfile, deleteReceipt, trashBill, getAllReceipts } from '../store.js';
+import { formatCurrency, INVOICE_TYPES, markPaidPatch, markUnpaidPatch, salesSign, countsAsSales, isCancelledBill, amountDue, localToday, parseLocalDate, belongsToProfile, businessKeyOf } from '../utils.js';
 import { getPrintSettings } from '../utils/printSettings.js';
-import { openWhatsAppShare } from '../utils/share.js';
+import { sendPdfOnWhatsApp, invoiceShareMessage, openWhatsAppShare } from '../utils/share.js';
+import { billPdfBlob, billPdfName } from '../utils/billPdf.js';
 import { confirmAction } from './ConfirmModal.js';
+import { askPaidMode } from './askPaidMode.js';
+import { billInInr, baseCurrencyOf } from '../utils/fx.js';
 import { toast } from './Toast.js';
+import { clientVisits } from '../utils/phoneClients.js';
+// v1.10.85 (#157, #148) - PDF preview, payment history, items, credit limit.
+import { clientPaymentHistory, latestPaymentDate, statementItems, itemLabel, clientAccount, statementShareMessage, agingShareMessage, balanceReminderMessage, clientKey, openingDue } from '../utils/clientLedger.js';
+import PdfPreviewModal from './PdfPreviewModal.js';
+import ClientPaymentHistory from './ClientPaymentHistory.js';
+import ActionsMenu from './ActionsMenu.js';
+import PrintPreviewModal from './PrintPreviewModal.js';
 // v1.10.31 — UI-C3: Shared helper to resolve the user's accent color as an
 // RGB tuple usable with jsPDF setFillColor / setDrawColor. Falls back to the
 // legacy blue (#1e40af = rgb(30, 64, 175)) when the user hasn't customised.
@@ -26,6 +38,15 @@ function getAccentRGB() {
 import ClientModal from './ClientModal.js';
 import CsvListImport from './CsvListImport.js';
 import { clientsCsvToList, CLIENTS_SAMPLE } from '../utils/listCsv.js';
+// v1.10.86 - the client cards' "Sort by", remembered in this browser.
+import { useListSort, sortRows } from '../utils/listPrefs.js';
+// [value, label, sort]; the first (no sort) is the usual order: most owed first.
+const CLIENT_SORTS = [
+    ['', 'Most owed first', null],
+    ['name', 'Name (A-Z)', { key: 'name', dir: 'asc' }],
+    ['billed', 'Most billed first', { key: 'billed', dir: 'desc' }],
+    ['recent', 'Latest invoice first', { key: 'recent', dir: 'desc' }],
+];
 const STATUS_COLORS = {
     unpaid: { label: 'Unpaid', color: '#f59e0b', bg: '#fffbeb' },
     partial: { label: 'Partial', color: '#8b5cf6', bg: '#f5f3ff' },
@@ -35,7 +56,7 @@ const STATUS_COLORS = {
     // Dashboard, which also puts the stock back.
     cancelled: { label: 'Cancelled', color: '#64748b', bg: '#f1f5f9' },
 };
-export default function ClientsView({ onEdit, onDuplicate, onNew }) {
+export default function ClientsView({ onEdit, onDuplicate, onNew, onPrint, onNewFor, onRecordPayment }) {
     const [clients, setClients] = useState([]);
     const [bills, setBills] = useState([]);
     const [search, setSearch] = useState('');
@@ -44,15 +65,30 @@ export default function ClientsView({ onEdit, onDuplicate, onNew }) {
     const [modalClient, setModalClient] = useState(null);
     const [editingClientId, setEditingClientId] = useState(null);
     const [profileCountry, setProfileCountry] = useState('');
+    // v1.10.85 (#157) - receipts (for the payment history), the PDF being
+    // previewed, and "Show items" on the statement (#148 item 6, off by default).
+    const [receipts, setReceipts] = useState([]);
+    const [pdfPreview, setPdfPreview] = useState(null);
+    const [showItems, setShowItems] = useState(false);
+    // v1.10.86 - View on an invoice row: the invoice as it prints (as on the Dashboard).
+    const [viewBill, setViewBill] = useState(null);
+    // v1.10.86 (#202) - a saved client by the name key (case and spaces do not
+    // count), so "abc traders" on a bill is the saved "ABC Traders".
+    const savedByKey = useMemo(() => new Map(clients.map((c) => [clientKey(c.name), c])), [clients]);
+    const savedFor = (name) => savedByKey.get(clientKey(name));
     useEffect(() => {
         getProfile().then(p => { if (p?.country)
             setProfileCountry(p.country); }).catch(() => { });
     }, []);
     const loadData = async () => {
         try {
-            const [c, b] = await Promise.all([getAllClients(), getAllBills()]);
+            const [c, b, prof] = await Promise.all([getAllClients(), getAllBills(), getProfile().catch(() => null)]);
             setClients(c);
-            setBills(b);
+            // v1.10.85 - the business you are working in only (as the Dashboard and
+            // Receipts): the card's Outstanding, the credit-limit mark, the
+            // statements and the payment history all agree. Clients stay shared.
+            setBills((b || []).filter((x) => belongsToProfile(x, prof)));
+            getAllReceipts().then((r) => setReceipts((r || []).filter((x) => belongsToProfile(x, prof)))).catch(() => { });
         }
         catch {
             toast('Failed to load data', 'error');
@@ -70,16 +106,17 @@ export default function ClientsView({ onEdit, onDuplicate, onNew }) {
     useEffect(() => {
         getProfile().then(setProfileForStatement).catch(() => { });
     }, []);
-    const generateClientStatement = async (clientName) => {
+    const generateClientStatement = async (clientName, { showItems: withItems = false } = {}) => {
         const clientBills = getClientBills(clientName);
-        if (clientBills.length === 0) {
+        // v1.10.86 (#214) - an opening balance alone makes a statement.
+        if (clientBills.length === 0 && !getClientStats(clientName).opening?.opening) {
             toast('No invoices for this client', 'warning');
             return;
         }
         try {
             const { jsPDF } = await import('jspdf');
             const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-            const savedClient = clients.find(c => c.name === clientName) || { name: clientName };
+            const savedClient = savedFor(clientName) || { name: clientName };
             const stats = getClientStats(clientName);
             const pageW = 210, marginL = 15, marginR = 195, tableW = marginR - marginL; // = 180
             // Helvetica core font can't render Rupee symbol properly — use "Rs." plaintext.
@@ -221,11 +258,22 @@ export default function ClientsView({ onEdit, onDuplicate, onNew }) {
             doc.setTextColor(0);
             y += 11;
             // Opening balance row — italic + muted, above the first real row.
+            // v1.10.86 (#214) - the client's opening balance on its "as on" date
+            // (owed to you: Debit; their advance: Credit), then what they paid
+            // against it on the Receipts page.
+            const opening = stats.opening || { opening: 0, received: 0, date: '' };
+            const drCr = (n) => fmt(Math.abs(n)) + (n > 0.01 ? ' Dr' : n < -0.01 ? ' Cr' : '');
             doc.setFontSize(8.5);
             doc.setFont('helvetica', 'italic');
             doc.setTextColor(80);
+            if (opening.opening && opening.date)
+                doc.text(parseLocalDate(opening.date).toLocaleDateString('en-IN'), marginL + 2, y);
             doc.text('Opening Balance', col.dateEnd + 2, y);
-            doc.text(fmt(0), col.balanceEnd, y, { align: 'right' });
+            if (opening.opening > 0)
+                doc.text(fmt(opening.opening), col.debitEnd, y, { align: 'right' });
+            if (opening.opening < 0)
+                doc.text(fmt(-opening.opening), col.creditEnd, y, { align: 'right' });
+            doc.text(drCr(opening.opening), col.balanceEnd, y, { align: 'right' });
             // v1.10.35 — thin separator so the opening line reads as a
             // distinct baseline, not as a squished header extension.
             doc.setDrawColor(226, 232, 240);
@@ -234,8 +282,18 @@ export default function ClientsView({ onEdit, onDuplicate, onNew }) {
             doc.setTextColor(15, 23, 42);
             doc.setFont('helvetica', 'normal');
             y += 7;
+            if (opening.received > 0.005) {
+                doc.setFont('helvetica', 'italic');
+                doc.setTextColor(80);
+                doc.text('   Received against opening balance', col.dateEnd + 2, y);
+                doc.text(fmt(opening.received), col.creditEnd, y, { align: 'right' });
+                doc.text(drCr(opening.opening - opening.received), col.balanceEnd, y, { align: 'right' });
+                doc.setTextColor(15, 23, 42);
+                doc.setFont('helvetica', 'normal');
+                y += 7;
+            }
             // Rows
-            let runningBalance = 0;
+            let runningBalance = opening.opening - opening.received;
             // Sales and credit notes only, as in the summary above: quotations,
             // proformas, challans and cancelled invoices are not owed, and listing
             // them as debits gave a closing balance that disagreed with the summary.
@@ -337,6 +395,26 @@ export default function ClientsView({ onEdit, onDuplicate, onNew }) {
                 doc.setTextColor(15, 23, 42);
                 doc.setFont('helvetica', 'normal');
                 y += rowH;
+                // v1.10.85 (#148 item 6) - "Show items": the invoice's items under it,
+                // name x qty and the line amount, small and grey (no Dr / Cr).
+                if (withItems) {
+                    for (const it of statementItems(bill)) {
+                        if (y > 268) {
+                            doc.addPage();
+                            y = 20;
+                            drawHeader();
+                        }
+                        doc.setFont('helvetica', 'normal');
+                        doc.setFontSize(7.5);
+                        doc.setTextColor(100);
+                        const label = doc.splitTextToSize(itemLabel(it), col.particEnd - col.dateEnd - 28)[0] || '';
+                        doc.text(label, col.dateEnd + 5, y - 1.5);
+                        doc.text(fmt(it.amount), col.particEnd, y - 1.5, { align: 'right' });
+                        y += 4.5;
+                    }
+                    doc.setFontSize(8.5);
+                    doc.setTextColor(15, 23, 42);
+                }
                 // Add a follow-on row for the payment if any
                 if (paid > 0.01 && !isCreditNote) {
                     if (y > 265) {
@@ -434,8 +512,13 @@ export default function ClientsView({ onEdit, onDuplicate, onNew }) {
             doc.setTextColor(120);
             doc.text('Please review and confirm within 7 days. This is a computer-generated statement — no signature required.', pageW / 2, 285, { align: 'center' });
             doc.text('Generated by GST Billing Software', pageW / 2, 290, { align: 'center' });
-            doc.save(`statement-${clientName.replace(/[^\w]+/g, '-')}-${localToday()}.pdf`);
-            toast('Statement PDF generated', 'success');
+            // v1.10.85 (#157) - shown first; Download, Print, WhatsApp and Email from the preview.
+            setPdfPreview({
+                doc, fileName: `statement-${clientName.replace(/[^\w]+/g, '-')}-${localToday()}.pdf`,
+                title: `Statement: ${clientName}`, subject: `Statement of account - ${clientName}`,
+                message: statementShareMessage(clientName, stats, profileForStatement),
+                phone: savedClient.phone, email: savedClient.email,
+            });
         }
         catch (e) {
             toast('Could not generate statement PDF', 'error');
@@ -462,7 +545,7 @@ export default function ClientsView({ onEdit, onDuplicate, onNew }) {
     const billsByClient = useMemo(() => {
         const map = new Map();
         for (const b of bills) {
-            const key = (b.clientName || '').toLowerCase();
+            const key = clientKey(b.clientName);
             let arr = map.get(key);
             if (!arr) {
                 arr = [];
@@ -477,13 +560,20 @@ export default function ClientsView({ onEdit, onDuplicate, onNew }) {
     }, [bills]);
     const statsByClient = useMemo(() => {
         const map = new Map();
-        for (const [key, cBills] of billsByClient) {
+        const base = baseCurrencyOf(profileForStatement);
+        // v1.10.86 (#214) - saved clients with no bills too: an opening balance
+        // alone is money owed.
+        const keys = new Set([...billsByClient.keys(), ...savedByKey.keys()]);
+        for (const key of keys) {
+            const cBills = billsByClient.get(key) || [];
+            // v1.10.85 - in the business's currency, each invoice at the rate saved
+            // on it (a USD client's totals were summed in dollars but shown in ₹);
+            // one with no rate is left out, as in Outstanding.
+            const inBase = cBills.map((b) => billInInr(b, base)).filter(Boolean);
             // v1.10.74 - only real sales count; credit notes subtract; quotes,
             // challans, proformas and cancelled bills count for nothing.
-            const total = cBills.reduce((s, b) => s + salesSign(b) * (b.totalAmount || 0), 0);
-            // TDS clients deduct on sales: not paid to us, not owed either.
-            const tds = cBills.reduce((s, b) => s + (salesSign(b) === 1 ? (Number(b.totalAmount) || 0) - amountDue(b) : 0), 0);
-            const paid = cBills.reduce((s, b) => {
+            const total = inBase.reduce((s, b) => s + salesSign(b) * (b.totalAmount || 0), 0);
+            const paid = inBase.reduce((s, b) => {
                 if (salesSign(b) !== 1)
                     return s;
                 const fromPayments = (b.payments || []).reduce((ps, p) => ps + (Number(p.amount) || 0), 0);
@@ -495,14 +585,21 @@ export default function ClientsView({ onEdit, onDuplicate, onNew }) {
                     return s + (b.totalAmount || 0);
                 return s;
             }, 0);
+            // v1.10.85 - Outstanding is what they owe less their credit
+            // (overpayments), in the business's currency (another currency at each
+            // invoice's saved rate): the same figure the credit limit is checked on.
+            // v1.10.86 (#214) - with what is left of their opening balance.
+            const saved = savedByKey.get(key);
+            const opening = saved ? openingDue(saved, cBills, receipts, profileForStatement) : null;
+            const account = clientAccount(key, cBills, profileForStatement, null, opening?.due || 0);
             // count: the documents in these totals (sales and credit notes).
-            map.set(key, { total, paid, unpaid: total - tds - paid, count: cBills.filter((b) => salesSign(b) !== 0).length });
+            map.set(key, { total, paid, unpaid: account.owed - account.credit, count: cBills.filter((b) => salesSign(b) !== 0).length, opening });
         }
         return map;
-    }, [billsByClient]);
+    }, [billsByClient, savedByKey, receipts, profileForStatement]);
     const EMPTY_BILLS = useMemo(() => [], []);
-    const getClientBills = (clientName) => billsByClient.get((clientName || '').toLowerCase()) || EMPTY_BILLS;
-    const getClientStats = (clientName) => statsByClient.get((clientName || '').toLowerCase())
+    const getClientBills = (clientName) => billsByClient.get(clientKey(clientName)) || EMPTY_BILLS;
+    const getClientStats = (clientName) => statsByClient.get(clientKey(clientName))
         || { total: 0, paid: 0, unpaid: 0, count: 0 };
     // v1.10.22 — Aging analysis: bucket unpaid amounts by how long they've
     // been outstanding. Age = today − dueDate (falls back to invoiceDate
@@ -525,6 +622,14 @@ export default function ClientsView({ onEdit, onDuplicate, onNew }) {
         today.setHours(0, 0, 0, 0);
         const buckets = { current: 0, d31_60: 0, d61_90: 0, d90plus: 0, total: 0 };
         const unpaidBills = [];
+        // v1.10.86 (#214) - what is left of the opening balance, aged from its "as on" date.
+        const opening = getClientStats(clientName).opening;
+        if (opening?.due > 0.01) {
+            const ageDays = Math.max(0, Math.floor((today - (opening.date ? parseLocalDate(opening.date) : today)) / 86400000));
+            buckets[bucketAge(ageDays)] += opening.due;
+            buckets.total += opening.due;
+            unpaidBills.push({ bill: { id: 'opening', invoiceNumber: 'Opening balance', invoiceDate: opening.date, totalAmount: opening.opening, data: {} }, ageDays, outstanding: opening.due, opening: true });
+        }
         for (const b of getClientBills(clientName)) {
             if (!countsAsSales(b))
                 continue; // v1.10.74 - quotes / challans / cancelled owe nothing
@@ -654,8 +759,11 @@ export default function ClientsView({ onEdit, onDuplicate, onNew }) {
             doc.setTextColor(0);
             // v1.10.74 - was named "Statement-..." like the real Statement PDF.
             const filename = `Aging-${clientName.replace(/[^A-Za-z0-9]+/g, '_').slice(0, 40)}-${localToday()}.pdf`;
-            doc.save(filename);
-            toast(`Aging report for ${clientName} downloaded`, 'success');
+            const saved = savedFor(clientName) || {};
+            setPdfPreview({
+                doc, fileName: filename, title: `Aging report: ${clientName}`, subject: `Outstanding invoices - ${clientName}`,
+                message: agingShareMessage(clientName, buckets, profile), phone: saved.phone, email: saved.email,
+            });
         }
         catch (err) {
             console.error('generateAgingReport failed:', err);
@@ -663,15 +771,27 @@ export default function ClientsView({ onEdit, onDuplicate, onNew }) {
         }
     };
     // Get all unique client names from bills (includes unsaved clients)
-    const allClientNames = [...new Set([
-            ...clients.map(c => c.name),
-            ...bills.map(b => b.clientName).filter(Boolean)
-        ])];
+    // v1.10.86 (#202) - one row per name key: the saved client's name first, so
+    // "abc traders " on a bill never makes a second row for "ABC Traders".
+    const allClientNames = (() => {
+        const byKey = new Map();
+        for (const n of [...clients.map(c => c.name), ...bills.map(b => b.clientName)]) {
+            const k = clientKey(n);
+            if (k && !byKey.has(k))
+                byKey.set(k, n);
+        }
+        return [...byKey.values()];
+    })();
     const filteredClients = search.trim()
         ? allClientNames.filter(name => name.toLowerCase().includes(search.toLowerCase()))
         : allClientNames;
     // Sort by outstanding amount
-    const sortedClients = [...filteredClients].sort((a, b) => {
+    const { sort: clientSort, setSort: setClientSort } = useListSort('clients', ['name', 'billed', 'recent']);
+    const sortedClients = clientSort ? sortRows(filteredClients, clientSort, {
+        name: (n) => n,
+        billed: (n) => getClientStats(n).total,
+        recent: (n) => getClientBills(n)[0]?.invoiceDate,
+    }) : [...filteredClients].sort((a, b) => {
         const sa = getClientStats(a);
         const sb = getClientStats(b);
         return sb.unpaid - sa.unpaid;
@@ -691,31 +811,17 @@ export default function ClientsView({ onEdit, onDuplicate, onNew }) {
     const handleDeleteBill = async (id) => {
         if (await confirmAction({
             title: 'Delete this invoice?',
-            message: 'The invoice will be moved to Trash for 30 days. Restore it from Settings → Backup Management → Trash bin.',
+            message: 'The invoice goes to the Trash for 30 days. Restore it from the Trash tab on the Invoices screen.',
             confirmLabel: 'Delete',
             tone: 'danger',
         })) {
-            // Its stock goes back, as when an invoice is cancelled. The trashed copy
-            // records what was put back, so restoring it takes exactly that out again.
             const bill = bills.find((b) => b.id === id);
-            const returned = bill?.data ? appliedStock(bill) : {};
-            const moves = Object.keys(returned).length > 0;
             try {
-                if (moves)
-                    await saveBill({ ...bill, data: { ...bill.data, stockApplied: {}, stockReturnedOnDelete: returned } }, { overwrite: true });
-                try {
-                    await deleteBill(id);
-                }
-                catch (err) {
-                    if (moves)
-                        await saveBill(bill, { overwrite: true }).catch(() => { });
-                    throw err;
-                }
-                if (moves)
-                    await applyStockChanges(stockDelta(returned, {})).catch(() => toast('Invoice deleted, but its stock could not be put back. Check Products.', 'warning'));
-                if (bill)
-                    trashSavedPdf(bill).catch(() => { });
-                toast('Invoice deleted', 'success');
+                const { stockWarning } = await trashBill(bill || { id });
+                if (stockWarning)
+                    toast('Invoice deleted, but its stock could not be put back. Check Products.', 'warning');
+                else
+                    toast('Invoice deleted', 'success');
                 loadData();
             }
             catch {
@@ -724,9 +830,20 @@ export default function ClientsView({ onEdit, onDuplicate, onNew }) {
         }
     };
     const changeStatus = async (bill, newStatus) => {
+        // v1.10.85 (#184) - Paid with a balance left asks how it was paid (Cash
+        // reaches the Cash book); cancelled = nothing changes.
+        let paidMode = 'other';
+        const left = amountDue(bill) - (bill.payments || []).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+        if (newStatus === 'paid' && left > 0.005) {
+            paidMode = await askPaidMode();
+            if (!paidMode) {
+                loadData();
+                return;
+            }
+        }
         const updated = { ...bill, status: newStatus };
         if (newStatus === 'paid')
-            Object.assign(updated, markPaidPatch(bill));
+            Object.assign(updated, markPaidPatch(bill, 'Marked paid', paidMode));
         // v1.10.77 (#86) - Unpaid takes back the "Marked paid" payment, as on the Dashboard.
         if (newStatus === 'unpaid')
             Object.assign(updated, markUnpaidPatch(bill));
@@ -770,42 +887,56 @@ export default function ClientsView({ onEdit, onDuplicate, onNew }) {
         }
     };
     const shareWhatsApp = (bill) => {
-        const msg = `*Invoice ${bill.invoiceNumber}*\nAmount: ${formatCurrency(bill.totalAmount)}\nDate: ${new Date(bill.invoiceDate).toLocaleDateString('en-IN')}\nStatus: ${(bill.status || 'unpaid').toUpperCase()}`;
-        openWhatsAppShare(bill.clientPhone, msg);
+        // v1.10.84 (#156) - the same full message as the Invoices list, sent to
+        // the number on the invoice or, failing that, the client's saved number.
+        const phone = bill.clientPhone || bill.data?.client?.phone || savedFor(bill.clientName)?.phone;
+        // v1.10.86 - with the invoice PDF (copied for Ctrl+V on the PC, the Share sheet on a phone).
+        sendPdfOnWhatsApp({ phone, toast, prepare: async () => ({ blob: await billPdfBlob(bill), fileName: billPdfName(bill), message: invoiceShareMessage(bill, profileForStatement) }) });
+    };
+    // v1.10.86 - "Send reminder" on a client's account: one WhatsApp message
+    // with the balance and the unpaid invoices (the Dashboard's reminder is
+    // per invoice), to the client's saved phone or the one on their invoices.
+    const sendClientReminder = (clientName, savedClient) => {
+        const { unpaidBills } = getClientAging(clientName);
+        if (!unpaidBills.length) {
+            toast('Nothing is pending from this client, so there is no reminder to send.', 'info');
+            return;
+        }
+        const unpaid = unpaidBills.map(({ bill, outstanding, opening }) => ({ number: bill.invoiceNumber, outstanding, dueDate: bill.data?.details?.dueDate || (opening ? bill.invoiceDate : ''), opening }));
+        const phone = savedClient?.phone || unpaidBills.map(({ bill }) => bill.clientPhone || bill.data?.client?.phone).find(Boolean) || '';
+        openWhatsAppShare(phone, balanceReminderMessage(clientName, unpaid, profileForStatement, localToday()));
     };
     const shareEmail = (bill) => {
         const subject = `Invoice ${bill.invoiceNumber}`;
         const body = `Dear ${bill.clientName},\n\nPlease find the details of your invoice:\n\nInvoice No: ${bill.invoiceNumber}\nAmount: ${formatCurrency(bill.totalAmount)}\nDate: ${new Date(bill.invoiceDate).toLocaleDateString('en-IN')}\nDue: ${bill.status === 'paid' ? 'Paid' : 'Pending'}\n\nRegards`;
         // v1.10.74 - address the mail to the client when we have their email.
-        const to = (clients.find(c => c.name === bill.clientName)?.email || bill.data?.client?.email || '').trim();
+        const to = (savedFor(bill.clientName)?.email || bill.data?.client?.email || '').trim();
         window.open(`mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`, '_blank');
     };
     return (h("div", { className: "dashboard-container" },
-        h("div", { className: "page-header" },
-            h("div", { style: { display: 'flex', alignItems: 'center', gap: 6 } },
-                h("div", null,
-                    h("h1", { className: "page-title" },
-                        "Clients ",
-                        h(HelpButton, { title: "Clients \u2014 how to use", doc: "clients", size: 16 })),
-                    h("p", { className: "page-subtitle" }, "Client-wise invoice ledger and outstanding"))),
-            h("div", { className: "flex gap-2" },
-                h("button", { className: "btn btn-secondary", onClick: () => setShowImport(true) },
-                    h(Upload, { size: 16 }),
-                    " Import CSV"),
-                h("button", { className: "btn btn-secondary", onClick: () => openAddClient() },
-                    h(Plus, { size: 18 }),
-                    " Add Client"),
-                h("button", { className: "btn btn-primary", onClick: onNew },
-                    h(FileText, { size: 18 }),
-                    " New Invoice"))),
-        showImport && (h(CsvListImport, { what: "clients", sample: CLIENTS_SAMPLE, sampleName: "Clients-sample.csv", doc: "clients#import-csv", intro: "One client per row: Name (required), GSTIN, Phone, Email, Address and State.", parse: (text) => { const r = clientsCsvToList(text, clients); return { list: r.clients, skipped: r.skipped, errors: r.errors }; }, save: saveClient, onClose: () => setShowImport(false), onDone: () => { setShowImport(false); loadData(); } })),
-        h(ClientModal, { show: showForm, onClose: closeForm, onSave: handleModalSave, client: modalClient, isEditing: !!editingClientId, defaultCountry: profileCountry }),
-        h("div", { className: "glass-panel p-4 mb-6" },
+        h(PageHeader, { title: "Clients", help: { title: 'Clients — how to use', doc: 'clients' }, subtitle: "Client-wise invoice ledger and outstanding", secondary: h(Fragment, null,
+                h(BarButton, { icon: Upload, label: "Import CSV", onClick: () => setShowImport(true), title: "Import CSV: add clients from a CSV, an Excel file (.xlsx, such as Vyapar's) or Tally's masters export (.xml)" }),
+                h(BarButton, { icon: FileText, label: "New Invoice", onClick: onNew })), primary: h("button", { className: "btn btn-primary", onClick: () => openAddClient() },
+                h(UserPlus, { size: 18 }),
+                " Add Client") }),
+        showImport && (h(CsvListImport, { what: "clients", sample: CLIENTS_SAMPLE, sampleName: "Clients-sample.csv", doc: "clients#import-csv", intro: "One client per row: Name (required), GSTIN, Phone, Email, Address, State and Opening Balance (optional).", parse: (rows) => {
+                const r = clientsCsvToList(rows, clients, localToday());
+                // v1.10.86 (#214) - an opening balance is with the business you are in.
+                const biz = businessKeyOf(profileForStatement);
+                return { list: r.clients.map((c) => (c.openingBalance ? { ...c, openingBalanceBusiness: biz } : c)), skipped: r.skipped, errors: r.errors };
+            }, save: saveClient, onClose: () => setShowImport(false), onDone: () => { setShowImport(false); loadData(); } })),
+        h(ClientModal, { show: showForm, onClose: closeForm, onSave: handleModalSave, client: modalClient, isEditing: !!editingClientId, defaultCountry: profileCountry, businessKey: businessKeyOf(profileForStatement) }),
+        pdfPreview && h(PdfPreviewModal, { ...pdfPreview, onClose: () => setPdfPreview(null) }),
+        viewBill?.data && (h(PrintPreviewModal, { isOpen: true, onClose: () => setViewBill(null), onPrint: onPrint ? () => onPrint(viewBill) : undefined, cancelled: isCancelledBill(viewBill), einvoice: viewBill.einvoice, profile: viewBill.data.profile, client: viewBill.data.client || {}, details: viewBill.data.details || {}, items: viewBill.data.items || [], totals: viewBill.data.totals || {}, invoiceType: viewBill.invoiceType || viewBill.data.invoiceType || 'tax-invoice', customTerms: viewBill.data.customTerms, customNotes: viewBill.data.customNotes, extraSections: viewBill.data.extraSections || [], invoiceOptions: viewBill.data.invoiceOptions || {} })),
+        h("div", { className: "glass-panel p-4 mb-6 client-search-bar" },
             h("div", { className: "search-box", style: { maxWidth: '400px' } },
                 h(Search, { size: 16, className: "search-icon" }),
                 h("input", { type: "text", placeholder: "Search clients...", value: search, onChange: e => setSearch(e.target.value), className: "search-input" }),
                 search && h("button", { className: "icon-btn", onClick: () => setSearch('') },
-                    h(X, { size: 14 })))),
+                    h(X, { size: 14 }))),
+            h("label", { className: "client-sort" },
+                "Sort by",
+                h("select", { className: "filter-select", value: clientSort?.key || '', onChange: (e) => setClientSort(CLIENT_SORTS.find(([v]) => v === e.target.value)?.[2] || null) }, CLIENT_SORTS.map(([v, label]) => h("option", { key: v, value: v }, label))))),
         sortedClients.length === 0 ? (h("div", { className: "glass-panel p-6" },
             h("div", { className: "empty-state" },
                 h(Users, { size: 48 }),
@@ -814,21 +945,35 @@ export default function ClientsView({ onEdit, onDuplicate, onNew }) {
                     h(Plus, { size: 16 }),
                     " Add Your First Client")))) : (h("div", { className: "client-list" }, sortedClients.map(clientName => {
             const stats = getClientStats(clientName);
-            const savedClient = clients.find(c => c.name === clientName);
+            const savedClient = savedFor(clientName);
             const isExpanded = expandedClient === clientName;
             const clientBills = isExpanded ? getClientBills(clientName) : [];
+            // v1.10.84 (#129) - how often the customer came, and when last.
+            const visits = clientVisits(getClientBills(clientName));
+            // v1.10.85 - what they owe this business, against their credit limit.
+            const limit = Number(savedClient?.creditLimit) || 0;
+            const overLimit = limit > 0 && stats.unpaid > limit + 0.005;
             return (h("div", { key: clientName, className: "glass-panel mb-4", style: { overflow: 'hidden' } },
                 h("div", { className: "client-card-header", onClick: () => setExpandedClient(isExpanded ? null : clientName) },
                     h("div", { className: "client-card-info" },
                         h("div", { className: "client-avatar" }, clientName.charAt(0).toUpperCase()),
                         h("div", null,
-                            h("h3", { className: "client-card-name" }, clientName),
+                            h("h3", { className: "client-card-name" },
+                                clientName,
+                                overLimit && (h("span", { className: "type-badge", title: `Owes more than the credit limit of ${formatCurrency(limit)}`, style: { marginLeft: 8, color: '#dc2626', background: '#fef2f2', borderColor: '#fecaca', fontSize: '0.68rem', verticalAlign: 'middle' } }, "Over credit limit"))),
                             h("p", { className: "client-card-meta" },
                                 stats.count,
                                 " invoice",
                                 stats.count !== 1 ? 's' : '',
                                 savedClient?.state ? ` | ${savedClient.state}` : '',
-                                savedClient?.gstin ? ` | ${savedClient.gstin}` : ''))),
+                                savedClient?.gstin ? ` | ${savedClient.gstin}` : '',
+                                savedClient?.phone ? ` | ${savedClient.phone}` : ''),
+                            visits.visits > 0 && (h("p", { className: "client-card-meta" },
+                                visits.visits,
+                                " visit",
+                                visits.visits !== 1 ? 's' : '',
+                                ", last on ",
+                                parseLocalDate(visits.last).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }))))),
                     h("div", { className: "client-card-stats" },
                         h("div", { className: "client-stat" },
                             h("span", { className: "client-stat-label" }, "Total"),
@@ -844,14 +989,28 @@ export default function ClientsView({ onEdit, onDuplicate, onNew }) {
                             " ",
                             isExpanded ? h(ChevronUp, { size: 16 }) : h(ChevronDown, { size: 16 })))),
                 isExpanded && (h("div", { className: "client-invoices" },
-                    h("div", { style: { padding: '0.5rem 1.5rem', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', flexWrap: 'wrap' } },
-                        h("button", { className: "btn btn-secondary", style: { fontSize: '0.78rem', padding: '0.35rem 0.75rem' }, onClick: () => generateClientStatement(clientName), title: "Account statement: every invoice, credit note, payment, and running balance in one PDF" },
-                            h(Download, { size: 14 }),
-                            " Statement PDF"),
-                        h("button", { className: "btn btn-secondary", style: { fontSize: '0.78rem', padding: '0.35rem 0.75rem' }, onClick: () => generateAgingReport(clientName), title: "Aging report: outstanding invoices bucketed by how overdue they are" },
-                            h(Download, { size: 14 }),
-                            " Aging PDF"),
-                        h(HelpButton, { title: "Statement and Aging PDFs", doc: "clients#statement", size: 16, style: { alignSelf: 'center' } })),
+                    h("div", { style: { padding: '0.75rem 1.5rem', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' } },
+                        h("button", { className: "btn btn-primary", style: { fontSize: '0.78rem', padding: '0.35rem 0.75rem' }, onClick: () => (onNewFor ? onNewFor(savedClient || { name: clientName }) : onNew()), title: "New invoice for this client, with their details filled in" },
+                            h(Plus, { size: 14 }),
+                            " New invoice"),
+                        onRecordPayment && (h("button", { className: "btn btn-secondary", style: { fontSize: '0.78rem', padding: '0.35rem 0.75rem' }, onClick: () => onRecordPayment(clientName), title: "Record a payment from this client: a payment receipt, against one of their invoices or as an advance" },
+                            h(IndianRupee, { size: 14 }),
+                            " Record payment")),
+                        stats.unpaid > 0.005 && (h("button", { className: "btn btn-secondary", style: { fontSize: '0.78rem', padding: '0.35rem 0.75rem' }, onClick: () => sendClientReminder(clientName, savedClient), title: "WhatsApp them a reminder of the balance and the unpaid invoices" },
+                            h(Send, { size: 14 }),
+                            " Send reminder")),
+                        h(HelpButton, { title: "Quick actions for a client", doc: "clients#quick-actions", size: 16, style: { alignSelf: 'center' } }),
+                        h("span", { style: { marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' } },
+                            h("label", { style: { display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.78rem', cursor: 'pointer' }, title: "List each invoice's items (name x quantity, amount) under it, on screen and in the Statement PDF" },
+                                h("input", { type: "checkbox", checked: showItems, onChange: (e) => setShowItems(e.target.checked) }),
+                                "Show items"),
+                            h("button", { className: "btn btn-secondary", style: { fontSize: '0.78rem', padding: '0.35rem 0.75rem' }, onClick: () => generateClientStatement(clientName, { showItems }), title: "Account statement: every invoice, credit note, payment, and running balance in one PDF" },
+                                h(Download, { size: 14 }),
+                                " Statement PDF"),
+                            h("button", { className: "btn btn-secondary", style: { fontSize: '0.78rem', padding: '0.35rem 0.75rem' }, onClick: () => generateAgingReport(clientName), title: "Aging report: outstanding invoices bucketed by how overdue they are" },
+                                h(Download, { size: 14 }),
+                                " Aging PDF"),
+                            h(HelpButton, { title: "Statement and Aging PDFs", doc: "clients#statement", size: 16, style: { alignSelf: 'center' } }))),
                     (() => {
                         const { buckets } = getClientAging(clientName);
                         if (buckets.total <= 0.01)
@@ -877,7 +1036,7 @@ export default function ClientsView({ onEdit, onDuplicate, onNew }) {
                         savedClient.phone && h("span", null, savedClient.phone))),
                     clientBills.length === 0 ? (h("div", { style: { padding: '1.5rem', textAlign: 'center' } },
                         h("p", { className: "text-muted", style: { fontSize: '0.85rem', marginBottom: '0.75rem' } }, "No invoices for this client yet."),
-                        h("button", { className: "btn btn-primary", style: { fontSize: '0.8rem', padding: '0.4rem 1rem' }, onClick: onNew },
+                        h("button", { className: "btn btn-primary", style: { fontSize: '0.8rem', padding: '0.4rem 1rem' }, onClick: () => (onNewFor ? onNewFor(savedClient || { name: clientName }) : onNew()) },
                             h(Plus, { size: 15 }),
                             " Create Invoice"))) : (h("div", { className: "table-scroll" },
                         h("table", { className: "data-table", style: { marginBottom: 0, minWidth: '750px' } },
@@ -897,25 +1056,33 @@ export default function ClientsView({ onEdit, onDuplicate, onNew }) {
                                 return (h("tr", { key: bill.id, className: isOverdue ? 'row-overdue' : '' },
                                     h("td", { className: "text-muted" }, new Date(bill.invoiceDate).toLocaleDateString('en-IN')),
                                     h("td", null,
-                                        h("span", { className: "invoice-badge" }, bill.invoiceNumber)),
+                                        h("span", { className: "invoice-badge" }, bill.invoiceNumber),
+                                        showItems && statementItems(bill).map((it, i) => (h("div", { key: i, className: "statement-item", style: { fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: 2 } },
+                                            itemLabel(it),
+                                            " \u00B7 ",
+                                            formatCurrency(it.amount, bill.currency || bill.data?.invoiceOptions?.currency || 'INR'))))),
                                     h("td", null,
                                         h("span", { className: "type-badge" }, (INVOICE_TYPES[bill.invoiceType || 'tax-invoice'])?.label)),
                                     h("td", { className: "font-bold", style: { textAlign: 'right' } }, formatCurrency(bill.totalAmount, bill.currency || bill.data?.invoiceOptions?.currency || 'INR')),
                                     h("td", null,
-                                        h("select", { className: "status-select", value: isOverdue && status !== 'overdue' ? 'overdue' : status, style: { background: sc.bg, color: sc.color, borderColor: sc.color + '44', fontSize: '0.75rem', padding: '0.2rem 0.4rem', borderRadius: '4px', border: '1px solid', cursor: 'pointer', fontWeight: 600 }, onClick: e => e.stopPropagation(), onChange: e => changeStatus(bill, e.target.value), disabled: cancelled, title: cancelled ? 'Undo the cancel from the Dashboard' : undefined }, Object.entries(STATUS_COLORS).filter(([key]) => cancelled || key !== 'cancelled').map(([key, val]) => (h("option", { key: key, value: key }, val.label))))),
+                                        h("select", { className: "status-select", value: isOverdue && status !== 'overdue' ? 'overdue' : status, style: { background: sc.bg, color: sc.color, borderColor: sc.color + '44', fontSize: '0.75rem', padding: '0.2rem 0.4rem', borderRadius: '4px', border: '1px solid', cursor: 'pointer', fontWeight: 600 }, onClick: e => e.stopPropagation(), onChange: e => changeStatus(bill, e.target.value), disabled: cancelled, title: cancelled ? 'Undo the cancel from the Dashboard' : undefined }, Object.entries(STATUS_COLORS).filter(([key]) => cancelled || key !== 'cancelled').map(([key, val]) => (h("option", { key: key, value: key }, val.label)))),
+                                        latestPaymentDate(bill) && (h("div", { style: { fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: 2 } },
+                                            "Last paid ",
+                                            parseLocalDate(latestPaymentDate(bill)).toLocaleDateString('en-IN')))),
                                     h("td", null,
                                         h("div", { className: "table-actions" },
-                                            bill.data && (h("button", { className: "icon-btn icon-btn-blue", onClick: () => onEdit(bill), title: "Edit Invoice" },
+                                            bill.data && (h("button", { className: "icon-btn icon-btn-blue", onClick: () => setViewBill(bill), title: "View", "aria-label": `View ${bill.invoiceNumber}` },
+                                                h(Eye, { size: 14 }))),
+                                            bill.data && (h("button", { className: "icon-btn icon-btn-blue", onClick: () => onEdit(bill), title: "Edit", "aria-label": `Edit ${bill.invoiceNumber}` },
                                                 h(Edit3, { size: 14 }))),
-                                            h("button", { className: "icon-btn icon-btn-blue", onClick: () => onDuplicate(bill), title: "Duplicate Invoice" },
-                                                h(Copy, { size: 14 })),
-                                            h("button", { className: "icon-btn icon-btn-green", onClick: () => shareWhatsApp(bill), title: "WhatsApp" },
-                                                h(MessageCircle, { size: 14 })),
-                                            h("button", { className: "icon-btn icon-btn-blue", onClick: () => shareEmail(bill), title: "Email" },
-                                                h(Mail, { size: 14 })),
-                                            h("button", { className: "icon-btn icon-btn-red", onClick: () => handleDeleteBill(bill.id), title: "Delete Invoice" },
-                                                h(Trash2, { size: 14 }))))));
+                                            h(ActionsMenu, { label: `More actions for ${bill.invoiceNumber}`, items: [
+                                                    { label: 'Duplicate', icon: Copy, onClick: () => onDuplicate(bill) },
+                                                    { label: 'WhatsApp', icon: MessageCircle, tone: 'green', onClick: () => shareWhatsApp(bill) },
+                                                    { label: 'Email', icon: Mail, onClick: () => shareEmail(bill) },
+                                                    { label: 'Delete', icon: Trash2, tone: 'danger', onClick: () => handleDeleteBill(bill.id) },
+                                                ] })))));
                             }))))),
+                    h(ClientPaymentHistory, { rows: clientPaymentHistory(clientName, clientBills, receipts) }),
                     h("div", { className: "client-actions-bar", style: { display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', padding: '0.75rem 1.5rem', borderTop: '1px solid var(--border)' } },
                         savedClient ? (h(Fragment, null,
                             h("button", { className: "btn btn-secondary", style: { fontSize: '0.78rem', padding: '0.35rem 0.75rem' }, onClick: () => openEditClient(savedClient) },

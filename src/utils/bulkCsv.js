@@ -8,10 +8,12 @@
 // writes exactly the columns the import reads, so a file can be exported,
 // edited in a spreadsheet and imported again.
 //
-// Pure functions only (no fetch / UI runtime), so scripts/csv-test.mjs can test them.
+// Pure functions only (no fetch / React), so scripts/csv-test.mjs can test them.
+import { excelSerialToIso } from './xlsxRead.js';
+import { purchaseTotals } from './purchaseOrders.js';
 import {
   computeInvoiceTotals, stockEffect, toCsvLine, INVOICE_TYPES, getStateCode,
-  stateNameForCode, resolveLineDiscount,
+  stateNameForCode, resolveLineDiscount, spreadBillDiscount, clientKey,
 } from '../utils.js';
 
 // ---------------------------------------------------------------- parsing --
@@ -41,26 +43,45 @@ export function parseCsv(text) {
   return rows.filter((r) => r.some((c) => String(c).trim() !== ''));
 }
 
-const norm = (h) => String(h || '').toLowerCase().replace(/[\s_\-.%()/#]+/g, '');
+const parseCsvOrRows = (input) => (Array.isArray(input) ? input : parseCsv(input));
+export const norm = (h) => String(h || '').toLowerCase().replace(/[\s_\-.%()/#*]+/g, '');
 
 // Rows as objects keyed by canonical field name. `fields` maps each canonical
-// name to the accepted header spellings.
-export function rowsToRecords(text, fields) {
-  const table = parseCsv(text);
+// name to the accepted header spellings, the preferred one first.
+// v1.10.84 (#130) - `input` is CSV text or rows already read (an .xlsx sheet).
+// The header is the row, among the first 8, that names the most columns:
+// Vyapar puts the business and report name above it. A closing "Total" row is
+// not data. When two columns fit (Vyapar has "Tax Percent" and "Tax"), the
+// spelling listed first wins.
+export function rowsToRecords(input, fields) {
+  const table = (Array.isArray(input) ? input : parseCsv(input))
+    .map((r) => (Array.isArray(r) ? r : []))
+    .filter((r) => r.some((c) => String(c ?? '').trim() !== ''));
   if (table.length < 2) return { records: [], missing: [], unknown: [] };
-  const header = table[0].map(norm);
+  const wanted = new Set(Object.values(fields).flat().map(norm));
+  let at = 0;
+  let best = 0;
+  table.slice(0, 8).forEach((r, i) => {
+    const hits = r.filter((h) => wanted.has(norm(h))).length;
+    if (hits > best) { best = hits; at = i; }
+  });
+  const header = table[at].map(norm);
   const colOf = {};
   for (const [field, aliases] of Object.entries(fields)) {
-    const idx = header.findIndex((h) => aliases.map(norm).includes(h));
-    if (idx >= 0) colOf[field] = idx;
+    for (const a of aliases) {
+      const idx = header.indexOf(norm(a));
+      if (idx >= 0 && !Object.values(colOf).includes(idx)) { colOf[field] = idx; break; }
+    }
   }
   const known = new Set(Object.values(colOf));
-  const unknown = table[0].filter((_, i) => !known.has(i) && String(table[0][i]).trim());
-  const records = table.slice(1).map((r, i) => {
-    const rec = { _line: i + 2 };
-    for (const [field, idx] of Object.entries(colOf)) rec[field] = String(r[idx] ?? '').trim();
-    return rec;
-  });
+  const unknown = table[at].filter((_, i) => !known.has(i) && String(table[at][i]).trim());
+  const records = table.slice(at + 1)
+    .filter((r) => norm(r.find((c) => String(c ?? '').trim() !== '')) !== 'total')
+    .map((r) => {
+      const rec = { _line: table.indexOf(r) + 1 };
+      for (const [field, idx] of Object.entries(colOf)) rec[field] = String(r[idx] ?? '').trim();
+      return rec;
+    });
   return { records, colOf, unknown };
 }
 
@@ -76,6 +97,8 @@ export const toNum = (v, fallback = 0) => {
 const MON = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12 };
 export function toIsoDate(v) {
   const s = String(v || '').trim();
+  // An Excel date cell read from an .xlsx is its day number (#130).
+  if (/^\d{5}(\.\d+)?$/.test(s) && Number(s) >= 20000 && Number(s) < 80000) return excelSerialToIso(s);
   let y; let m; let d;
   let mt = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/.exec(s);
   if (mt) [, y, m, d] = mt.map(Number);
@@ -130,6 +153,9 @@ const TYPE_ALIASES = Object.fromEntries(Object.entries(INVOICE_TYPES).flatMap(([
 ]));
 TYPE_ALIASES[norm('invoice')] = 'tax-invoice';
 TYPE_ALIASES[norm('estimate')] = 'proforma';
+// Vyapar's "Transaction Type" (#130).
+TYPE_ALIASES[norm('sale')] = 'tax-invoice';
+const CANCELLED = /cancel/i;
 const typeOf = (v) => (String(v || '').trim() ? TYPE_ALIASES[norm(v)] || null : 'tax-invoice');
 
 // ------------------------------------------------------------------ sales --
@@ -142,9 +168,9 @@ export const SALES_COLUMNS = [
   'Bill Discount', 'Round Off',
 ];
 const SALES_FIELDS = {
-  invoiceNumber: ['Invoice Number', 'Invoice No', 'Inv No', 'Bill No', 'Number'],
+  invoiceNumber: ['Invoice Number', 'Invoice No', 'Inv No', 'Bill No', 'Number', 'Invoice No./Txn No.'],
   invoiceDate: ['Invoice Date', 'Date', 'Bill Date'],
-  invoiceType: ['Invoice Type', 'Type', 'Document Type'],
+  invoiceType: ['Invoice Type', 'Type', 'Document Type', 'Transaction Type'],
   dueDate: ['Due Date', 'Due'],
   clientName: ['Client Name', 'Client', 'Customer', 'Customer Name', 'Party', 'Party Name', 'Buyer'],
   clientGstin: ['Client GSTIN', 'GSTIN', 'Customer GSTIN', 'Party GSTIN', 'Buyer GSTIN'],
@@ -156,15 +182,53 @@ const SALES_FIELDS = {
   hsn: ['HSN/SAC', 'HSN', 'SAC', 'HSN Code'],
   quantity: ['Quantity', 'Qty'],
   unit: ['Unit', 'UOM', 'UQC'],
-  rate: ['Rate', 'Price', 'Unit Price'],
+  rate: ['Rate', 'Price', 'Unit Price', 'UnitPrice', 'Price/Unit', 'Price per Unit'],
   discount: ['Discount', 'Discount Amount'],
-  taxPercent: ['GST %', 'GST', 'GST Rate', 'Tax %', 'Tax Rate', 'Tax'],
+  taxPercent: ['GST Rate', 'Tax Rate', 'Tax Percent', 'GST %', 'Tax %', 'GST', 'Tax'],
   cessPercent: ['Cess %', 'Cess', 'Cess Rate'],
   taxInclusive: ['Prices Include Tax', 'Tax Inclusive', 'Inclusive'],
   notes: ['Notes', 'Note', 'Remarks'],
   billDiscount: ['Bill Discount', 'Invoice Discount'],
+  // v1.10.85 (#190) - Yes: the bill discount is a trade discount, taken before GST.
+  billDiscountBeforeGst: ['Bill Discount Before GST', 'Discount Before GST'],
   roundOff: ['Round Off', 'Round-off', 'Rounding'],
+  // v1.10.85 (#172) - the order and dispatch details, so a marketplace order ID
+  // or a courier's AWB lands in the invoice (and its search finds it).
+  buyerOrderNo: ['Buyer Order No', "Buyer's Order No", 'Order No', 'Order Number', 'Order ID', 'Order Id'],
+  dispatchDocNo: ['Dispatch Doc No', 'AWB', 'AWB No', 'AWB Number', 'Tracking ID', 'Tracking Id', 'Tracking Number'],
+  dispatchedThrough: ['Dispatched Through', 'Courier', 'Carrier', 'Courier Name'],
 };
+
+// v1.10.86 (#213) - why a file gave nothing to import, saying what to do.
+// "The file has no rows under the header." alone left a seller with a
+// marketplace orders file stuck. Order-file columns that are not our format:
+const MARKET_COLS = ['Order Id', 'Order ID', 'Sub Order No', 'Sub Order ID', 'AWB', 'AWB No', 'AWB Number', 'SKU', 'Order Status',
+  'amazon-order-id', 'order-item-id', 'Order Item ID', 'Tracking ID', 'FSN'];
+const MARKET_NORMS = new Set(MARKET_COLS.map(norm));
+export function emptyImportMessage(input, { flipkart = false, cancelled = 0 } = {}) {
+  if (flipkart) return 'This is a Flipkart orders file, but none of its orders has an invoice number yet (orders not yet invoiced or shipped are skipped). Download the report again after the orders are invoiced.';
+  if (cancelled) return `All ${cancelled === 1 ? 'the invoices in the file are' : `${cancelled} invoices in the file are`} cancelled, so there is nothing to import.`;
+  if (unclosedQuote(input)) {
+    return 'A cell has an opening quote (") with no closing quote, so the rest of the file was read as one cell. Open the file in Excel and save it again as CSV.';
+  }
+  const cols = marketplaceColumns(parseCsvOrRows(input));
+  if (cols) return `This looks like a marketplace orders file (${cols.join(', ')}). Only Flipkart's order report can be imported directly. For others, download the Template here and copy the columns over.`;
+  return 'The file has no rows under the header.';
+}
+// An opening quote with no closing one makes the rest of the file one cell.
+const unclosedQuote = (input) => typeof input === 'string' && (input.match(/"/g) || []).length % 2 === 1
+  && parseCsv(input).length < input.split(/\r?\n/).filter((l) => l.trim()).length;
+// Nothing to import, or a file read wrongly: one message for the whole file.
+const wholeFileProblem = (input, records, colOf, market) => !records.length || unclosedQuote(input)
+  || (!market && colOf?.invoiceNumber === undefined && !!marketplaceColumns(parseCsvOrRows(input)));
+// The marketplace order columns in the file's header (2 or more), else null.
+function marketplaceColumns(table) {
+  for (const r of (table || []).slice(0, 5)) {
+    const hits = (Array.isArray(r) ? r : []).map((c) => String(c ?? '').trim()).filter((c) => MARKET_NORMS.has(norm(c)));
+    if (hits.length >= 2) return hits.slice(0, 4);
+  }
+  return null;
+}
 
 /**
  * CSV text -> sales bills ready for saveBill, built the way the invoice screen
@@ -172,10 +236,19 @@ const SALES_FIELDS = {
  * opts: { profile, products, adjustStock, existingIds:Set, makeId? }
  * Returns { bills, errors: [string], skipped: [invoiceNumber], newClients: [client] }.
  */
-export function salesCsvToBills(text, { profile = {}, products = [], adjustStock = false, existingIds = new Set(), clients = [] } = {}) {
-  const { records } = rowsToRecords(text, SALES_FIELDS);
+export function salesCsvToBills(text, { profile = {}, products = [], adjustStock = false, existingIds = new Set(), clients = [], received = null } = {}) {
+  // v1.10.85 (#172) - a Flipkart orders report is read as sales invoices.
+  const market = marketplaceOrdersTable(text);
+  const { records: all, colOf } = rowsToRecords(market ? market.table : text, SALES_FIELDS);
+  // Vyapar lists cancelled sales too ("Sale[Cancelled]"): they are not imported.
+  const records = all.filter((r) => !CANCELLED.test(r.invoiceType || ''));
+  const cancelled = new Set(all.filter((r) => CANCELLED.test(r.invoiceType || '')).map((r) => r.invoiceNumber)).size;
   const errors = [];
-  if (!records.length) return { bills: [], errors: ['The file has no rows under the header.'], skipped: [], newClients: [], warnings: [] };
+  // v1.10.86 (#213) - a marketplace file with no Invoice Number column: one message, not one per row.
+  if (wholeFileProblem(text, records, colOf, market)) {
+    const none = !records.length;
+    return { bills: [], errors: [emptyImportMessage(text, { flipkart: none && !!market, cancelled: none ? cancelled : 0 })], skipped: [], newClients: [], warnings: [] };
+  }
   const order = dateOrderNote(records.flatMap((r) => [r.invoiceDate, r.dueDate]));
   if (order.error) return { bills: [], errors: [order.error], skipped: [], newClients: [], warnings: [] };
   const groups = new Map();
@@ -185,7 +258,8 @@ export function salesCsvToBills(text, { profile = {}, products = [], adjustStock
     groups.get(r.invoiceNumber).push(r);
   }
   const productByName = new Map((products || []).map((p) => [String(p.name || '').trim().toLowerCase(), p]));
-  const knownClients = new Map((clients || []).map((c) => [String(c.name || '').trim().toLowerCase(), c]));
+  // v1.10.86 (#202) - by the client name key (extra spaces do not count).
+  const knownClients = new Map((clients || []).map((c) => [clientKey(c.name), c]));
   const clientByGstin = new Map((clients || []).filter((c) => String(c.gstin || '').trim()).map((c) => [String(c.gstin).trim().toUpperCase(), c]));
   const newClientByGstin = new Map();
   const bills = [];
@@ -214,8 +288,8 @@ export function salesCsvToBills(text, { profile = {}, products = [], adjustStock
     rows.forEach((r, i) => {
       const quantity = toNum(r.quantity, 1);
       const rate = toNum(r.rate, NaN);
-      const discount = toNum(r.discount, 0);
-      const taxPercent = toNum(r.taxPercent, 0);
+      const discount = toNum(amountPart(r.discount), 0);
+      const taxPercent = toNum(percentPart(r.taxPercent), 0);
       const cessPercent = toNum(r.cessPercent, 0);
       if (!r.itemName) { fail(`row ${r._line} has no item name.`); bad = true; return; }
       for (const [label, v] of [['quantity', quantity], ['rate', rate], ['discount', discount], ['GST %', taxPercent], ['cess %', cessPercent]]) {
@@ -240,7 +314,7 @@ export function salesCsvToBills(text, { profile = {}, products = [], adjustStock
     // the invoice takes the saved (or first) name, so no duplicate is made.
     const rowGstin = String(head.clientGstin || '').trim().toUpperCase();
     const byGstin = rowGstin ? (clientByGstin.get(rowGstin) || newClientByGstin.get(rowGstin)) : null;
-    const saved = byGstin || knownClients.get(head.clientName.trim().toLowerCase());
+    const saved = byGstin || knownClients.get(clientKey(head.clientName));
     const client = {
       ...(saved || {}),
       name: byGstin ? byGstin.name : head.clientName,
@@ -254,14 +328,22 @@ export function salesCsvToBills(text, { profile = {}, products = [], adjustStock
       newClients.set(client.name.toLowerCase(), added);
       if (rowGstin) newClientByGstin.set(rowGstin, added);
     }
-    const details = { invoiceNumber, invoiceDate, dueDate, placeOfSupply: stateName(head.placeOfSupply) };
+    const details = {
+      invoiceNumber, invoiceDate, dueDate, placeOfSupply: stateName(head.placeOfSupply),
+      ...(head.buyerOrderNo ? { buyerOrderNo: head.buyerOrderNo } : {}),
+      ...(head.dispatchDocNo ? { dispatchDocNo: head.dispatchDocNo } : {}),
+      ...(head.dispatchedThrough ? { dispatchedThrough: head.dispatchedThrough } : {}),
+    };
     const billDiscount = toNum(head.billDiscount, 0);
     if (!Number.isFinite(billDiscount) || billDiscount < 0) { fail('Bill Discount must be a number, 0 or more.'); continue; }
     const invoiceOptions = {
       showGST, showPlaceOfSupply: showGST, currency: 'INR', showRoundOff: yes(head.roundOff),
       ...(billDiscount > 0 ? { invoiceDiscountType: 'fixed', invoiceDiscountValue: billDiscount } : {}),
+      ...(billDiscount > 0 && yes(head.billDiscountBeforeGst) ? { invoiceDiscountBeforeGst: true } : {}),
     };
     const totals = computeInvoiceTotals({ items, profile, client, details, showGST, taxInclusive, invoiceOptions });
+    // #190 - the lines are saved with their part of a before-GST discount (GSTR-1 reads them).
+    const savedItems = spreadBillDiscount(items, invoiceOptions, !showGST || taxInclusive);
     bills.push({
       id: invoiceNumber,
       clientName: client.name,
@@ -271,19 +353,54 @@ export function salesCsvToBills(text, { profile = {}, products = [], adjustStock
       currency: 'INR',
       totalAmount: totals.total,
       totalTaxAmount: totals.totalTaxAmount,
-      status: 'unpaid',
-      paidAmount: 0,
-      payments: [],
+      ...paidPart(received?.get(invoiceNumber), totals.total, invoiceDate),
       importedAt: new Date().toISOString(),
       data: {
-        profile, client, details, items, totals, invoiceType,
+        profile, client, details, items: savedItems, totals, invoiceType,
         customTerms: '', customNotes: head.notes || '', extraSections: [], invoiceOptions, taxInclusive,
         stockApplied: stockEffect(items, invoiceType, 'unpaid'),
       },
     });
   }
-  return { bills, errors, skipped, newClients: [...newClients.values()], warnings: order.warning ? [order.warning] : [] };
+  const warnings = order.warning ? [order.warning] : [];
+  if (cancelled) warnings.push(`${cancelled} cancelled invoice${cancelled === 1 ? ' was' : 's were'} left out.`);
+  if (market) warnings.push(...market.notes);
+  return { bills, errors, skipped, newClients: [...newClients.values()], warnings };
 }
+
+// v1.10.84 (#130) - Vyapar writes "297.16 (18.0%)" (tax and its rate) and
+// "888.94 (35.0%)" (a discount and its rate) in one cell; also "GST@18%".
+export const percentPart = (v) => {
+  const m = /([\d.]+)\s*%/.exec(String(v ?? ''));
+  return m ? m[1] : v;
+};
+export const amountPart = (v) => String(v ?? '').replace(/\s*\([^)]*\)\s*$/, '');
+
+// What a sales report says was received, by invoice number: Vyapar's "Sale
+// Report" sheet ("Received Amount" or "Received/Paid Amount").
+export function receivedByInvoice(input) {
+  const { records } = rowsToRecords(input, {
+    invoiceNumber: SALES_FIELDS.invoiceNumber,
+    received: ['Received Amount', 'Received/Paid Amount', 'Received', 'Amount Received', 'Paid Amount'],
+  });
+  const map = new Map();
+  for (const r of records) {
+    const n = toNum(r.received, NaN);
+    if (r.invoiceNumber && Number.isFinite(n) && n > 0) map.set(r.invoiceNumber, (map.get(r.invoiceNumber) || 0) + n);
+  }
+  return map;
+}
+
+// Status and one payment for what was received (never more than the total).
+const paidPart = (got, total, date) => {
+  const amount = r2(Math.min(Number(got) || 0, Number(total) || 0));
+  if (amount <= 0.005) return { status: 'unpaid', paidAmount: 0, payments: [] };
+  return {
+    status: amount >= (Number(total) || 0) - 0.005 ? 'paid' : 'partial',
+    paidAmount: amount,
+    payments: [{ id: `pay_imp_${date}_${Math.random().toString(36).slice(2, 8)}`, amount, date, mode: 'other', note: 'Imported' }],
+  };
+};
 
 // Bills -> CSV in the import's own columns (one row per item).
 export function billsToSalesCsv(bills) {
@@ -325,8 +442,8 @@ const PURCHASE_FIELDS = {
   itemName: ['Item Name', 'Item', 'Product', 'Description', 'Particulars'],
   hsn: ['HSN/SAC', 'HSN', 'SAC', 'HSN Code'],
   quantity: ['Quantity', 'Qty'],
-  rate: ['Rate', 'Price', 'Unit Price'],
-  taxPercent: ['GST %', 'GST', 'GST Rate', 'Tax %', 'Tax Rate', 'Tax'],
+  rate: ['Rate', 'Price', 'Unit Price', 'UnitPrice', 'Price/Unit', 'Price per Unit'],
+  taxPercent: ['GST Rate', 'Tax Rate', 'Tax Percent', 'GST %', 'Tax %', 'GST', 'Tax'],
   cessPercent: ['Cess %', 'Cess', 'Cess Rate'],
   interstate: ['Inter-state', 'Interstate', 'IGST', 'Inter State'],
   paymentStatus: ['Payment Status', 'Status', 'Paid'],
@@ -341,9 +458,12 @@ const PAYMENT_STATUSES = ['Unpaid', 'Partial', 'Paid'];
  * `inferInterstate(gstin)` (optional) fills Inter-state when the column is blank.
  */
 export function purchaseCsvToRecords(text, { profile = {}, existing = [], inferInterstate = null } = {}) {
-  const { records } = rowsToRecords(text, PURCHASE_FIELDS);
+  const { records, colOf } = rowsToRecords(text, PURCHASE_FIELDS);
   const errors = [];
-  if (!records.length) return { purchases: [], errors: ['The file has no rows under the header.'], skipped: [], warnings: [] };
+  // v1.10.86 (#213) - say why, and what to do.
+  if (wholeFileProblem(text, records, colOf, null)) {
+    return { purchases: [], errors: [emptyImportMessage(text)], skipped: [], warnings: [] };
+  }
   const order = dateOrderNote(records.map((r) => r.date));
   if (order.error) return { purchases: [], errors: [order.error], skipped: [], warnings: [] };
   const keyOf = (gstin, name, num) => `${(gstin || name || '').trim().toUpperCase()}::${String(num || '').trim().toUpperCase()}`;
@@ -380,19 +500,16 @@ export function purchaseCsvToRecords(text, { profile = {}, existing = [], inferI
       const taxPercent = toNum(r.taxPercent, 0);
       const cessPercent = toNum(r.cessPercent, 0);
       if (!r.itemName) { fail(`row ${r._line} has no item name.`); bad = true; break; }
+      // v1.10.86 (#213) - a return in the file says where returns go.
+      if (quantity < 0) { fail(`row ${r._line}: returns (negative quantities) are not imported. Record them as a return to supplier on the bill (Purchases → bill → Return to supplier).`); bad = true; break; }
       if (![quantity, rate, taxPercent, cessPercent].every((v) => Number.isFinite(v) && v >= 0) || taxPercent > 100) {
         fail(`row ${r._line}: quantity, rate, GST % and cess % must be numbers, 0 or more.`); bad = true; break;
       }
       items.push({ name: r.itemName, hsn: r.hsn || '', quantity, rate, taxPercent, cessPercent });
     }
     if (bad) continue;
-    // Same arithmetic as the purchase form (PurchaseBills calcPurchaseTotal).
-    const t = items.reduce((acc, it) => {
-      const amount = it.quantity * it.rate;
-      const tax = amount * it.taxPercent / 100;
-      const cess = amount * it.cessPercent / 100;
-      return { taxable: acc.taxable + amount, tax: acc.tax + tax, cess: acc.cess + cess, total: acc.total + amount + tax + cess };
-    }, { taxable: 0, tax: 0, cess: 0, total: 0 });
+    // Same arithmetic as the purchase form (v1.10.85: the shared purchaseTotals).
+    const t = purchaseTotals(items);
     const gstin = (head.supplierGstin || '').toUpperCase();
     const inferred = head.interstate === '' && inferInterstate ? inferInterstate(gstin) : null;
     const status = PAYMENT_STATUSES.find((s) => s.toLowerCase() === String(head.paymentStatus || '').trim().toLowerCase()) || 'Unpaid';
@@ -444,3 +561,73 @@ export const PURCHASE_TEMPLATE = [
   toCsvLine(PURCHASE_COLUMNS),
   toCsvLine(['SUP/552', '2026-10-03', 'Gupta Steel', '27AAACG1234K1Z2', 'Bhosari, Pune', 'Steel rod 8mm', '7214', 100, 60, 18, 0, 'No', 'Unpaid', '']),
 ].join('\n');
+
+// #170 - items of imported invoices that are not yet in Products become
+// products (name, HSN, unit, rate, GST, cess; stock 0), one per name, as the
+// purchase import already does. Products already saved are never changed.
+export function newProductsFromBills(bills, products = []) {
+  const known = new Set(products.map((p) => String(p.name || '').trim().toLowerCase()));
+  const out = [];
+  for (const bill of bills) {
+    for (const it of bill?.data?.items || []) {
+      const name = String(it.name || '').trim();
+      const key = name.toLowerCase();
+      if (!name || known.has(key)) continue;
+      known.add(key);
+      out.push({ name, hsn: it.hsn || '', unit: it.unit || 'Nos', sellingPrice: it.rate, rate: it.rate,
+        taxPercent: it.taxPercent, cessPercent: it.cessPercent || 0, stock: 0, description: '' });
+    }
+  }
+  return out;
+}
+
+// v1.10.85 (#172, #179) - a Flipkart seller's orders report (Seller Hub ->
+// Orders -> download; columns Order Id, FSN, Invoice No., Tracking ID...) as
+// the generic sales table above. One row per order item:
+// - Invoice Amount is the GST-inclusive amount the buyer was billed (it
+//   includes Flipkart's contribution), so the rate is that / Quantity;
+// - CGST / SGST / IGST hold the tax RATES ("NA" when not charged);
+// - dates are mm/dd/yy; the order ID and the tracking ID (AWB) go into the
+//   invoice's order details, and the courier is "Flipkart".
+// Returned orders are imported as the sales they were; a note says how many,
+// so the returns can be recorded as credit notes. null when not a Flipkart file.
+export function marketplaceOrdersTable(input) {
+  const table = Array.isArray(input) ? input : parseCsv(String(input || ''));
+  const needed = ['FSN', 'Order Id', 'Tracking ID', 'Invoice No.'];
+  const at = table.slice(0, 5).findIndex((r) => Array.isArray(r) && needed.every((h) => r.map((c) => String(c).trim()).includes(h)));
+  if (at < 0) return null;
+  const head = table[at].map((c) => String(c).trim());
+  const get = (r, name) => { const i = head.indexOf(name); return i >= 0 ? String(r[i] ?? '').trim() : ''; };
+  const num = (v) => { const n = Number(String(v).replace(/[^0-9.]/g, '')); return Number.isFinite(n) ? n : 0; };
+  const dateCol = head.find((h) => /^Invoice Date/i.test(h)) || 'Invoice Date';
+  const iso = (v) => {
+    const m = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/.exec(v);
+    if (!m) return v;
+    const y = m[3].length === 2 ? `20${m[3]}` : m[3];
+    return `${y}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
+  };
+  const out = [['Invoice Number', 'Invoice Date', 'Invoice Type', 'Client Name', 'Client State', 'Client Address', 'Place of Supply',
+    'Item Name', 'HSN/SAC', 'Quantity', 'Rate', 'GST %', 'Prices Include Tax', 'Notes', 'Buyer Order No', 'Dispatch Doc No', 'Dispatched Through']];
+  let returned = 0;
+  for (const r of table.slice(at + 1)) {
+    if (!Array.isArray(r) || !get(r, 'Invoice No.')) continue;
+    const qty = num(get(r, 'Quantity')) || 1;
+    const igst = num(get(r, 'IGST'));
+    const gst = igst > 0 ? igst : num(get(r, 'CGST')) + num(get(r, 'SGST'));
+    const state = get(r, 'Order State');
+    if (/return/i.test(state)) returned += 1;
+    const address = [get(r, 'Address Line 1'), get(r, 'Address Line 2'), get(r, 'City'), get(r, 'PIN Code')].filter(Boolean).join(', ');
+    out.push([
+      get(r, 'Invoice No.'), iso(get(r, dateCol)), 'tax-invoice', get(r, 'Buyer name') || get(r, 'Ship to name') || 'Flipkart customer',
+      get(r, 'State'), address, get(r, 'State'),
+      get(r, 'Product') || get(r, 'SKU'), get(r, 'HSN CODE'), String(qty),
+      String(Math.round((num(get(r, 'Invoice Amount')) / qty) * 100) / 100), String(gst), 'Yes',
+      `Flipkart order ${get(r, 'Order Id')}${state ? ` (${state})` : ''}`,
+      get(r, 'Order Id'), get(r, 'Tracking ID'), 'Flipkart',
+    ]);
+  }
+  // v1.10.86 (#197) - each note says how to record a return: scan its label on the Dashboard.
+  const notes = ['Flipkart orders report: each order is imported as a tax invoice, with its order ID and tracking ID (AWB) in the order details. Returned parcel? Scan its label in the Dashboard search box.'];
+  if (returned) notes.push(`${returned} order${returned === 1 ? ' was' : 's were'} returned or have a return requested: they are imported as the sales they were. Record each return as a Credit Note: scan its label (or type its order ID) in the Dashboard search box and click Return / credit note.`);
+  return { table: out, source: 'Flipkart', notes };
+}

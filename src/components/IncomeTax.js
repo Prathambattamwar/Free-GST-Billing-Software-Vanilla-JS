@@ -1,9 +1,12 @@
-import { useState, useEffect, useMemo, h, Fragment } from '../vanilla/dom.js';
+import { h, Fragment } from '../vanilla/dom.js';
+import { useState, useEffect, useMemo } from '../vanilla/dom.js';
 import { Calculator, Landmark, FileText, TrendingUp, Upload, Info, Check, X, ChevronRight, Briefcase, Clock, Download } from '../vanilla/icons.js';
-import { getAllBills, getAllExpenses, getAllPurchases, getProfile } from '../store.js';
+import { getAllBills, getAllExpenses, getAllPurchases, getProfile, getAllDebitNotes } from '../store.js';
+import { debitNoteTotals } from '../utils/debitNotes.js';
 import { formatCurrency } from '../utils.js';
 import { getPrintSettings } from '../utils/printSettings.js';
 import HelpButton from './HelpButton.js';
+import PageHeader from './PageHeader.js';
 // v1.10.31 — Parse the user's chosen PDF accent (hex like "#1e40af") into
 // a [r, g, b] tuple for jsPDF's setFillColor / setDrawColor. Falls back to
 // the historical Tailwind blue-900 (30,64,175) when the setting is empty or
@@ -28,7 +31,7 @@ function getAccentRGB() {
         return [30, 64, 175];
     }
 }
-import { compareRegimes, parseBankStatement, AUTO_CATEGORY_RULES, DEDUCTION_CAPS, compute44AD, compute44ADA, compute44AE, computeAdvanceTaxSchedule, compute234BInterest, compute234CInterest, ADVANCE_TAX_SCHEDULE, buildITR4FieldMap, effectiveDeductionCap, CURRENT_FY as ENGINE_FY, } from '../utils/itr.js';
+import { compareRegimes, parseBankStatement, AUTO_CATEGORY_RULES, DEDUCTION_CAPS, compute44AD, compute44ADA, compute44AE, computeAdvanceTaxSchedule, compute234BInterest, compute234CInterest, ADVANCE_TAX_SCHEDULE, buildITR4FieldMap, effectiveDeductionCap, CURRENT_FY as ENGINE_FY, TAX_YEARS, yearLabel, filingDueDates, } from '../utils/itr.js';
 import { getFinancialYearLabel, belongsToProfile, isCancelledBill, salesSign, localToday, parseLocalDate } from '../utils.js';
 import { billInInr } from '../utils/fx.js';
 // Business income is counted without GST (GST collected is not income, and GST
@@ -70,12 +73,31 @@ const TABS = [
 // Now derived from the engine, so there is exactly one answer. AY is
 // always the FY that follows.
 const CURRENT_FY = ENGINE_FY;
-const CURRENT_AY = (() => {
-    const start = parseInt(CURRENT_FY.split('-')[0], 10) + 1;
+// The assessment year that follows a financial year (before the 2025 Act).
+const ayOf = (fy) => {
+    const start = parseInt(fy.split('-')[0], 10) + 1;
     return `${start}-${String(start + 1).slice(-2)}`;
-})();
+};
+// v1.10.84 - "31 Aug 2027" for the due dates.
+const dueText = (iso) => parseLocalDate(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
 export default function IncomeTax() {
     const [tab, setTab] = useState('calculator');
+    // v1.10.84 - which year the figures are for: tax year 2026-27 (default) or
+    // FY 2025-26 for late and revised returns. Remembered on this PC.
+    const [fy, setFy] = useState(() => {
+        try {
+            const y = localStorage.getItem('gst_itrYear');
+            return TAX_YEARS.includes(y) ? y : CURRENT_FY;
+        }
+        catch {
+            return CURRENT_FY;
+        }
+    });
+    useEffect(() => { try {
+        localStorage.setItem('gst_itrYear', fy);
+    }
+    catch { /* a per-PC convenience */ } }, [fy]);
+    const ay = ayOf(fy);
     const [bills, setBills] = useState([]);
     const [expenses, setExpenses] = useState([]);
     const [purchases, setPurchases] = useState([]);
@@ -128,7 +150,8 @@ export default function IncomeTax() {
             getAllExpenses().catch(() => []),
             getAllPurchases().catch(() => []),
             getProfile().catch(() => ({})),
-        ]).then(([b, e, p, prof]) => {
+            getAllDebitNotes().catch(() => []),
+        ]).then(([b, e, p, prof, dns]) => {
             // v1.10.64 (#55) — income tax is filed per business, so only the active
             // business's invoices may contribute to its figures.
             // v1.10.67 (#66 item 12) — cancelled invoices are not income.
@@ -136,7 +159,12 @@ export default function IncomeTax() {
             // v1.10.66 (#64) — and only its own expenses and purchases. Left
             // unfiltered, one company's costs reduced another company's income.
             setExpenses((e || []).filter(r => belongsToProfile(r, prof)));
-            setPurchases((p || []).filter(r => belongsToProfile(r, prof)));
+            // v1.10.85 (#168) - goods returned to suppliers (debit notes) come off
+            // the trading purchases, in the year of the debit note: each one is
+            // listed here as a minus purchase of its taxable value.
+            const returns = (dns || []).filter(r => belongsToProfile(r, prof) && !r.cancelled)
+                .map(r => ({ id: r.id, date: r.date, taxableAmount: -debitNoteTotals(r).taxable }));
+            setPurchases([...(p || []).filter(r => belongsToProfile(r, prof)), ...returns]);
             setProfile(prof);
         });
     }, []);
@@ -151,7 +179,7 @@ export default function IncomeTax() {
         const inFY = (dateStr) => {
             if (!dateStr)
                 return false;
-            return getFinancialYearLabel(parseLocalDate(dateStr)) === CURRENT_FY; // local date, not UTC
+            return getFinancialYearLabel(parseLocalDate(dateStr)) === fy; // local date, not UTC
         };
         const sales = bills.filter(b => inFY(b.invoiceDate)).reduce((s, b) => s + billTurnover(b), 0);
         const cogs = purchases.filter(p => inFY(p.date)).reduce((s, p) => s + purchaseCost(p), 0);
@@ -162,7 +190,7 @@ export default function IncomeTax() {
         if (estimated > 0) {
             setInputs(prev => ({ ...prev, businessIncome: Math.round(estimated), _autofillHint: true }));
         }
-    }, [bills, purchases, expenses]); // eslint-disable-line vanilla-runtime/exhaustive-deps
+    }, [bills, purchases, expenses, fy]); // eslint-disable-line react-hooks/exhaustive-deps
     // Auto-save calculator inputs whenever they change
     useEffect(() => {
         try {
@@ -200,29 +228,20 @@ export default function IncomeTax() {
     //
     // MUST be declared BEFORE advanceSchedule below — v1.8.1 had this reversed,
     // causing a TDZ ReferenceError that blanked the whole Income Tax view.
-    const comparison = useMemo(() => compareRegimes(inputs), [inputs]);
+    const comparison = useMemo(() => compareRegimes({ ...inputs, fy }), [inputs, fy]);
     // Advance-tax schedule — depends on the total tax under the RECOMMENDED regime.
     // Defensive: if comparison hasn't yielded a valid shape yet (first render
     // race), fall back to a zero-tax schedule so the Advance Tax tab still
     // renders instead of crashing.
     const advanceSchedule = useMemo(() => {
         const recTotal = comparison?.[comparison?.recommended]?.totalTax ?? 0;
-        return computeAdvanceTaxSchedule(recTotal, advanceInputs.tdsCredit, advanceInputs.payments, advanceInputs.mode);
-    }, [comparison, advanceInputs]);
+        return computeAdvanceTaxSchedule(recTotal, advanceInputs.tdsCredit, advanceInputs.payments, advanceInputs.mode, fy);
+    }, [comparison, advanceInputs, fy]);
     return (h("div", { className: "dashboard-container" },
-        h("div", { className: "page-header" },
-            h("div", { style: { display: 'flex', alignItems: 'center', gap: 6 } },
-                h("div", null,
-                    h("h1", { className: "page-title" },
-                        "Income Tax Helper ",
-                        h(HelpButton, { title: "Income tax \u2014 how to use", doc: "income-tax", size: 16 })),
-                    h("p", { className: "page-subtitle" },
-                        "FY ",
-                        CURRENT_FY,
-                        " \u00B7 AY ",
-                        CURRENT_AY,
-                        " \u2014 Old vs New Regime, bank-statement import, ITR summary")))),
-        getFinancialYearLabel() !== CURRENT_FY && (h("div", { className: "card", style: {
+        h(PageHeader, { title: "Income Tax Helper", help: { title: 'Income tax — how to use', doc: 'income-tax' }, subtitle: `${yearLabel(fy)}: Old vs New Regime, bank-statement import, ITR summary`, extras: (h("label", { className: "page-bar-field" },
+                "Year",
+                h("select", { className: "filter-select", value: fy, onChange: (e) => setFy(e.target.value), "aria-label": "Which year the figures are for" }, TAX_YEARS.map((y) => h("option", { key: y, value: y }, yearLabel(y)))))) }),
+        !TAX_YEARS.includes(getFinancialYearLabel()) && (h("div", { className: "card", style: {
                 borderLeft: '4px solid #f59e0b',
                 background: 'rgba(245, 158, 11, 0.07)',
                 marginBottom: '1rem',
@@ -232,22 +251,22 @@ export default function IncomeTax() {
                 h(Info, { size: 18, style: { color: '#b45309', flexShrink: 0, marginTop: 2 } }),
                 h("div", { style: { fontSize: '0.88rem', lineHeight: 1.5 } },
                     h("strong", null,
-                        "These figures are for FY ",
-                        CURRENT_FY,
+                        "These figures are for ",
+                        yearLabel(fy),
                         ", not the current FY ",
                         getFinancialYearLabel(),
                         ".",
                         h(HelpButton, { title: "Which year the figures are for", doc: "income-tax#which-year", size: 16 })),
                     h("div", { style: { marginTop: '0.35rem', color: 'var(--text-muted)' } },
-                        "The tax slabs, rebate limits and capital-gains rates built into this app go up to FY ",
-                        CURRENT_FY,
+                        "The tax slabs, rebate limits and capital-gains rates built into this app go up to ",
+                        yearLabel(TAX_YEARS[0]),
                         ". Rates for FY ",
                         getFinancialYearLabel(),
                         " are not included yet, so nothing here is calculated against them. Invoices dated in FY ",
                         getFinancialYearLabel(),
                         " are also excluded from the business-income figure below \u2014 enter that income manually, and treat every number on this page as an estimate to check with your CA before filing."))))),
         h("div", { className: "glass-panel", style: { padding: '0.5rem', marginBottom: '1rem' } },
-            h("div", { style: { display: 'flex', gap: '0.25rem', flexWrap: 'wrap' } },
+            h("div", { style: { display: 'flex', gap: '0.5rem', flexWrap: 'wrap' } },
                 TABS.map(t => (h("button", { key: t.key, className: `btn ${tab === t.key ? 'btn-primary' : 'btn-secondary'}`, style: { fontSize: '0.85rem' }, onClick: () => setTab(t.key), title: t.help },
                     h(t.icon, { size: 15 }),
                     " ",
@@ -296,7 +315,7 @@ export default function IncomeTax() {
                 setTab('calculator');
                 toast('Numbers pushed to Regime Calculator', 'success');
             } })),
-        tab === 'summary' && (h(SummaryTab, { bills: bills, expenses: expenses, purchases: purchases, profile: profile, comparison: comparison, inputs: inputs, presumptive: presumptive, advanceSchedule: advanceSchedule, fy: CURRENT_FY, ay: CURRENT_AY }))));
+        tab === 'summary' && (h(SummaryTab, { bills: bills, expenses: expenses, purchases: purchases, profile: profile, comparison: comparison, inputs: inputs, presumptive: presumptive, advanceSchedule: advanceSchedule, fy: fy, ay: ay }))));
 }
 // ============================================================================
 // Presumptive Income sub-tab (§44AD / §44ADA / §44AE)
@@ -518,7 +537,7 @@ function RegimeCalculatorTab({ inputs, setInputs, comparison, onReset }) {
                     " compared to the other regime.",
                     comparison.recommended === 'new' && ' (New Regime is the default — you don\'t need to elect anything.)',
                     comparison.recommended === 'old' && ' (You must file Form 10-IEA before the due date to elect Old Regime.)')),
-            h("div", { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' } },
+            h("div", { className: "regime-cards", style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' } },
                 h(RegimeCard, { title: "Old Regime", result: comparison.old, highlighted: comparison.recommended === 'old', color: "#8b5cf6" }),
                 h(RegimeCard, { title: "New Regime", result: comparison.new, highlighted: comparison.recommended === 'new', color: "#059669" })),
             h("div", { className: "glass-panel p-4", style: { marginTop: '1rem', fontSize: '0.8rem' } },
@@ -635,10 +654,7 @@ function BankImportTab({ bankImport, setBankImport, onCommit }) {
                     h("li", null,
                         h("strong", null, "Mobile app"),
                         " \u2192 Account statement \u2192 Share \u2192 Export CSV"),
-                    h("li", null,
-                        "Choose a date range covering the current FY (1 Apr ",
-                        parseInt(CURRENT_FY.split('-')[0], 10),
-                        " onwards)"),
+                    h("li", null, "Choose a date range covering the year you are working out (from 1 April)"),
                     h("li", null, "Your data is parsed in-browser \u2014 nothing is uploaded to a server")))));
     }
     return (h(Fragment, null,
@@ -664,7 +680,7 @@ function BankImportTab({ bankImport, setBankImport, onCommit }) {
                 ":"),
             " ",
             formatCurrency(amt))))),
-        h("div", { className: "glass-panel", style: { overflow: 'auto', maxHeight: '60vh' } },
+        h("div", { className: "glass-panel", style: { overflow: 'auto', maxHeight: 'calc(60vh / var(--ui-zoom, 1))' } },
             h("table", { className: "data-table", style: { minWidth: '900px' } },
                 h("thead", null,
                     h("tr", null,
@@ -699,7 +715,7 @@ function SummaryTab({ bills, expenses, purchases, profile, comparison, inputs, p
             y += 6;
             doc.setFontSize(9);
             doc.setFont('helvetica', 'normal');
-            doc.text(`FY ${fy} · AY ${ay} · Regime: ${comparison.recommended.toUpperCase()} · Generated ${new Date().toLocaleDateString('en-IN')}`, 105, y, { align: 'center' });
+            doc.text(`${yearLabel(fy)} · Regime: ${comparison.recommended.toUpperCase()} · Generated ${new Date().toLocaleDateString('en-IN')}`, 105, y, { align: 'center' });
             y += 6;
             // Assessee block
             if (profile?.businessName) {
@@ -802,7 +818,7 @@ function SummaryTab({ bills, expenses, purchases, profile, comparison, inputs, p
     // Presumptive threshold check (Section 44AD — up to ₹2Cr turnover)
     const under44ADEligible = sales < 20_000_000 && (profile?.businessType || '').toLowerCase() !== 'professional';
     return (h(Fragment, null,
-        h("div", { className: "stats-grid", style: { gridTemplateColumns: 'repeat(4, 1fr)', marginBottom: '1rem' } },
+        h("div", { className: "stats-grid", style: { gridTemplateColumns: 'repeat(auto-fit, minmax(min(200px, 100%), 1fr))', marginBottom: '1rem' } },
             h("div", { className: "stat-card" },
                 h("div", { className: "stat-icon stat-icon-blue" },
                     h(TrendingUp, { size: 22 })),
@@ -865,14 +881,16 @@ function SummaryTab({ bills, expenses, purchases, profile, comparison, inputs, p
                         h("br", null),
                         h("br", null))),
                     "Filing due date: ",
+                    h("strong", null, dueText(filingDueDates(fy).business)),
+                    " (business, no audit) \u00B7",
                     h("strong", null,
-                        "31 July ",
-                        parseInt(fy.split('-')[1], 10) + 2000),
-                    " (non-audit) \u00B7",
+                        " ",
+                        dueText(filingDueDates(fy).salary)),
+                    " (salary only, ITR-1/2) \u00B7",
                     h("strong", null,
-                        " 31 October ",
-                        parseInt(fy.split('-')[1], 10) + 2000),
-                    " (audit / \u00A744AB). Advance tax installments: 15 Jun \u00B7 15 Sep \u00B7 15 Dec \u00B7 15 Mar."))),
+                        " ",
+                        dueText(filingDueDates(fy).audit)),
+                    " (audit). Advance tax installments: 15 Jun \u00B7 15 Sep \u00B7 15 Dec \u00B7 15 Mar."))),
         h("div", { className: "glass-panel p-4", style: { marginTop: '1rem', background: 'linear-gradient(135deg, rgba(30,64,175,0.05) 0%, rgba(5,150,105,0.05) 100%)', border: '1px solid var(--primary)' } },
             h("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' } },
                 h("div", null,

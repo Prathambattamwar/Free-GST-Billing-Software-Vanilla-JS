@@ -234,3 +234,19 @@ export const X = makeIcon('X');
 export const XCircle = makeIcon('XCircle');
 export const ZoomIn = makeIcon('ZoomIn');
 export const ZoomOut = makeIcon('ZoomOut');
+
+// Additional icons used by the newer browser-only release.
+export const ArrowDown = makeIcon('ArrowDown');
+export const ArrowUp = makeIcon('ArrowUp');
+export const Barcode = makeIcon('Barcode');
+export const Bookmark = makeIcon('Bookmark');
+export const CalendarRange = makeIcon('CalendarRange');
+export const Columns3 = makeIcon('Columns3');
+export const FileUp = makeIcon('FileUp');
+export const GripVertical = makeIcon('GripVertical');
+export const HelpCircle = makeIcon('HelpCircle');
+export const History = makeIcon('History');
+export const LockOpen = makeIcon('LockOpen');
+export const PackageCheck = makeIcon('PackageCheck');
+export const ScanBarcode = makeIcon('ScanBarcode');
+export const SlidersHorizontal = makeIcon('SlidersHorizontal');

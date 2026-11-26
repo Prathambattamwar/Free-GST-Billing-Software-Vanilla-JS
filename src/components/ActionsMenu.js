@@ -1,3 +1,4 @@
+import { h, Fragment } from '../vanilla/dom.js';
 // v1.10.80 (#100) - a "⋯" drop-down for the less-used row actions, so an
 // Actions column shows a few buttons instead of a long row of icons.
 // Requested: "Convert Actions into a drop-down menu with icon to provide a
@@ -5,14 +6,21 @@
 //
 // items: [{ label, icon: LucideIcon, onClick, title?, tone?: 'danger' | 'green', hidden? }]
 // The menu is position: fixed, so a table that scrolls sideways can't clip it.
-import { useEffect, useRef, useState, h, Fragment } from '../vanilla/dom.js';
-import { MoreHorizontal } from '../vanilla/icons.js';
+// v1.10.84 - and drawn at the top of the page (a portal into <body>): inside a
+// cell that is pinned (position: sticky) the next rows' cells painted over it
+// and took its clicks.
+import { useEffect, useRef, useState } from '../vanilla/dom.js';
+import { createPortal } from '../vanilla/dom.js';
+import { MoreHorizontal, ChevronDown } from '../vanilla/icons.js';
 // Below the button, or above it when there is no room below.
 function placeFor(r, count) {
     const below = window.innerHeight - r.bottom > count * 36 + 16;
     return { right: Math.max(8, window.innerWidth - r.right), ...(below ? { top: r.bottom + 4 } : { bottom: window.innerHeight - r.top + 4 }) };
 }
-export default function ActionsMenu({ items, label = 'More actions' }) {
+// v1.10.86 - icon / className / iconSize: the top bar's Help (?) button is one of these too.
+// v1.10.86 - text: a word on the button and a ▾ (the Dashboard's Print menu); disabled while busy.
+export default function ActionsMenu({ items, label = 'More actions', icon, className = 'icon-btn', iconSize = 15, text, disabled = false }) {
+    const ButtonIcon = icon || MoreHorizontal;
     const [pos, setPos] = useState(null); // { top, right } while open
     const btn = useRef(null);
     const menu = useRef(null);
@@ -52,7 +60,7 @@ export default function ActionsMenu({ items, label = 'More actions' }) {
             window.removeEventListener('scroll', follow, true);
             window.removeEventListener('resize', follow);
         };
-        // eslint-disable-next-line vanilla-runtime/exhaustive-deps
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [!!pos]);
     if (!visible.length)
         return null;
@@ -70,9 +78,12 @@ export default function ActionsMenu({ items, label = 'More actions' }) {
             setPos(null);
     };
     return (h(Fragment, null,
-        h("button", { ref: btn, type: "button", className: "icon-btn", onClick: toggle, title: label, "aria-label": label, "aria-haspopup": "menu", "aria-expanded": !!pos },
-            h(MoreHorizontal, { size: 15 })),
-        pos && (h("div", { ref: menu, role: "menu", className: "actions-menu", "aria-label": label, onKeyDown: onMenuKey, style: {
+        h("button", { ref: btn, type: "button", className: className, onClick: toggle, title: label, disabled: disabled, "aria-label": label, "aria-haspopup": "menu", "aria-expanded": !!pos },
+            h(ButtonIcon, { size: iconSize }),
+            text && h(Fragment, null,
+                text,
+                h(ChevronDown, { size: 14 }))),
+        pos && createPortal(h("div", { ref: menu, role: "menu", className: "actions-menu", "aria-label": label, onKeyDown: onMenuKey, style: {
                 position: 'fixed', zIndex: 1000, ...pos, minWidth: 190,
                 background: 'var(--card, #fff)', border: '1px solid var(--border)', borderRadius: 8,
                 boxShadow: '0 10px 30px rgba(0,0,0,0.18)', padding: 4,
@@ -87,5 +98,5 @@ export default function ActionsMenu({ items, label = 'More actions' }) {
                 Icon && h(Icon, { size: 15 }),
                 " ",
                 item.label));
-        })))));
+        })), document.body)));
 }

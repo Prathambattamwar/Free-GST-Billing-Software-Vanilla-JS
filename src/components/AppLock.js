@@ -1,62 +1,71 @@
-// v1.10.77 (#84) - optional PIN lock: a 6 or 8 digit PIN asked when the app
-// opens (and on "Lock now"). A screen lock for a shared PC, not encryption;
-// the PIN is verified by the browser against the salted hash stored in the
-// local browser database. This is a convenience lock, not encryption.
-import { useEffect, useRef, useState, h, Fragment } from '../vanilla/dom.js';
+import { h, Fragment } from '../vanilla/dom.js';
+import { useEffect, useRef, useState } from '../vanilla/dom.js';
 import { Lock } from '../vanilla/icons.js';
-import HelpButton from './HelpButton.js';
-import { getLockStatus, verifyPin } from '../store.js';
+import { getLockStatus, verifyPin, resetAppLock } from '../store.js';
 import { UNLOCKED_KEY, LOCK_EVENT } from '../utils/appLock.js';
+
+// Browser-only app lock. It is a convenience screen lock, not encryption.
+// The records remain in this browser's IndexedDB and are not deleted when
+// the PIN is reset.
+function ForgotPin({ onUnlock }) {
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState('');
+  const reset = async () => {
+    if (busy) return;
+    const confirmed = window.confirm('Remove only the app PIN from this browser? Your invoices, customers and other saved records will remain.');
+    if (!confirmed) return;
+    setBusy(true);
+    setNote('');
+    try {
+      await resetAppLock();
+      onUnlock();
+    } catch (error) {
+      setNote(error?.message || 'Could not remove the PIN. Please try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return h('div', { className: 'app-lock-help' },
+    h('p', null, 'This PIN is a screen lock for this browser, not encryption. Forgot it? You can remove the PIN without deleting your invoices or business records.'),
+    h('p', { className: 'text-muted' }, 'Keep a backup of your data. Anyone with access to this browser profile can use its browser storage tools to bypass a screen lock.'),
+    h('button', { type: 'button', className: 'btn btn-secondary btn-sm', onClick: reset, disabled: busy }, busy ? 'Removing PIN…' : 'Remove PIN and keep my data'),
+    note && h('p', { className: 'app-lock-error', role: 'alert' }, note));
+}
 function LockScreen({ length, onUnlock }) {
-    const [pin, setPin] = useState('');
-    const [error, setError] = useState('');
-    const [busy, setBusy] = useState(false);
-    const [showHelp, setShowHelp] = useState(false);
-    const input = useRef(null);
-    const submit = async (value) => {
-        if (busy)
-            return;
-        setBusy(true);
-        try {
-            await verifyPin(value);
-            onUnlock();
-        }
-        catch (err) {
-            setPin('');
-            if (err.status === 429)
-                setError(`Too many wrong tries. Wait ${err.body?.wait || 30} seconds and try again.`);
-            else if (err.status === 401)
-                setError('Wrong PIN. Try again.');
-            else
-                setError('Could not check the PIN. Is the app still running?');
-            setTimeout(() => input.current?.focus(), 0);
-        }
-        finally {
-            setBusy(false);
-        }
-    };
-    const onChange = (e) => {
-        const v = e.target.value.replace(/\D/g, '').slice(0, length);
-        setPin(v);
-        setError('');
-        if (v.length === length)
-            submit(v);
-    };
-    return (h("div", { className: "app-lock-screen" },
-        h("form", { className: "glass-panel app-lock-card", onSubmit: (e) => { e.preventDefault(); if (pin.length === length)
-                submit(pin); } },
-            h(Lock, { size: 32, "aria-hidden": "true" }),
-            h("h1", null,
-                "Enter your PIN ",
-                h(HelpButton, { title: "PIN lock and a forgotten PIN", doc: "troubleshooting#pin-forgotten", size: 16 })),
-            h("p", { className: "text-muted" }, "GST Billing is locked."),
-            h("input", { ref: input, className: "form-input app-lock-input", type: "password", inputMode: "numeric", autoComplete: "off", autoFocus: true, "aria-label": `${length} digit PIN`, placeholder: '•'.repeat(length), value: pin, onChange: onChange, disabled: busy, maxLength: length }),
-            h("p", { className: "app-lock-error", role: "alert" }, error),
-            h("button", { type: "button", className: "app-lock-link", onClick: () => setShowHelp((v) => !v) }, "Forgot PIN?"),
-            showHelp && (h("p", { className: "app-lock-help" },
-                "Open the GST-Billing folder on this PC (where you start the app), make a new text file there named ",
-                h("strong", null, "RESET-PIN"),
-                ", then reload this page. The PIN is removed and the file deleted. Your invoices are not touched.")))));
+  const [pin, setPin] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+  const input = useRef(null);
+  const submit = async (value) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await verifyPin(value);
+      onUnlock();
+    } catch (err) {
+      setPin('');
+      setError(err.status === 401 ? 'Wrong PIN. Try again.' : 'Could not check the PIN. Please try again.');
+      setTimeout(() => input.current?.focus(), 0);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const onChange = (e) => {
+    const value = e.target.value.replace(/\D/g, '').slice(0, length);
+    setPin(value);
+    setError('');
+    if (value.length === length) submit(value);
+  };
+  return h('div', { className: 'app-lock-screen' },
+    h('form', { className: 'glass-panel app-lock-card', onSubmit: (e) => { e.preventDefault(); if (pin.length === length) submit(pin); } },
+      h(Lock, { size: 32, 'aria-hidden': 'true' }),
+      h('h1', null, 'Enter your PIN'),
+      h('p', { className: 'text-muted' }, 'GST Billing is locked.'),
+      h('input', { ref: input, className: 'form-input app-lock-input', type: 'password', inputMode: 'numeric', autoComplete: 'off', autoFocus: true, 'aria-label': `${length} digit PIN`, placeholder: '•'.repeat(length), value: pin, onChange, disabled: busy, maxLength: length }),
+      h('p', { className: 'app-lock-error', role: 'alert' }, error),
+      h('button', { type: 'button', className: 'app-lock-link', onClick: () => setShowHelp((value) => !value) }, 'Forgot PIN?'),
+      showHelp && h(ForgotPin, { onUnlock })));
 }
 // Shows the app only after the PIN, when a PIN is set. Asked once per
 // browser tab: a reload in the same tab does not ask again.
@@ -73,8 +82,8 @@ export default function AppLockGate({ children }) {
     // The app has been on screen once (it stays mounted from then on).
     const [shown, setShown] = useState(unlocked);
     useEffect(() => {
-        // If the server cannot be reached the app shows its own error screens; the
-        // lock does not block that.
+        // If browser storage cannot be reached, the app remains available so its
+        // own startup diagnostics can be shown.
         getLockStatus()
             .then((s) => { setLock({ checked: true, enabled: !!s.enabled, length: s.length === 8 ? 8 : 6 }); if (!s.enabled)
             setShown(true); })

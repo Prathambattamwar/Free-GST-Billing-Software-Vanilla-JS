@@ -1,10 +1,14 @@
 // v1.10.83 (#121) - Products and Clients CSV import, and their sample files.
 // Reported: "for import features where are the sample files to fill data".
-// Pure functions (no fetch / UI runtime), so scripts/csv-test.mjs can import each
+// Pure functions (no fetch / React), so scripts/csv-test.mjs can import each
 // sample back through the same code the screens use. Headings are matched
 // loosely (case, spaces, %, / ignored), so the Products export imports back.
-import { toCsvLine } from '../utils.js';
-import { rowsToRecords, toNum } from './bulkCsv.js';
+import { toCsvLine, localToday, clientKey } from '../utils.js';
+import { openingFields } from './clientLedger.js';
+import { rowsToRecords, toNum, percentPart, norm } from './bulkCsv.js';
+import { barcodeProblem, normaliseBarcode } from './barcode.js';
+import { normaliseCategory, CATEGORY_LEVELS } from './stock.js';
+import { levelCsvFields, levelCsvHeaders, levelPricesFromRecord } from './priceLevels.js';
 
 const PRODUCT_FIELDS = {
   name: ['name', 'product', 'product name', 'item', 'item name'],
@@ -13,83 +17,194 @@ const PRODUCT_FIELDS = {
   unit: ['unit'],
   purchasePrice: ['purchase price', 'cost', 'cost price'],
   sellingPrice: ['selling price', 'rate', 'price', 'sale price'],
-  taxPercent: ['gst%', 'gst rate', 'tax%', 'tax', 'taxpercent'],
-  stock: ['stock', 'quantity', 'opening stock'],
+  // v1.10.86 - (#189, #192) optional; MRP already includes tax, so it is kept as typed.
+  mrp: ['mrp', 'm.r.p.', 'maximum retail price', 'max retail price'],
+  taxPercent: ['gst%', 'gst rate', 'tax%', 'tax rate', 'tax', 'taxpercent'],
+  stock: ['stock', 'quantity', 'opening stock', 'opening stock quantity', 'opening qty', 'stock quantity'],
   description: ['description'],
+  // v1.10.84 (#130) - Vyapar's item file says whether its prices hold the tax.
+  taxInclusive: ['tax inclusive', 'tax inclusive (y/n)', 'inclusive of tax'],
+  // v1.10.85 (#137) - the product's barcode (optional, one per product).
+  barcode: ['barcode', 'bar code', 'barcode no', 'ean', 'upc'],
+  // v1.10.85 (#142, #148) - category (levels joined by >) and brand, optional.
+  category: ['category', 'item category', 'group', 'stock group', 'item group'],
+  brand: ['brand', 'make', 'brand name'],
 };
 
 const CLIENT_FIELDS = {
-  name: ['name', 'client', 'client name', 'customer', 'customer name'],
+  name: ['name', 'client', 'client name', 'customer', 'customer name', 'party name', 'party'],
   gstin: ['gstin', 'gst number', 'gst no'],
-  phone: ['phone', 'mobile', 'phone number'],
+  phone: ['phone', 'mobile', 'phone number', 'phone no', 'mobile no', 'contact no', 'party phone no'],
   email: ['email', 'email id'],
-  address: ['address'],
+  address: ['address', 'billing address'],
   state: ['state'],
+  // v1.10.86 (#214) - optional: what they owed you when you started (a
+  // minus amount: their advance), as on 1 April of this financial year.
+  openingBalance: ['opening balance', 'opening bal', 'opening balance amount'],
 };
 
 // Already in the list (trimmed name, any case), or a repeat inside the file.
 const dedupe = (existing) => {
-  const known = new Set((existing || []).map((x) => String(x.name || '').trim().toLowerCase()));
+  // v1.10.86 (#202) - the client name key: extra spaces do not count either.
+  const known = new Set((existing || []).map((x) => clientKey(x.name)));
   return (name) => {
-    const k = name.toLowerCase();
+    const k = clientKey(name);
     if (known.has(k)) return true;
     known.add(k);
     return false;
   };
 };
 
-// Text -> { products, skipped, errors }. A row with a problem is left out and
-// named in errors; a name already saved is skipped (importing twice is safe).
-export function productsCsvToList(text, existing = []) {
-  const { records } = rowsToRecords(text, PRODUCT_FIELDS);
-  const seen = dedupe(existing);
-  const out = { products: [], skipped: 0, errors: [] };
+// v1.10.84 (#134) - a saved product with empty details gets them from the
+// file; a value already there is never changed. 0 counts as empty for the
+// prices, and for GST % only when the product has no HSN either (left so by an
+// import that read only the name; an exempt item with its HSN keeps its 0%).
+const blank = (v) => v === undefined || v === null || String(v).trim() === '';
+const FILL = {
+  hsn: blank, unit: blank, description: blank, stock: blank, barcode: blank, category: blank, brand: blank,
+  purchasePrice: (v) => blank(v) || Number(v) === 0,
+  sellingPrice: (v) => blank(v) || Number(v) === 0,
+  mrp: (v) => blank(v) || Number(v) === 0,
+  taxPercent: (v, p) => blank(v) || (Number(v) === 0 && blank(p.hsn)),
+};
+export function fillBlanks(saved, fresh) {
+  const add = {};
+  for (const [k, isEmpty] of Object.entries(FILL)) {
+    if (isEmpty(saved[k], saved) && !FILL[k](fresh[k], fresh)) add[k] = fresh[k];
+  }
+  if ('sellingPrice' in add) add.rate = add.sellingPrice; // mirror for older readers
+  // v1.10.85 - a level price the saved product does not have yet.
+  const levelAdd = Object.fromEntries(Object.entries(fresh.levelPrices || {}).filter(([id]) => !(Number(saved.levelPrices?.[id]) > 0)));
+  if (Object.keys(levelAdd).length) add.levelPrices = { ...(saved.levelPrices || {}), ...levelAdd };
+  return Object.keys(add).length ? { ...saved, ...add } : null;
+}
+
+// v1.10.85 - `levels` (Price levels on): each level's "<name> price" column
+// is read into levelPrices; a saved product without level prices gets them.
+// Rows (CSV text or a sheet) -> { products, updates, skipped, errors }. A row
+// with a problem is left out and named in errors. A name already saved is not
+// added again (importing twice is safe): its empty details are filled in
+// (updates), or it is skipped when there is nothing to fill.
+// v1.10.85 - with Barcodes off (barcodes: false) the Barcode column is ignored.
+export function productsCsvToList(text, existing = [], levels = [], { barcodes = true } = {}) {
+  const fields = { ...PRODUCT_FIELDS, ...levelCsvFields(levels) };
+  let { records, unknown } = rowsToRecords(text, fields);
+  // With price levels on, a "... price" column that is not one of them (a
+  // level renamed since the export, a typo) is named on each row that fills
+  // it, instead of its prices being dropped without a word.
+  const stray = levels.length ? (unknown || []).filter((h) => /price$/i.test(String(h).trim())) : [];
+  if (stray.length) ({ records } = rowsToRecords(text, { ...fields, ...Object.fromEntries(stray.map((h, i) => [`stray${i}`, [h]])) }));
+  const key = (n) => String(n || '').trim().toLowerCase();
+  const saved = new Map((existing || []).map((p) => [key(p.name), p]));
+  const seen = new Set();
+  const out = { products: [], updates: [], skipped: 0, errors: [] };
+  // #137 - barcodes already taken: saved products, then rows added from this file.
+  const codes = (existing || []).filter((p) => p.barcode).map((p) => ({ id: p.id, name: p.name, barcode: p.barcode }));
   for (const r of records) {
     const name = r.name || '';
     if (!name) continue;
     const type = String(r.type || '').toLowerCase();
     if (type && !/^(goods?|g|products?|services?|s)$/.test(type)) { out.errors.push(`Row ${r._line} (${name}): Type must be Goods or Service`); continue; }
     const service = type.startsWith('s');
-    const nums = { purchasePrice: toNum(r.purchasePrice), sellingPrice: toNum(r.sellingPrice), taxPercent: toNum(r.taxPercent), stock: toNum(r.stock, null) };
+    const nums = { purchasePrice: toNum(r.purchasePrice), sellingPrice: toNum(r.sellingPrice), mrp: toNum(r.mrp), taxPercent: toNum(percentPart(r.taxPercent)), stock: toNum(r.stock, null) };
     const bad = Object.entries(nums).find(([k, v]) => (k === 'stock' ? v !== null && !Number.isFinite(v) : !Number.isFinite(v)));
     if (bad) { out.errors.push(`Row ${r._line} (${name}): ${bad[0] === 'stock' ? 'stock' : bad[0] === 'taxPercent' ? 'GST %' : 'price'} must be a number`); continue; }
     if (nums.taxPercent < 0 || nums.taxPercent > 100) { out.errors.push(`Row ${r._line} (${name}): GST % must be 0 to 100`); continue; }
-    if (seen(name)) { out.skipped++; continue; }
-    out.products.push({
+    const lv = levelPricesFromRecord(r, levels, toNum);
+    if (lv.error) { out.errors.push(`Row ${r._line} (${name}): ${lv.error}`); continue; }
+    const strayCol = stray.find((h, i) => String(r[`stray${i}`] ?? '').trim());
+    if (strayCol) { out.errors.push(`Row ${r._line} (${name}): "${strayCol}" is not one of your price levels (${levelCsvHeaders(levels).join(', ')}, or Level 1 price...)`); continue; }
+    if (seen.has(key(name))) { out.skipped++; continue; }
+    // A barcode is used only for a new product, or a saved one without one;
+    // one that another product has (saved, or higher up in the file) is refused.
+    const old = saved.get(key(name));
+    const code = barcodes ? normaliseBarcode(r.barcode) : '';
+    // Excel shows a long number code as 8.90123E+12 and saves it so: the digits are lost.
+    if (/^\d+(\.\d+)?e\+\d+$/i.test(code)) {
+      out.errors.push(`Row ${r._line} (${name}): the barcode ${code} was turned into a number by Excel and its digits are lost. In Excel, set the Barcode column to Text, type the codes again and save`);
+      continue;
+    }
+    const ownId = old ? old.id : `_row${r._line}`;
+    if (code && !(old && old.barcode)) {
+      const problem = barcodeProblem(code, codes, ownId);
+      if (problem) { out.errors.push(`Row ${r._line} (${name}): ${problem}`); continue; }
+      codes.push({ id: ownId, name, barcode: code });
+    }
+    seen.add(key(name));
+    // Our product prices are before tax: take the tax out of an inclusive one.
+    // v1.10.85 - the level prices too.
+    const inclusive = /^(y|yes|true|1)$/i.test(String(r.taxInclusive || '').trim()) && nums.taxPercent > 0;
+    const exTax = (v) => (inclusive ? Math.round(v / (1 + nums.taxPercent / 100) * 100) / 100 : v);
+    nums.sellingPrice = exTax(nums.sellingPrice);
+    const levelPrices = Object.fromEntries(Object.entries(lv.prices).map(([id, v]) => [id, exTax(v)]));
+    const product = {
       name,
       ...(service ? { kind: 'service' } : {}),
       hsn: r.hsn || '',
       purchasePrice: nums.purchasePrice,
       sellingPrice: nums.sellingPrice,
       rate: nums.sellingPrice, // mirror for older readers
+      ...(nums.mrp > 0 ? { mrp: nums.mrp } : {}),
       taxPercent: nums.taxPercent,
       unit: r.unit || 'Nos',
       // A service has no stock; goods with a blank stock are "not tracked yet".
       ...(!service && nums.stock !== null ? { stock: nums.stock } : {}),
       description: r.description || '',
-    });
+      ...(code ? { barcode: code } : {}),
+      // A category deeper than 4 levels keeps its first 4.
+      ...(r.category ? { category: normaliseCategory(r.category).split(' > ').slice(0, CATEGORY_LEVELS).join(' > ') } : {}),
+      ...(String(r.brand || '').trim() ? { brand: String(r.brand).trim() } : {}),
+      ...(Object.keys(levelPrices).length ? { levelPrices } : {}),
+    };
+    if (!old) { out.products.push(product); continue; }
+    const filled = fillBlanks(old, product);
+    if (filled) out.updates.push(filled); else out.skipped++;
   }
   return out;
 }
 
-export function clientsCsvToList(text, existing = []) {
+// v1.10.85 - a price level name that would make its CSV column ("<name>
+// price") read as another product column, or another level's: Selling
+// (Selling price), Sale, Purchase, Cost, MRP, Rate, "Level 2" and the like.
+// Settings refuses it. Returns the problem, or ''.
+const RESERVED_LEVEL_WORDS = ['mrp', 'sale', 'sales', 'selling', 'sell', 'purchase', 'cost', 'rate', 'price', 'box', 'list', 'unit', 'base', 'default'];
+export function levelNameProblem(names) {
+  const used = (names || []).map((n) => String(n ?? '').trim()).filter(Boolean);
+  const aliases = new Set(Object.values(PRODUCT_FIELDS).flat().map(norm));
+  for (const n of used) {
+    const k = norm(n);
+    if (RESERVED_LEVEL_WORDS.includes(k) || aliases.has(k) || aliases.has(norm(`${n} price`)) || /^(pricelevel|level)\d*$/.test(k)) {
+      return `"${n}" cannot be a price level name: its column "${n} price" would be read as another column. Try a name like Retail, Wholesale or Dealer.`;
+    }
+  }
+  const first = used.map((n) => used.findIndex((m) => norm(m) === norm(n)));
+  const dupAt = first.findIndex((f, i) => f !== i);
+  return dupAt >= 0 ? `Two price levels are both called "${used[first[dupAt]]}".` : '';
+}
+
+export function clientsCsvToList(text, existing = [], today = '') {
   const { records } = rowsToRecords(text, CLIENT_FIELDS);
   const seen = dedupe(existing);
   const out = { clients: [], skipped: 0, errors: [] };
   for (const r of records) {
     const name = r.name || '';
     if (!name) continue;
+    const opening = toNum(r.openingBalance);
+    if (!Number.isFinite(opening)) { out.errors.push(`Row ${r._line} (${name}): Opening Balance must be a number`); continue; }
     if (seen(name)) { out.skipped++; continue; }
-    out.clients.push({ name, address: r.address || '', state: r.state || '', gstin: (r.gstin || '').toUpperCase(), email: r.email || '', phone: r.phone || '' });
+    out.clients.push({
+      name, address: r.address || '', state: r.state || '', gstin: (r.gstin || '').toUpperCase(), email: r.email || '', phone: r.phone || '',
+      ...(Math.abs(opening) > 0.005 ? openingFields({ openingBalance: Math.abs(opening), openingBalanceType: opening < 0 ? 'advance' : 'receivable' }, '', today || localToday()) : {}),
+    });
   }
   return out;
 }
 
 // Sample files (demo data, not real businesses) for "Download sample file".
 export const PRODUCTS_SAMPLE = [
-  toCsvLine(['Name', 'Type', 'HSN/SAC', 'Unit', 'Purchase Price', 'Selling Price', 'GST %', 'Stock', 'Description']),
-  toCsvLine(['Demo A4 Paper Ream 75 GSM', 'Goods', '4802', 'Nos', 220, 280, 18, 50, 'Sample goods row - replace with your own']),
-  toCsvLine(['Demo Printing service', 'Service', '998912', 'Page', '', 5, 18, '', 'Sample service row - a service has no stock']),
+  toCsvLine(['Name', 'Type', 'HSN/SAC', 'Unit', 'Purchase Price', 'Selling Price', 'MRP', 'GST %', 'Stock', 'Description', 'Barcode']),
+  toCsvLine(['Demo A4 Paper Ream 75 GSM', 'Goods', '4802', 'Nos', 220, 280, 340, 18, 50, 'Sample goods row - replace with your own', '']),
+  toCsvLine(['Demo Printing service', 'Service', '998912', 'Page', '', 5, '', 18, '', 'Sample service row - a service has no stock', '']),
 ].join('\n');
 
 export const CLIENTS_SAMPLE = [

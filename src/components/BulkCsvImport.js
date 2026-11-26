@@ -1,14 +1,36 @@
+import { h, Fragment } from '../vanilla/dom.js';
 // v1.10.80 (#101) - bulk CSV import / export of sales invoices (Dashboard)
 // and purchase bills (Purchases). The parsing and the arithmetic live in
 // src/utils/bulkCsv.js; this is the window around them: template, export,
 // pick a file, see what will happen, import.
-import { useState, h, Fragment } from '../vanilla/dom.js';
+// v1.10.84 (#130) - an Excel .xlsx too (Vyapar's sale report): it opens on the
+// sheet with the most invoices, others can be picked, and what a "Sale Report"
+// sheet says was received becomes the payments.
+import { useState } from '../vanilla/dom.js';
+import { createPortal } from '../vanilla/dom.js';
 import { FileSpreadsheet, Upload, Download, X } from '../vanilla/icons.js';
 import { getProfile, getAllBills, saveBill, getAllProducts, saveProduct, applyStockChanges, getAllClients, saveClient, getAllPurchases, savePurchase, } from '../store.js';
-import { belongsToProfile, isCancelledBill, isInterstateSupply, roundQty, localToday } from '../utils.js';
-import { salesCsvToBills, billsToSalesCsv, purchaseCsvToRecords, purchasesToCsv, SALES_TEMPLATE, PURCHASE_TEMPLATE, } from '../utils/bulkCsv.js';
+import { belongsToProfile, isCancelledBill, isInterstateSupply, roundQty, localToday, gstinChecksumOk } from '../utils.js';
+import { salesCsvToBills, billsToSalesCsv, purchaseCsvToRecords, purchasesToCsv, SALES_TEMPLATE, PURCHASE_TEMPLATE, receivedByInvoice, newProductsFromBills, marketplaceOrdersTable, } from '../utils/bulkCsv.js';
+import { fileToSheets, bestSheet } from '../utils/importFile.js';
+import { productKey } from '../utils/purchaseStock.js';
 import { toast } from './Toast.js';
 import HelpButton from './HelpButton.js';
+import { BarButton } from './PageHeader.js';
+// v1.10.86 (#209) - a Flipkart orders report: each invoice gets Flipkart's
+// GSTIN (Settings → Company → GSTR filing details) as its e-commerce operator,
+// so the sales fill GSTR-1 Table 14. Without a valid one, a note says where to add it.
+const withFlipkartGstin = (res, gstin) => {
+    if (!gstinChecksumOk(gstin)) {
+        return { ...res, warnings: [...(res.warnings || []), "Add Flipkart's GSTIN in Settings → Company (GSTR filing details), then import, so these sales also fill GSTR-1 Table 14."] };
+    }
+    const ecoGstin = String(gstin).trim().toUpperCase();
+    return {
+        ...res,
+        bills: res.bills.map((b) => ({ ...b, data: { ...b.data, details: { ...(b.data?.details || {}), ecoGstin } } })),
+        warnings: [...(res.warnings || []), `Flipkart's GSTIN ${ecoGstin} goes on each invoice as the e-commerce operator (GSTR-1 Table 14).`],
+    };
+};
 const download = (text, name) => {
     const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8;' }));
     const a = document.createElement('a');
@@ -20,29 +42,38 @@ const download = (text, name) => {
 export default function BulkCsvImport({ kind = 'sales', onDone }) {
     const sales = kind === 'sales';
     const [open, setOpen] = useState(false);
-    const [plan, setPlan] = useState(null); // { fileName, result, ctx }
+    const [plan, setPlan] = useState(null); // { fileName, result, sheets, at }
     const [adjustStock, setAdjustStock] = useState(false);
     const [addClients, setAddClients] = useState(true);
+    const [addProducts, setAddProducts] = useState(true);
     const [busy, setBusy] = useState(false);
-    const [fileText, setFileText] = useState('');
     const close = () => { if (!busy) {
         setOpen(false);
         setPlan(null);
-        setFileText('');
     } };
     // Reads everything the conversion needs and works out what the file holds.
-    const preview = async (text, fileName, stock = adjustStock) => {
+    // at: the sheet to read (undefined: the one with the most ready).
+    const preview = async (fileName, sheets, at, stock = adjustStock) => {
         const profile = await getProfile().catch(() => ({}));
+        let convert;
         if (sales) {
             const [bills, products, clients] = await Promise.all([getAllBills(), getAllProducts().catch(() => []), getAllClients().catch(() => [])]);
-            const result = salesCsvToBills(text, { profile, products, clients, adjustStock: stock, existingIds: new Set(bills.map((b) => b.id)) });
-            setPlan({ fileName, result });
+            const existingIds = new Set(bills.map((b) => b.id));
+            convert = (i) => {
+                const res = salesCsvToBills(sheets[i].rows, {
+                    profile, products, clients, adjustStock: stock, existingIds,
+                    received: sheets.filter((_, j) => j !== i).map((s) => receivedByInvoice(s.rows)).find((m) => m.size) || null,
+                });
+                return marketplaceOrdersTable(sheets[i].rows) ? withFlipkartGstin(res, profile.flipkartGstin) : res;
+            };
         }
         else {
             const existing = (await getAllPurchases()).filter((p) => belongsToProfile(p, profile));
-            const result = purchaseCsvToRecords(text, { profile, existing, inferInterstate: (g) => isInterstateSupply(g, profile) });
-            setPlan({ fileName, result });
+            convert = (i) => purchaseCsvToRecords(sheets[i].rows, { profile, existing, inferInterstate: (g) => isInterstateSupply(g, profile) });
         }
+        const ready = (res) => (sales ? res.bills : res.purchases).length;
+        const pick = at ?? bestSheet(sheets, (_, i) => ready(convert(i)));
+        setPlan({ fileName, sheets, at: pick, result: convert(pick) });
     };
     const pickFile = async (e) => {
         const file = e.target.files?.[0];
@@ -50,12 +81,10 @@ export default function BulkCsvImport({ kind = 'sales', onDone }) {
         if (!file)
             return;
         try {
-            const text = await file.text();
-            setFileText(text);
-            await preview(text, file.name);
+            await preview(file.name, await fileToSheets(file, kind));
         }
         catch (err) {
-            toast(`Could not read ${file.name}: ${err.message}`, 'error');
+            toast(`Could not read ${file.name}: ${err.message}`, 'error', 9000);
         }
     };
     const exportAll = async () => {
@@ -94,6 +123,7 @@ export default function BulkCsvImport({ kind = 'sales', onDone }) {
         try {
             if (sales) {
                 const stock = {};
+                const savedBills = [];
                 // Stock for the bills already saved is applied even if a later one
                 // stops the import (it used to be skipped, leaving those bills with
                 // a stock record that never happened).
@@ -102,6 +132,7 @@ export default function BulkCsvImport({ kind = 'sales', onDone }) {
                         try {
                             await saveBill(bill, { overwrite: false }); // never replaces an invoice
                             saved += 1;
+                            savedBills.push(bill);
                             for (const [id, d] of Object.entries(bill.data.stockApplied || {}))
                                 stock[id] = (stock[id] || 0) + d;
                         }
@@ -116,6 +147,19 @@ export default function BulkCsvImport({ kind = 'sales', onDone }) {
                 finally {
                     if (Object.keys(stock).length)
                         await applyStockChanges(stock);
+                    // #170: new items of the saved invoices go into Products too.
+                    // Review M2: the product list must be read, or every item would look new
+                    // (duplicates); then products are left as they are, and the user is told.
+                    if (addProducts && savedBills.length) {
+                        const have = await getAllProducts().catch(() => null);
+                        if (have) {
+                            for (const p of newProductsFromBills(savedBills, have))
+                                await saveProduct(p).catch(() => { });
+                        }
+                        else {
+                            toast('The invoices were imported, but the product list could not be read, so no new items were added to Products.', 'warning', 9000);
+                        }
+                    }
                 }
                 if (addClients)
                     for (const c of plan.result.newClients)
@@ -125,7 +169,7 @@ export default function BulkCsvImport({ kind = 'sales', onDone }) {
                 // As when a bill is typed in: quantities go into product stock, and a
                 // new item becomes a product (Purchases > save does the same).
                 const products = await getAllProducts().catch(() => []);
-                const byName = new Map(products.map((p) => [String(p.name || '').trim().toLowerCase(), { ...p }]));
+                const byName = new Map(products.map((p) => [productKey(p.name), { ...p }])); // v1.10.86 (#199) - inner spaces ignored too
                 const touched = new Set();
                 // As for sales: the bills saved so far get their stock even if a later
                 // one fails.
@@ -134,7 +178,7 @@ export default function BulkCsvImport({ kind = 'sales', onDone }) {
                         await savePurchase(purchase);
                         saved += 1;
                         for (const it of purchase.items) {
-                            const key = it.name.trim().toLowerCase();
+                            const key = productKey(it.name);
                             const prev = byName.get(key) || { name: it.name.trim(), hsn: it.hsn, sellingPrice: it.rate, rate: it.rate, taxPercent: it.taxPercent, cessPercent: it.cessPercent, unit: 'Nos', stock: 0, description: '' };
                             byName.set(key, { ...prev, stock: roundQty((Number(prev.stock) || 0) + it.quantity), purchasePrice: it.rate });
                             touched.add(key);
@@ -154,7 +198,6 @@ export default function BulkCsvImport({ kind = 'sales', onDone }) {
             toast(parts.join(' · '), saved ? 'success' : 'warning', 8000);
             setOpen(false);
             setPlan(null);
-            setFileText('');
             onDone?.();
         }
         catch (err) {
@@ -168,15 +211,13 @@ export default function BulkCsvImport({ kind = 'sales', onDone }) {
     const r = plan?.result;
     const ready = r ? (sales ? r.bills.length : r.purchases.length) : 0;
     return (h(Fragment, null,
-        h("button", { type: "button", className: "btn btn-secondary", onClick: () => setOpen(true), title: `Import ${sales ? 'invoices' : 'purchase bills'} from a CSV file, or export them as CSV` },
-            h(FileSpreadsheet, { size: 16 }),
-            " CSV import / export"),
-        open && (h("div", { className: "modal-overlay", onClick: close },
+        h(BarButton, { icon: FileSpreadsheet, label: "Import / export CSV", onClick: () => setOpen(true), title: `Import / export CSV: import ${sales ? 'invoices' : 'purchase bills'} from a CSV or Excel file, or export them as CSV` }),
+        open && createPortal(h("div", { className: "modal-overlay", onClick: close },
             h("div", { className: "modal-content", style: { maxWidth: 640 }, onClick: (e) => e.stopPropagation() },
                 h("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
                     h("h3", { className: "section-title", style: { margin: 0 } },
                         sales ? 'Sales invoices' : 'Purchase bills',
-                        ": CSV import / export ",
+                        ": Import / export CSV ",
                         h(HelpButton, { title: "CSV import", doc: sales ? 'dashboard#csv' : 'purchases#csv-purchases', size: 16, style: { marginLeft: 6 } })),
                     h("button", { type: "button", className: "icon-btn", onClick: close, title: "Close" },
                         h(X, { size: 16 }))),
@@ -198,17 +239,24 @@ export default function BulkCsvImport({ kind = 'sales', onDone }) {
                         " Export all as CSV"),
                     h("label", { className: "btn btn-primary", style: { cursor: 'pointer' } },
                         h(Upload, { size: 15 }),
-                        " Choose CSV file",
-                        h("input", { type: "file", accept: ".csv,text/csv", onChange: pickFile, style: { display: 'none' } }))),
+                        " Choose CSV or Excel file",
+                        h("input", { type: "file", accept: ".csv,text/csv,.xlsx", onChange: pickFile, style: { display: 'none' } }))),
                 sales && (h("div", { style: { display: 'grid', gap: '0.35rem', fontSize: '0.85rem', marginBottom: '0.75rem' } },
                     h("label", null,
-                        h("input", { type: "checkbox", checked: adjustStock, onChange: (e) => { setAdjustStock(e.target.checked); if (fileText)
-                                preview(fileText, plan?.fileName, e.target.checked); } }),
+                        h("input", { type: "checkbox", checked: adjustStock, onChange: (e) => { setAdjustStock(e.target.checked); if (plan)
+                                preview(plan.fileName, plan.sheets, plan.at, e.target.checked); } }),
                         " Take sold quantities out of product stock (leave off for old invoices)"),
                     h("label", null,
                         h("input", { type: "checkbox", checked: addClients, onChange: (e) => setAddClients(e.target.checked) }),
-                        " Add new clients to Clients"))),
+                        " Add new clients to Clients"),
+                    h("label", null,
+                        h("input", { type: "checkbox", checked: addProducts, onChange: (e) => setAddProducts(e.target.checked) }),
+                        " Add new items to Products"))),
                 r && (h("div", { style: { padding: '0.75rem', background: 'var(--bg-secondary)', borderRadius: 8, fontSize: '0.85rem' } },
+                    plan.sheets.length > 1 && (h("label", { style: { display: 'block', marginBottom: '0.5rem' } },
+                        "Sheet:",
+                        ' ',
+                        h("select", { value: plan.at, onChange: (e) => preview(plan.fileName, plan.sheets, Number(e.target.value)) }, plan.sheets.map((s, i) => h("option", { key: `${i}-${s.name}`, value: i }, s.name || `Sheet ${i + 1}`))))),
                     h("strong", null, plan.fileName),
                     ": ",
                     ready,
@@ -235,5 +283,5 @@ export default function BulkCsvImport({ kind = 'sales', onDone }) {
                         h("ul", { style: { margin: 0, paddingLeft: '1.1rem', maxHeight: 150, overflowY: 'auto' } }, r.errors.slice(0, 50).map((e) => h("li", { key: e }, e))))))),
                 h("div", { style: { display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' } },
                     h("button", { type: "button", className: "btn btn-secondary", onClick: close, disabled: busy }, "Close"),
-                    h("button", { type: "button", className: "btn btn-primary", onClick: runImport, disabled: busy || !ready }, busy ? 'Importing…' : `Import ${ready || ''}`.trim())))))));
+                    h("button", { type: "button", className: "btn btn-primary", onClick: runImport, disabled: busy || !ready }, busy ? 'Importing…' : `Import ${ready || ''}`.trim())))), document.body)));
 }

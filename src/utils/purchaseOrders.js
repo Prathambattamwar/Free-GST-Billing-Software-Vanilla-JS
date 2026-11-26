@@ -1,15 +1,69 @@
 // v1.10.83 (#112) - purchase orders: the pure parts (totals, status, numbering,
 // the bill a PO turns into), kept out of the components so they can be tested.
-import { calculateRoundOff, formatDocNumber, getFinancialYearLabel, parseLocalDate, roundQty } from '../utils.js';
+import { calculateRoundOff, formatDocNumber, getFinancialYearLabel, parseLocalDate, roundQty, resolveLineDiscount, spreadBillDiscount, baseQty, lineFactor, altLineFields } from '../utils.js';
 
 // Line and document totals for purchase bills and purchase orders alike.
-// Moved here from PurchaseBills.js unchanged, so both use the same sums.
+// Moved here from PurchaseBills.jsx unchanged, so both use the same sums.
+// v1.10.85 (#171) - a line discount (discountType 'percent', else an amount
+// off the line; resolveLineDiscount, as on sales invoices) comes off before
+// GST and cess. `amount` is the taxable value after it; `gross` is qty x rate.
+// A line with no discount gives exactly what it gave before.
 export function purchaseLineTax(item) {
-  const amount = (item.quantity || 0) * (item.rate || 0);
+  const gross = (item.quantity || 0) * (item.rate || 0);
+  const discount = purchaseLineDiscount(item);
+  const amount = discount ? gross - discount : gross;
   const tax = (amount * (item.taxPercent || 0)) / 100;
   const cess = (amount * (Number(item.cessPercent) || 0)) / 100;
-  return { amount, tax, cess, total: amount + tax + cess };
+  return { gross, discount, amount, tax, cess, total: amount + tax + cess };
 }
+// The discount on a purchase line (0 when none). Only percent or an amount
+// off the whole line: the purchase form offers no other kind.
+// v1.10.86 - plus the line's part of a discount on the whole bill
+// (billDiscShare, see withBillDiscount), so every total, the ITC and the
+// product's cost price follow it.
+export const purchaseLineDiscount = (item) => resolveLineDiscount({
+  quantity: item?.quantity, rate: item?.rate, discount: item?.discount,
+  discountType: item?.discountType === 'percent' ? 'percent' : 'fixed',
+  billDiscShare: item?.billDiscShare,
+});
+// v1.10.86 - a discount on the whole purchase bill (value, 'percent' or an
+// amount), taken before GST like a trade discount on a sales invoice: shared
+// over the lines by their value after line discounts, as billDiscShare, with
+// GST on what is left. Any old part is dropped first; 0 just drops it.
+export const withBillDiscount = (items, value, type) => spreadBillDiscount(items, {
+  invoiceDiscountBeforeGst: true, invoiceDiscountValue: value, invoiceDiscountType: type === 'percent' ? 'percent' : 'fixed',
+});
+// The discount fields a saved line keeps: none at all without a discount, so
+// lines look exactly as they did before #171. v1.10.86 - and its part of the
+// bill discount, so a return or a bill made from it keeps it.
+export const lineDiscountFields = (it) => ({
+  ...((Number(it?.discount) || 0) > 0 ? { discount: Number(it.discount), discountType: it.discountType === 'percent' ? 'percent' : 'fixed' } : {}),
+  ...((Number(it?.billDiscShare) || 0) > 0 ? { billDiscShare: Number(it.billDiscShare) } : {}),
+});
+// The line for part of its quantity: a percent discount stays as it is, an
+// amount off the line (and its part of the bill discount) is shared out (2 of
+// 10 returned carry 2/10 of it).
+export const lineWithQuantity = (it, q) => {
+  const of = Number(it?.quantity) || 0;
+  const part = (v) => Math.round((Number(v) * q / of) * 100) / 100;
+  const amountOff = (Number(it?.discount) || 0) > 0 && it.discountType !== 'percent';
+  return { ...it, quantity: q,
+    ...(amountOff && of > 0 ? { discount: part(it.discount) } : {}),
+    ...((Number(it?.billDiscShare) || 0) > 0 && of > 0 ? { billDiscShare: part(it.billDiscShare) } : {}) };
+};
+// v1.10.85 (#160) - does any line of a purchase carry this serial number /
+// IMEI (or part of one)? Serials are typed comma or space separated.
+export const purchaseHasSerial = (p, query) => {
+  const q = String(query || '').trim().toLowerCase();
+  return !!q && (p?.items || []).some((it) => String(it?.serialNo || '').toLowerCase().includes(q));
+};
+// What one unit really cost (after its discount, before GST): the cost price
+// a purchase gives the product.
+export const purchaseUnitCost = (item) => {
+  const q = Number(item?.quantity) || 0;
+  if (!purchaseLineDiscount(item) || q <= 0) return Number(item?.rate) || 0;
+  return Math.round((purchaseLineTax(item).amount / q) * 10000) / 10000;
+};
 
 export function purchaseTotals(items, applyRoundOff = false) {
   const raw = (items || []).reduce((acc, item) => {
@@ -25,7 +79,9 @@ export function purchaseTotals(items, applyRoundOff = false) {
   // as a separate line so GSTR-3B input tax credit reflects the supplier's
   // actual tax amount, not a rounded version.
   const roundOff = applyRoundOff ? calculateRoundOff(raw.total) : 0;
-  return { ...raw, roundOff, finalTotal: raw.total + roundOff };
+  // v1.10.86 - the discount on the whole bill, already out of `taxable`; shown on its own line.
+  const billDiscount = Math.round((items || []).reduce((s, it) => s + (Number(it?.billDiscShare) || 0), 0) * 100) / 100;
+  return { ...raw, roundOff, finalTotal: raw.total + roundOff, billDiscount };
 }
 
 export const PO_STATUS_LABELS = {
@@ -46,15 +102,17 @@ export function poRemainingItems(po, purchases) {
   const got = new Map();
   for (const b of purchases || []) {
     if (!po?.id || b?.fromPo !== po.id) continue;
-    for (const it of b.items || []) got.set(nameKey(it), (got.get(nameKey(it)) || 0) + (Number(it.quantity) || 0));
+    // v1.10.85 (#148) - counted in the base unit: a PO of 2 boxes of 12 and a
+    // bill of 12 pieces leave 1 box to come.
+    for (const it of b.items || []) got.set(nameKey(it), (got.get(nameKey(it)) || 0) + baseQty(it));
   }
   const out = [];
   for (const it of po?.items || []) {
-    const qty = Number(it.quantity) || 0;
+    const qty = baseQty(it);
     const take = Math.min(qty, got.get(nameKey(it)) || 0);
     got.set(nameKey(it), (got.get(nameKey(it)) || 0) - take);
-    const left = roundQty(qty - take);
-    if (left > 0) out.push({ ...it, quantity: left });
+    const left = roundQty((qty - take) / lineFactor(it));
+    if (left > 0) out.push(lineWithQuantity(it, left));
   }
   return out;
 }
@@ -79,6 +137,9 @@ export function billFormFromPo(po, purchases) {
     items: poRemainingItems(po, purchases).map((it) => ({
       name: it.name || '', hsn: it.hsn || '', quantity: it.quantity, unit: it.unit || '',
       rate: Number(it.rate) || 0, taxPercent: Number(it.taxPercent) || 0, cessPercent: Number(it.cessPercent) || 0,
+      ...lineDiscountFields(it),
+      // v1.10.85 (#148) - a line ordered in boxes is billed in boxes.
+      ...altLineFields(it),
     })),
     fromPo: po.id,
     // v1.10.83 (#112) - the bill belongs to the same cost centre as its order.

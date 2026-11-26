@@ -1,15 +1,31 @@
-import { useState, useEffect, h, Fragment } from '../vanilla/dom.js';
-import { Wallet, Plus, Edit3, Trash2, Search, X, Save, Calendar } from '../vanilla/icons.js';
+import { h, Fragment } from '../vanilla/dom.js';
+import { useState, useEffect } from '../vanilla/dom.js';
+import { Wallet, Plus, Edit3, Trash2, Search, X, Save, Calendar, CheckCircle } from '../vanilla/icons.js';
 import { getAllExpenses, saveExpense, deleteExpense, getProfile } from '../store.js';
 import { formatCurrency, getFYOptions, belongsToProfile, isUnassignedToBusiness } from '../utils.js';
 import UnassignedBanner from './UnassignedBanner.js';
 import { toast } from './Toast.js';
+import { EXPENSE_PAYMENT, expenseStatus, expensePaid, expenseDue } from '../utils/expensePayment.js';
 import { confirmAction } from './ConfirmModal.js';
 import HelpButton from './HelpButton.js';
+import PageHeader from './PageHeader.js';
 import TableExport from './TableExport.js';
+import ActionsMenu from './ActionsMenu.js';
 import { useCostCentres } from './useCostCentres.js';
 import { CostCentreSelect, CostCentreFilter } from './CostCentrePicker.js';
 import { matchesCentre, centreFields, centreLabel, UNTAGGED } from '../utils/costCentres.js';
+// v1.10.86 - sort by a column header, remembered in this browser.
+import { useListSort, sortRows } from '../utils/listPrefs.js';
+import SortTh from './SortTh.js';
+const SORT_GETTERS = {
+    date: (e) => e.date,
+    description: (e) => e.description,
+    category: (e) => e.category,
+    vendor: (e) => e.vendorName,
+    amount: (e) => Number(e.amount) || 0,
+    gst: (e) => Number(e.gstAmount) || 0,
+    payment: (e) => expenseDue(e),
+};
 // Each category is tagged with its ITR (Income Tax Return) head so the
 // v1.7.0+ ITR Filing Summary can auto-aggregate expenses under the correct
 // P&L line. Users don't have to think about heads — they pick the category
@@ -65,6 +81,9 @@ const emptyForm = {
     vendorGstin: '',
     invoiceNo: '',
     paymentMode: 'Bank Transfer',
+    // v1.10.85 (#165) - Paid / Unpaid / Partly paid (utils/expensePayment.js)
+    paymentStatus: 'paid',
+    paidAmount: '',
     note: '',
     // v1.10.83 (#112) - optional; see utils/costCentres.js
     costCentre: '',
@@ -82,6 +101,7 @@ export default function ExpenseTracker() {
     const [editingId, setEditingId] = useState(null);
     const [form, setForm] = useState({ ...emptyForm });
     const [centreFilter, setCentreFilter] = useState('');
+    const [payFilter, setPayFilter] = useState('all'); // v1.10.85 (#165): 'all' | 'due'
     const { on: ccOn, centres } = useCostCentres(ownerProfile);
     const fyOptions = getFYOptions();
     const defaultFy = fyOptions[0]?.value || '';
@@ -138,6 +158,21 @@ export default function ExpenseTracker() {
     });
     const totalAmount = filtered.reduce((s, e) => s + (e.amount || 0), 0);
     const totalGST = filtered.reduce((s, e) => s + (e.gstAmount || 0), 0);
+    // v1.10.85 (#165) - still to pay on the expenses shown.
+    const totalDue = filtered.reduce((s, e) => s + expenseDue(e), 0);
+    const { sort, toggle: toggleSort } = useListSort('expenses', Object.keys(SORT_GETTERS));
+    const shown = sortRows(payFilter === 'due' ? filtered.filter((e) => expenseDue(e) > 0) : filtered, sort, SORT_GETTERS);
+    // Mark an Unpaid / Partly paid expense as fully paid.
+    const markPaid = async (exp) => {
+        try {
+            await saveExpense({ ...exp, paymentStatus: 'paid', paidAmount: Number(exp.amount) || 0 });
+            toast('Marked as paid', 'success');
+            loadExpenses();
+        }
+        catch {
+            toast('Failed to save expense', 'error');
+        }
+    };
     const openAdd = () => {
         setForm({ ...emptyForm, date: localToday() });
         setEditingId(null);
@@ -155,6 +190,8 @@ export default function ExpenseTracker() {
             vendorGstin: exp.vendorGstin || '',
             invoiceNo: exp.invoiceNo || '',
             paymentMode: exp.paymentMode || 'Bank Transfer',
+            paymentStatus: expenseStatus(exp),
+            paidAmount: expenseStatus(exp) === 'partial' ? String(exp.paidAmount ?? '') : '',
             interstate: !!exp.interstate,
             note: exp.note || '',
             costCentre: exp.costCentre || '',
@@ -183,6 +220,12 @@ export default function ExpenseTracker() {
             toast('GST % must be between 0 and 100', 'warning');
             return;
         }
+        const amountNum = parseFloat(form.amount);
+        const paidNum = form.paymentStatus === 'partial' ? parseFloat(form.paidAmount) : NaN;
+        if (form.paymentStatus === 'partial' && !(paidNum > 0 && paidNum < amountNum)) {
+            toast('For Partly paid, enter the amount paid so far (more than 0 and less than the amount)', 'warning');
+            return;
+        }
         try {
             const expense = {
                 ...(editingId ? { id: editingId } : {}),
@@ -196,6 +239,8 @@ export default function ExpenseTracker() {
                 vendorGstin: form.vendorGstin.trim(),
                 invoiceNo: form.invoiceNo.trim(),
                 paymentMode: form.paymentMode,
+                paymentStatus: form.paymentStatus,
+                paidAmount: form.paymentStatus === 'partial' ? paidNum : form.paymentStatus === 'unpaid' ? 0 : amountNum,
                 interstate: !!form.interstate,
                 note: form.note.trim(),
                 // Stamp the business this expense belongs to. `vendorGstin` above is
@@ -259,19 +304,17 @@ export default function ExpenseTracker() {
         search.trim() ? `matching "${search.trim()}"` : '',
     ].filter(Boolean).join(', ');
     return (h("div", { className: "dashboard-container" },
-        h("div", { className: "page-header" },
-            h("div", { style: { display: 'flex', alignItems: 'center', gap: 6 } },
-                h("div", null,
-                    h("h1", { className: "page-title" },
-                        "Expenses ",
-                        h(HelpButton, { title: "Expenses \u2014 how to use", doc: "expenses", size: 16 })),
-                    h("p", { className: "page-subtitle" }, "Track business expenses for P&L and ITC claims"))),
-            h("div", { className: "flex gap-2" },
-                h("button", { className: "btn btn-primary", onClick: openAdd },
-                    h(Plus, { size: 18 }),
-                    " Add Expense"))),
+        h(PageHeader, { title: "Expenses", help: { title: 'Expenses — how to use', doc: 'expenses' }, subtitle: "Track business expenses for P&L and ITC claims", primary: h("button", { className: "btn btn-primary", onClick: openAdd },
+                h(Plus, { size: 18 }),
+                " Add Expense") }),
         h(UnassignedBanner, { count: unassignedExpenses.length, businessName: ownerProfile?.businessName, noun: "expense", onAssign: assignUnassignedExpenses }),
-        h("div", { className: "stats-grid", style: { gridTemplateColumns: 'repeat(3, 1fr)' } },
+        h("div", { className: "stats-grid", style: { gridTemplateColumns: 'repeat(auto-fit, minmax(min(200px, 100%), 1fr))' } },
+            h("button", { type: "button", className: "stat-card", onClick: () => setPayFilter(payFilter === 'due' ? 'all' : 'due'), title: payFilter === 'due' ? 'Show all expenses' : 'Show only Unpaid and Partly paid expenses', style: { textAlign: 'left', cursor: 'pointer', border: payFilter === 'due' ? '1px solid #d97706' : undefined } },
+                h("div", { className: "stat-icon stat-icon-amber" },
+                    h(Wallet, { size: 22 })),
+                h("div", null,
+                    h("p", { className: "stat-label" }, "Outstanding"),
+                    h("h2", { className: "stat-value stat-value-amber" }, formatCurrency(totalDue)))),
             h("div", { className: "stat-card" },
                 h("div", { className: "stat-icon stat-icon-purple" },
                     h(Wallet, { size: 22 })),
@@ -301,8 +344,11 @@ export default function ExpenseTracker() {
                 h("select", { className: "filter-select", value: fyFilter, onChange: e => setFyFilter(e.target.value) },
                     h("option", { value: "" }, "All years"),
                     fyOptions.map(fy => h("option", { key: fy.value, value: fy.value }, fy.label))),
+                h("select", { className: "filter-select", value: payFilter, onChange: e => setPayFilter(e.target.value), "aria-label": "Payment" },
+                    h("option", { value: "all" }, "Paid and unpaid"),
+                    h("option", { value: "due" }, "Unpaid / Partly paid")),
                 ccOn && h(CostCentreFilter, { centres: centres, value: centreFilter, onChange: setCentreFilter }),
-                (search || categoryFilter !== 'all' || fyFilter !== defaultFy || centreFilter) && (h("button", { className: "icon-btn icon-btn-red", onClick: () => { setSearch(''); setCategoryFilter('all'); setFyFilter(defaultFy); setCentreFilter(''); }, title: "Clear filters", "aria-label": "Clear filters" },
+                (search || categoryFilter !== 'all' || fyFilter !== defaultFy || centreFilter || payFilter !== 'all') && (h("button", { className: "icon-btn icon-btn-red", onClick: () => { setSearch(''); setCategoryFilter('all'); setFyFilter(defaultFy); setCentreFilter(''); setPayFilter('all'); }, title: "Clear filters", "aria-label": "Clear filters" },
                     h(X, { size: 15 }))))),
         showForm && (h("div", { className: "modal-overlay", onClick: closeForm },
             h("div", { className: "modal-content", onClick: e => e.stopPropagation(), style: { maxWidth: '620px' } },
@@ -341,6 +387,15 @@ export default function ExpenseTracker() {
                     h("div", { className: "form-group" },
                         h("label", { className: "form-label" }, "Payment Mode"),
                         h("select", { className: "form-input", value: form.paymentMode, onChange: e => updateField('paymentMode', e.target.value) }, PAYMENT_MODES.map(m => h("option", { key: m, value: m }, m)))),
+                    h("div", { className: "form-group" },
+                        h("label", { className: "form-label", htmlFor: "expense-payment" }, "Payment"),
+                        h("select", { id: "expense-payment", className: "form-input", value: form.paymentStatus, onChange: e => updateField('paymentStatus', e.target.value) }, EXPENSE_PAYMENT.map(([v, l]) => h("option", { key: v, value: v }, l)))),
+                    form.paymentStatus === 'partial' && (h("div", { className: "form-group" },
+                        h("label", { className: "form-label", htmlFor: "expense-paid" }, "Paid so far"),
+                        h("input", { id: "expense-paid", type: "number", className: "form-input", value: form.paidAmount, min: "0", onChange: e => updateField('paidAmount', e.target.value), placeholder: "0.00" }),
+                        Number(form.amount) > 0 && Number(form.paidAmount) > 0 && (h("p", { className: "field-hint" },
+                            "Still to pay: ",
+                            formatCurrency(Math.max(0, Number(form.amount) - Number(form.paidAmount))))))),
                     ccOn && (h("div", { className: "form-group" },
                         h("label", { className: "form-label", htmlFor: "cost-centre" }, "Cost centre"),
                         h(CostCentreSelect, { centres: centres, value: form.costCentre, name: form.costCentreName, onChange: (id, name) => setForm(prev => ({ ...prev, costCentre: id, costCentreName: name })) }))),
@@ -366,24 +421,25 @@ export default function ExpenseTracker() {
                     "Expense Records ",
                     h(HelpButton, { title: "Expense Records", doc: "expenses#expense-list", size: 16 })),
                 h(TableExport, { title: "Expense statement", filename: `Expenses-${statementPeriod}`, landscape: true, subtitle: [ownerProfile?.businessName, statementPeriod].filter(Boolean).join(', '), headers: ['Date', 'Description', 'Category', 'Amount', 'GST Amount', 'GST %', 'Vendor', 'Vendor GSTIN', 'Invoice No', 'Payment Mode', 'Inter-state', 'Note'], rows: statementRows })),
-            filtered.length === 0 ? (h("div", { className: "empty-state" },
+            shown.length === 0 ? (h("div", { className: "empty-state" },
                 h(Wallet, { size: 48 }),
-                h("p", null, expenses.length === 0 ? 'No expenses recorded yet.' : 'No expenses match your filters.'),
+                h("p", null, expenses.length === 0 ? 'No expenses recorded yet.' : payFilter === 'due' ? 'Nothing outstanding: every expense shown is paid.' : 'No expenses match your filters.'),
                 expenses.length === 0 && h("button", { className: "btn btn-primary", onClick: openAdd },
                     h(Plus, { size: 18 }),
                     " Add Expense"))) : (h("div", { className: "table-scroll" },
                 h("table", { className: "data-table", style: { minWidth: '800px' } },
                     h("thead", null,
                         h("tr", null,
-                            h("th", null, "Date"),
-                            h("th", null, "Description"),
-                            h("th", null, "Category"),
-                            h("th", null, "Vendor"),
-                            h("th", { style: { textAlign: 'right' } }, "Amount"),
-                            h("th", { style: { textAlign: 'right' } }, "GST"),
+                            h(SortTh, { col: "date", label: "Date", sort: sort, onSort: toggleSort }),
+                            h(SortTh, { col: "description", label: "Description", sort: sort, onSort: toggleSort }),
+                            h(SortTh, { col: "category", label: "Category", sort: sort, onSort: toggleSort }),
+                            h(SortTh, { col: "vendor", label: "Vendor", sort: sort, onSort: toggleSort }),
+                            h(SortTh, { col: "amount", label: "Amount", style: { textAlign: 'right' }, sort: sort, onSort: toggleSort }),
+                            h(SortTh, { col: "gst", label: "GST", style: { textAlign: 'right' }, sort: sort, onSort: toggleSort }),
                             h("th", null, "Mode"),
+                            h(SortTh, { col: "payment", label: "Payment", sort: sort, onSort: toggleSort }),
                             h("th", { className: "col-center" }, "Actions"))),
-                    h("tbody", null, filtered.map(exp => (h("tr", { key: exp.id },
+                    h("tbody", null, shown.map(exp => (h("tr", { key: exp.id },
                         h("td", { className: "text-muted" }, exp.date ? new Date(exp.date).toLocaleDateString('en-IN') : ''),
                         h("td", { className: "font-medium" }, exp.description),
                         h("td", null,
@@ -392,16 +448,26 @@ export default function ExpenseTracker() {
                         h("td", { style: { textAlign: 'right' }, className: "font-bold" }, formatCurrency(exp.amount)),
                         h("td", { style: { textAlign: 'right' }, className: "text-muted" }, exp.gstAmount ? formatCurrency(exp.gstAmount) : '-'),
                         h("td", { className: "text-muted" }, exp.paymentMode),
+                        h("td", null, expenseStatus(exp) === 'paid' ? h("span", { className: "text-muted" }, "Paid") : (h("span", { style: { color: '#d97706', fontWeight: 600 }, title: `Paid ${formatCurrency(expensePaid(exp))} of ${formatCurrency(exp.amount)}` },
+                            expenseStatus(exp) === 'unpaid' ? 'Unpaid' : 'Partly paid',
+                            " \u00B7 ",
+                            formatCurrency(expenseDue(exp)),
+                            " due"))),
                         h("td", null,
                             h("div", { className: "table-actions" },
-                                h("button", { className: "icon-btn icon-btn-blue", onClick: () => openEdit(exp), title: "Edit" },
+                                h("button", { className: "icon-btn icon-btn-blue", onClick: () => openEdit(exp), title: "Edit", "aria-label": `Edit expense: ${exp.description || exp.category || ''}` },
                                     h(Edit3, { size: 15 })),
-                                h("button", { className: "icon-btn icon-btn-red", onClick: () => handleDelete(exp.id), title: "Delete" },
-                                    h(Trash2, { size: 15 })))))))),
+                                expenseDue(exp) > 0 && (h("button", { className: "icon-btn icon-btn-green", onClick: () => markPaid(exp), title: "Mark as paid", "aria-label": "Mark as paid" },
+                                    h(CheckCircle, { size: 15 }))),
+                                h(ActionsMenu, { label: "More actions for this expense", items: [
+                                        { label: 'Delete', icon: Trash2, tone: 'danger', onClick: () => handleDelete(exp.id) },
+                                    ] }))))))),
                     h("tfoot", null,
                         h("tr", { style: { fontWeight: 'bold', borderTop: '2px solid var(--border)' } },
                             h("td", { colSpan: 4 }, "Total"),
                             h("td", { style: { textAlign: 'right' } }, formatCurrency(totalAmount)),
                             h("td", { style: { textAlign: 'right' } }, formatCurrency(totalGST)),
-                            h("td", { colSpan: 2 })))))))));
+                            h("td", null),
+                            h("td", null, totalDue > 0 ? `${formatCurrency(totalDue)} due` : ''),
+                            h("td", null)))))))));
 }

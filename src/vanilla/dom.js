@@ -8,6 +8,7 @@
 export const Fragment = Symbol('vanilla.fragment');
 export const StrictMode = Symbol('vanilla.strict-mode');
 export const Suspense = Symbol('vanilla.suspense');
+const PORTAL = Symbol('vanilla.portal');
 const LAZY_PENDING = Symbol('vanilla.lazy-pending');
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const HTML_NS = 'http://www.w3.org/1999/xhtml';
@@ -26,6 +27,20 @@ export function h(type, config, ...children) {
   return { __vnode: true, type, props, key };
 }
 export const createElement = h;
+
+export function createContext(defaultValue) {
+  const context = { _currentValue: defaultValue, _defaultValue: defaultValue };
+  context.Provider = { __vanillaContextProvider: true, context };
+  context.Consumer = function ContextConsumer({ children }) {
+    return typeof children === 'function' ? children(context._currentValue) : children;
+  };
+  return context;
+}
+export function useContext(context) { return context?._currentValue ?? context?._defaultValue; }
+export function createPortal(children, container, key = null) {
+  if (!container || typeof container.appendChild !== 'function') throw new TypeError('createPortal needs a DOM container.');
+  return { __vnode: true, type: PORTAL, key: key == null ? null : String(key), props: { children, container } };
+}
 
 export class Component {
   constructor(props) {
@@ -76,6 +91,19 @@ export function useState(initialValue) {
     };
   }
   return [cell.value, cell.setState];
+}
+
+export function useId() {
+  if (!activeFiber) throw new Error('useId must run inside a component.');
+  const index = activeFiber.hookIndex++;
+  const cell = hookCell(index);
+  if (!cell.value) {
+    const raw = `${activeFiber.path}-${index}`;
+    let hash = 2166136261;
+    for (let i = 0; i < raw.length; i++) hash = Math.imul(hash ^ raw.charCodeAt(i), 16777619);
+    cell.value = `:v${(hash >>> 0).toString(36)}:`;
+  }
+  return cell.value;
 }
 
 export function useRef(initialValue) {
@@ -419,6 +447,21 @@ function renderNode(node, path, root, parentNs = HTML_NS) {
   if (!node || node.__vnode !== true) return document.createTextNode(String(node));
   const { type, props } = node;
   if (type === Fragment || type === StrictMode) return renderChildren(props?.children, path, root, parentNs);
+  if (type === PORTAL) {
+    const target = props?.container;
+    if (!target || typeof target.appendChild !== 'function') return null;
+    root.nextPortalContainers.add(target);
+    const portalNodes = renderChildren(props?.children, `portal:${path}`, root, HTML_NS);
+    patchChildren(target, portalNodes);
+    return null;
+  }
+  if (type?.__vanillaContextProvider) {
+    const context = type.context;
+    const previous = context._currentValue;
+    context._currentValue = props?.value;
+    try { return renderChildren(props?.children, `${path}/provider`, root, parentNs); }
+    finally { context._currentValue = previous; }
+  }
   if (type === Suspense) {
     try { return renderChildren(props?.children, `${path}/suspense`, root, parentNs); }
     catch (error) {
@@ -473,6 +516,8 @@ class NativeRoot {
     this.nextDomByPath = new Map();
     this.pendingEffects = [];
     this.visited = new Set();
+    this.portalContainers = new Set();
+    this.nextPortalContainers = new Set();
     this.queued = false;
     this.destroyed = false;
   }
@@ -491,10 +536,13 @@ class NativeRoot {
     this.nextDomByPath = new Map();
     this.visited = new Set();
     this.pendingEffects = [];
+    this.nextPortalContainers = new Set();
     try {
       const rendered = renderNode(this.vnode, 'root', this, HTML_NS);
       const nodes = Array.isArray(rendered) ? rendered : rendered ? [rendered] : [];
       patchChildren(this.container, nodes);
+      for (const target of this.portalContainers) if (!this.nextPortalContainers.has(target)) target.replaceChildren();
+      this.portalContainers = this.nextPortalContainers;
       cleanRemoved(this, oldDom);
       this.domByPath = this.nextDomByPath;
       runEffects(this);
@@ -524,5 +572,5 @@ export function createNativeRoot(container) {
   return root;
 }
 
-const BrowserDOMCompat = { createElement: h, Fragment, StrictMode, Suspense, Component, memo, forwardRef, lazy };
+const BrowserDOMCompat = { createElement: h, Fragment, StrictMode, Suspense, Component, memo, forwardRef, lazy, createContext, useContext, useId, createPortal, useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef, useImperativeHandle };
 export default BrowserDOMCompat;

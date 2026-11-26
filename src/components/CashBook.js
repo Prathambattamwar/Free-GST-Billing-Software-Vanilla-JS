@@ -1,15 +1,20 @@
+import { h, Fragment } from '../vanilla/dom.js';
 // v1.10.83 - the Cash book screen: a quick entry form at the top, cash in
 // hand, and the book for a period with its running balance. Cash recorded on
 // invoices, receipts and expenses shows here read-only (see utils/cashBook.js).
-import { useState, useEffect, useRef, useMemo, h, Fragment } from '../vanilla/dom.js';
-import { Banknote, ArrowDownLeft, ArrowUpRight, Edit3, Trash2, Search, X, Save, ExternalLink } from '../vanilla/icons.js';
+import { useState, useEffect, useRef, useMemo } from '../vanilla/dom.js';
+import { Banknote, Landmark, ArrowDownLeft, ArrowUpRight, Edit3, Trash2, Search, X, Save, ExternalLink } from '../vanilla/icons.js';
 import { getAllCashEntries, saveCashEntry, deleteCashEntry, getAllBills, getAllReceipts, getAllExpenses, getAllPurchases, getAllClients, getProfile } from '../store.js';
 import { formatCurrency, belongsToProfile, localToday, parseLocalDate } from '../utils.js';
 import { CASH_CATEGORIES, validateCashEntry, linkedCashLines, ownCashLines, cashBookView, cashSummary, periodRange } from '../utils/cashBook.js';
 import { toast } from './Toast.js';
 import { confirmAction } from './ConfirmModal.js';
 import HelpButton from './HelpButton.js';
+import PageHeader from './PageHeader.js';
 import TableExport from './TableExport.js';
+import BankMatching from './BankMatching.js';
+import ComboInput from './ComboInput.js';
+import EditDialog from './EditDialog.js';
 const PERIODS = [['month', 'This month'], ['lastMonth', 'Last month'], ['fy', 'This financial year'], ['all', 'All dates'], ['custom', 'Choose dates']];
 const SOURCE_SCREEN = { receipts: 'Receipts', dashboard: 'the Dashboard', expenses: 'Expenses', purchases: 'Purchases' };
 const emptyForm = () => ({ type: 'in', amount: '', name: '', note: '', category: '', date: localToday() });
@@ -18,7 +23,70 @@ const inOut = (type, on) => ({
     flex: 1, justifyContent: 'center', fontWeight: 600, whiteSpace: 'nowrap',
     ...(on ? { background: type === 'in' ? 'var(--success)' : 'var(--danger)', color: '#fff', borderColor: 'transparent' } : {}),
 });
+const formFrom = (entry) => ({ type: entry.type, amount: String(entry.amount), name: entry.name || '', note: entry.note || '', category: entry.category || '', date: entry.date });
+// v1.10.86 - the In / Out buttons and the boxes of a cash entry: in a row in
+// the New entry form, two to a line in the Edit entry window.
+function EntryFields({ form, update, names, idPrefix, amountRef, inWindow }) {
+    const cell = inWindow ? {} : { margin: 0, flex: '1 1 150px', minWidth: 0 };
+    const wide = inWindow ? { className: 'form-group ed-wide' } : { className: 'form-group' };
+    const id = (k) => `${idPrefix}-${k}`;
+    return (h(Fragment, null,
+        h("div", { ...wide, style: inWindow ? undefined : { margin: 0, flex: '2 1 250px' } },
+            h("span", { className: "form-label" }, "In or out *"),
+            h("div", { style: { display: 'flex', gap: '0.4rem' }, role: "group", "aria-label": "Money in or money out" },
+                h("button", { type: "button", className: "btn btn-secondary", style: inOut('in', form.type === 'in'), "aria-pressed": form.type === 'in', onClick: () => update('type', 'in') },
+                    h(ArrowDownLeft, { size: 15 }),
+                    " Money in"),
+                h("button", { type: "button", className: "btn btn-secondary", style: inOut('out', form.type === 'out'), "aria-pressed": form.type === 'out', onClick: () => update('type', 'out') },
+                    h(ArrowUpRight, { size: 15 }),
+                    " Money out"))),
+        h("div", { className: "form-group", style: cell },
+            h("label", { className: "form-label", htmlFor: id('amount') }, "Amount *"),
+            h("input", { id: id('amount'), ref: amountRef, type: "number", inputMode: "decimal", min: "0", step: "0.01", className: "form-input", placeholder: "0.00", "data-autofocus": true, value: form.amount, onChange: (e) => update('amount', e.target.value) })),
+        h("div", { className: "form-group", style: cell },
+            h("label", { className: "form-label", htmlFor: id('name') }, "Name (who / what)"),
+            h(ComboInput, { id: id('name'), type: "text", className: "form-input", options: names, maxLength: 120, placeholder: "e.g. Ramesh, milk, auto", listLabel: "Names used before", value: form.name, onChange: (e) => update('name', e.target.value) })),
+        h("div", { className: "form-group", style: cell },
+            h("label", { className: "form-label", htmlFor: id('category') }, "Category"),
+            h(ComboInput, { id: id('category'), type: "text", className: "form-input", options: CASH_CATEGORIES, maxLength: 60, placeholder: "Pick or type", listLabel: "Categories", value: form.category, onChange: (e) => update('category', e.target.value) })),
+        h("div", { className: "form-group", style: cell },
+            h("label", { className: "form-label", htmlFor: id('date') }, "Date *"),
+            h("input", { id: id('date'), type: "date", className: "form-input", value: form.date, onChange: (e) => update('date', e.target.value) })),
+        h("div", { ...wide, style: inWindow ? undefined : { ...cell, flex: '3 1 220px' } },
+            h("label", { className: "form-label", htmlFor: id('note') }, "Note"),
+            h("input", { id: id('note'), type: "text", className: "form-input", maxLength: 500, placeholder: "Optional", value: form.note, onChange: (e) => update('note', e.target.value) }))));
+}
+// v1.10.86 - the pencil opens the entry in its own window; the New entry form
+// at the top stays for adding.
+function EditEntryDialog({ entry, names, onSave, onDelete, onClose }) {
+    const [form, setForm] = useState(() => formFrom(entry));
+    const [saving, setSaving] = useState(false);
+    const amountRef = useRef(null);
+    const update = (field, value) => setForm((prev) => ({ ...prev, [field]: value }));
+    const save = async () => {
+        setSaving(true);
+        const ok = await onSave(form, entry, () => amountRef.current?.focus());
+        setSaving(false);
+        if (ok)
+            onClose();
+    };
+    const remove = async () => { if (await onDelete(entry))
+        onClose(); };
+    return (h(EditDialog, { title: "Edit entry", help: "cash-book#edit-entry", onClose: onClose, onSave: save, onDelete: remove, saving: saving },
+        h("div", { className: "ed-grid" },
+            h(EntryFields, { form: form, update: update, names: names, idPrefix: "cash-edit", amountRef: amountRef, inWindow: true }))));
+}
+// v1.10.85 (#175) - two tabs: the cash book, and Bank matching for the bank
+// statement (money in and out of the bank, next to the cash).
 export default function CashBook({ onOpenView }) {
+    const [tab, setTab] = useState('cash');
+    const tabs = (h("div", { style: { display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }, role: "group", "aria-label": "Cash or bank" }, [['cash', 'Cash', h(Banknote, { size: 16 })], ['bank', 'Bank matching', h(Landmark, { size: 16 })]].map(([id, label, icon]) => (h("button", { key: id, type: "button", className: `btn ${tab === id ? 'btn-primary' : 'btn-secondary'}`, "aria-pressed": tab === id, onClick: () => setTab(id) },
+        icon,
+        " ",
+        label)))));
+    return tab === 'bank' ? h(BankMatching, { tabs: tabs }) : h(CashBookMain, { tabs: tabs, onOpenView: onOpenView });
+}
+function CashBookMain({ tabs, onOpenView }) {
     const [entries, setEntries] = useState([]);
     const [linked, setLinked] = useState([]);
     const [names, setNames] = useState([]);
@@ -55,15 +123,13 @@ export default function CashBook({ onOpenView }) {
         ? [range.from && `from ${showDate(range.from)}`, range.to && `to ${showDate(range.to)}`].filter(Boolean).join(' ') || 'All dates'
         : PERIODS.find(([k]) => k === period)[1];
     const update = (field, value) => setForm((prev) => ({ ...prev, [field]: value }));
-    const resetForm = () => { setForm(emptyForm()); setEditing(null); };
-    const handleSave = async (e) => {
-        e.preventDefault();
-        if (saving)
-            return;
+    // Saves the New entry form, or the Edit entry window (editing = the entry
+    // as it was). True when saved.
+    const persist = async (values, editing, focusAmount) => {
         const entry = {
             ...(editing ? { id: editing.id, createdAt: editing.createdAt } : {}),
-            type: form.type, date: form.date, amount: Number(form.amount),
-            name: form.name, note: form.note, category: form.category,
+            type: values.type, date: values.date, amount: Number(values.amount),
+            name: values.name, note: values.note, category: values.category,
             // A new entry belongs to the business selected now; an edited one keeps its own.
             ownerGstin: editing ? editing.ownerGstin || '' : profile?.gstin || '',
             ownerName: editing ? editing.ownerName || '' : profile?.businessName || '',
@@ -71,34 +137,39 @@ export default function CashBook({ onOpenView }) {
         const problem = validateCashEntry(entry);
         if (problem) {
             toast(problem, 'warning');
-            amountRef.current?.focus();
-            return;
+            focusAmount();
+            return false;
         }
-        setSaving(true);
         try {
             const saved = await saveCashEntry(entry);
             setEntries((prev) => [...prev.filter((x) => x.id !== saved.id), saved]);
             if (saved.name && !names.includes(saved.name))
                 setNames((prev) => [...prev, saved.name].sort());
-            toast(editing ? 'Entry updated' : `${form.type === 'in' ? 'Money in' : 'Money out'} of ${formatCurrency(saved.amount)} saved`, 'success');
-            // Ready for the next one: same In/Out and date, the rest cleared.
-            setForm((prev) => ({ ...emptyForm(), type: prev.type, date: editing ? localToday() : prev.date }));
-            setEditing(null);
-            amountRef.current?.focus();
+            // v1.10.86 - say so when the list will not show it (dated outside the dates chosen).
+            const hidden = (range.from && saved.date < range.from) || (range.to && saved.date > range.to)
+                ? ` It is dated ${showDate(saved.date)}, outside ${periodLabel}: choose All dates to see it.` : '';
+            toast(`${editing ? 'Entry updated.' : `${values.type === 'in' ? 'Money in' : 'Money out'} of ${formatCurrency(saved.amount)} saved.`}${hidden}`, 'success');
+            return true;
         }
         catch (err) {
             toast(err?.message && err.status === 400 ? err.message : 'Could not save the entry. Try again.', 'error');
-        }
-        finally {
-            setSaving(false);
+            return false;
         }
     };
-    const startEdit = (entry) => {
-        setEditing(entry);
-        setForm({ type: entry.type, amount: String(entry.amount), name: entry.name || '', note: entry.note || '', category: entry.category || '', date: entry.date });
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-        setTimeout(() => amountRef.current?.focus(), 50);
+    const handleSave = async (e) => {
+        e.preventDefault();
+        if (saving)
+            return;
+        setSaving(true);
+        const ok = await persist(form, null, () => amountRef.current?.focus());
+        setSaving(false);
+        if (!ok)
+            return;
+        // Ready for the next one: same In/Out and date, the rest cleared.
+        setForm((prev) => ({ ...emptyForm(), type: prev.type, date: prev.date }));
+        amountRef.current?.focus();
     };
+    // True when deleted.
     const handleDelete = async (entry) => {
         const ok = await confirmAction({
             title: 'Delete this cash entry?',
@@ -106,16 +177,16 @@ export default function CashBook({ onOpenView }) {
             confirmLabel: 'Delete', tone: 'danger',
         });
         if (!ok)
-            return;
+            return false;
         try {
             await deleteCashEntry(entry.id);
             setEntries((prev) => prev.filter((x) => x.id !== entry.id));
-            if (editing?.id === entry.id)
-                resetForm();
             toast('Entry deleted', 'success');
+            return true;
         }
         catch {
             toast('Could not delete the entry. Try again.', 'error');
+            return false;
         }
     };
     // For the accountant: oldest first, with the balance brought in and carried out.
@@ -126,16 +197,9 @@ export default function CashBook({ onOpenView }) {
         ['', search.trim() ? `Total (matching "${search.trim()}")` : 'Total', '', '', '', book.totals.in, book.totals.out, search.trim() ? '' : book.closing],
     ] : [];
     const muted = { color: 'var(--text-muted)', fontSize: '0.8rem' };
-    const field = { margin: 0, flex: '1 1 150px', minWidth: 0 };
     const money = (type) => ({ textAlign: 'right', fontWeight: 600, color: type === 'in' ? 'var(--success)' : 'var(--danger)', whiteSpace: 'nowrap' });
     return (h("div", { className: "dashboard-container" },
-        h("div", { className: "page-header" },
-            h("div", { style: { display: 'flex', alignItems: 'center', gap: 6 } },
-                h("div", null,
-                    h("h1", { className: "page-title" },
-                        "Cash book ",
-                        h(HelpButton, { title: "Cash book", doc: "cash-book", size: 16 })),
-                    h("p", { className: "page-subtitle" }, "Cash in and out, with the cash in hand")))),
+        h(PageHeader, { title: "Cash book", help: { title: 'Cash book', doc: 'cash-book' }, subtitle: "Cash in and out, with the cash in hand", extras: tabs }),
         h("div", { className: "stats-grid", style: { gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))' } },
             h("div", { className: "stat-card" },
                 h("div", { className: "stat-icon stat-icon-blue" },
@@ -160,41 +224,15 @@ export default function CashBook({ onOpenView }) {
                             formatCurrency(t.out)))))))),
         h("form", { className: "glass-panel p-4 mb-6", onSubmit: handleSave, "aria-label": "Cash entry" },
             h("div", { style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: '0.75rem' } },
-                h("h3", { className: "section-title", style: { margin: 0 } }, editing ? 'Edit entry' : 'New entry'),
-                h(HelpButton, { title: editing ? 'Edit entry' : 'Adding a cash entry', doc: editing ? 'cash-book#edit-entry' : 'cash-book#add-entry', size: 16 })),
+                h("h3", { className: "section-title", style: { margin: 0 } }, "New entry"),
+                h(HelpButton, { title: "Adding a cash entry", doc: "cash-book#add-entry", size: 16 })),
             h("div", { style: { display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'flex-end' } },
-                h("div", { className: "form-group", style: { margin: 0, flex: '2 1 250px' } },
-                    h("span", { className: "form-label" }, "In or out *"),
-                    h("div", { style: { display: 'flex', gap: '0.4rem' }, role: "group", "aria-label": "Money in or money out" },
-                        h("button", { type: "button", className: "btn btn-secondary", style: inOut('in', form.type === 'in'), "aria-pressed": form.type === 'in', onClick: () => update('type', 'in') },
-                            h(ArrowDownLeft, { size: 15 }),
-                            " Money in"),
-                        h("button", { type: "button", className: "btn btn-secondary", style: inOut('out', form.type === 'out'), "aria-pressed": form.type === 'out', onClick: () => update('type', 'out') },
-                            h(ArrowUpRight, { size: 15 }),
-                            " Money out"))),
-                h("div", { className: "form-group", style: field },
-                    h("label", { className: "form-label", htmlFor: "cash-amount" }, "Amount *"),
-                    h("input", { id: "cash-amount", ref: amountRef, type: "number", inputMode: "decimal", min: "0", step: "0.01", className: "form-input", placeholder: "0.00", value: form.amount, onChange: (e) => update('amount', e.target.value) })),
-                h("div", { className: "form-group", style: field },
-                    h("label", { className: "form-label", htmlFor: "cash-name" }, "Name (who / what)"),
-                    h("input", { id: "cash-name", type: "text", className: "form-input", list: "cash-names", maxLength: 120, placeholder: "e.g. Ramesh, milk, auto", value: form.name, onChange: (e) => update('name', e.target.value) }),
-                    h("datalist", { id: "cash-names" }, names.map((n) => h("option", { key: n, value: n })))),
-                h("div", { className: "form-group", style: field },
-                    h("label", { className: "form-label", htmlFor: "cash-category" }, "Category"),
-                    h("input", { id: "cash-category", type: "text", className: "form-input", list: "cash-categories", maxLength: 60, placeholder: "Pick or type", value: form.category, onChange: (e) => update('category', e.target.value) }),
-                    h("datalist", { id: "cash-categories" }, CASH_CATEGORIES.map((c) => h("option", { key: c, value: c })))),
-                h("div", { className: "form-group", style: field },
-                    h("label", { className: "form-label", htmlFor: "cash-date" }, "Date *"),
-                    h("input", { id: "cash-date", type: "date", className: "form-input", value: form.date, onChange: (e) => update('date', e.target.value) })),
-                h("div", { className: "form-group", style: { ...field, flex: '3 1 220px' } },
-                    h("label", { className: "form-label", htmlFor: "cash-note" }, "Note"),
-                    h("input", { id: "cash-note", type: "text", className: "form-input", maxLength: 500, placeholder: "Optional", value: form.note, onChange: (e) => update('note', e.target.value) })),
+                h(EntryFields, { form: form, update: update, names: names, idPrefix: "cash", amountRef: amountRef }),
                 h("div", { style: { display: 'flex', gap: '0.5rem', flex: '1 1 140px' } },
                     h("button", { type: "submit", className: "btn btn-primary", disabled: saving, style: { flex: 1, justifyContent: 'center' } },
                         h(Save, { size: 16 }),
-                        " ",
-                        editing ? 'Update' : 'Save'),
-                    editing && h("button", { type: "button", className: "btn btn-secondary", onClick: resetForm }, "Cancel")))),
+                        " Save")))),
+        editing && (h(EditEntryDialog, { key: editing.id, entry: editing, names: names, onSave: persist, onDelete: handleDelete, onClose: () => setEditing(null) })),
         h("div", { className: "glass-panel p-4 mb-6" },
             h("div", { style: { display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' } },
                 h("div", { className: "search-box", style: { maxWidth: '300px' } },
@@ -253,7 +291,7 @@ export default function CashBook({ onOpenView }) {
                             h("td", { style: money('out') }, l.type === 'out' ? formatCurrency(l.amount) : ''),
                             h("td", { style: { textAlign: 'right', whiteSpace: 'nowrap', color: l.balance < 0 ? 'var(--danger)' : undefined } }, formatCurrency(l.balance)),
                             h("td", null, l.source === 'own' && (h("div", { className: "table-actions", style: { justifyContent: 'center' } },
-                                h("button", { className: "icon-btn icon-btn-blue", onClick: () => startEdit(l.entry), title: "Edit", "aria-label": `Edit ${l.name || 'entry'}` },
+                                h("button", { className: "icon-btn icon-btn-blue", onClick: () => setEditing(l.entry), title: "Edit", "aria-label": `Edit ${l.name || 'entry'}` },
                                     h(Edit3, { size: 15 })),
                                 h("button", { className: "icon-btn icon-btn-red", onClick: () => handleDelete(l.entry), title: "Delete", "aria-label": `Delete ${l.name || 'entry'}` },
                                     h(Trash2, { size: 15 }))))))))),

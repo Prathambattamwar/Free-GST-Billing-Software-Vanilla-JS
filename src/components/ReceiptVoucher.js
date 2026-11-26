@@ -1,12 +1,17 @@
-import { useState, useEffect, useRef, h, Fragment } from '../vanilla/dom.js';
+import { h, Fragment } from '../vanilla/dom.js';
+import { useState, useEffect, useRef } from '../vanilla/dom.js';
 import { Receipt, Plus, Trash2, Search, Printer, Pencil } from '../vanilla/icons.js';
-import { getAllReceipts, saveReceipt, deleteReceipt, getAllBills, getProfile, getNextInvoiceNumber, saveBill } from '../store.js';
-import { formatCurrency, numberToWords, belongsToProfile, isUnassignedToBusiness, countsAsSales, businessKeyOf, localToday, amountDue, paymentStatusFor, isCancelledBill } from '../utils.js';
+import { getAllReceipts, saveReceipt, deleteReceipt, getAllBills, getAllClients, getProfile, getNextInvoiceNumber, saveBill } from '../store.js';
+import { formatCurrency, numberToWords, belongsToProfile, isUnassignedToBusiness, countsAsSales, businessKeyOf, localToday, amountDue, paymentStatusFor, isCancelledBill, clientKey } from '../utils.js';
 import UnassignedBanner from './UnassignedBanner.js';
 import { toast } from './Toast.js';
 import { confirmAction } from './ConfirmModal.js';
 import HelpButton from './HelpButton.js';
+import PageHeader from './PageHeader.js';
+import ComboInput from './ComboInput.js';
+import { isReceiptsPayment, withReceiptPayment } from '../utils/bankMatch.js';
 const PAYMENT_MODES = ['Bank Transfer', 'UPI', 'Cash', 'Cheque', 'Card', 'Other'];
+const MODE_NAMES = { 'bank-transfer': 'Bank Transfer', upi: 'UPI', cash: 'Cash', cheque: 'Cheque', card: 'Card', other: 'Other' };
 // date is filled in when the form opens (localToday): set here it was the
 // day the app was loaded, in UTC.
 const emptyForm = {
@@ -23,6 +28,7 @@ const emptyForm = {
 export default function ReceiptVoucher() {
     const [receipts, setReceipts] = useState([]);
     const [bills, setBills] = useState([]);
+    const [clientNames, setClientNames] = useState([]);
     const [profile, setProfile] = useState({});
     const [search, setSearch] = useState('');
     const [showForm, setShowForm] = useState(false);
@@ -35,7 +41,10 @@ export default function ReceiptVoucher() {
     const previewedNoRef = useRef('');
     const loadData = async () => {
         try {
-            const [recs, bls, prof] = await Promise.all([getAllReceipts(), getAllBills(), getProfile()]);
+            const [recs, bls, prof, clients] = await Promise.all([getAllReceipts(), getAllBills(), getProfile(), getAllClients().catch(() => [])]);
+            // v1.10.84 (#143) - "Received From" suggests the saved clients (shared
+            // by every business, as in the Cash Book); any other name still works.
+            setClientNames([...new Set((clients || []).map((c) => String(c.name || '').trim()).filter(Boolean))].sort());
             // v1.10.66 (#64 item 2) — receipts belong to one business, like its
             // invoices. Both lists are narrowed: the receipts shown, and the
             // invoices offered in Quick Select and matched by "Against Invoice".
@@ -45,21 +54,35 @@ export default function ReceiptVoucher() {
             setReceipts((recs || []).filter(r => belongsToProfile(r, prof)));
             setBills((bls || []).filter(b => belongsToProfile(b, prof)));
             setProfile(prof || {});
+            return prof || {};
         }
         catch {
             toast('Failed to load data', 'error');
+            return null;
         }
     };
     useEffect(() => {
-        loadData();
+        loadData().then((prof) => {
+            // v1.10.86 - "Record payment" on a client's account (Clients) opens the
+            // new receipt for that client; Quick Select then lists their invoices.
+            let forClient = '';
+            try {
+                forClient = sessionStorage.getItem('gst_receiptFor') || '';
+                sessionStorage.removeItem('gst_receiptFor');
+            }
+            catch { /* storage blocked */ }
+            if (forClient && prof)
+                openAdd({ clientName: forClient }, prof);
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
     // Peek at the next receipt number using the SAME atomic counter that
     // invoice numbers use. Pre-v1.6.8 this counted `receipts.length + 1`
     // which raced under concurrent saves + two tabs.
-    const getNextReceiptNo = async () => {
+    const getNextReceiptNo = async (prof = profile) => {
         try {
             // v1.10.79 (#95) - a business with its own numbering numbers its receipts too.
-            return await getNextInvoiceNumber('RCP', { peek: true, businessKey: businessKeyOf(profile) });
+            return await getNextInvoiceNumber('RCP', { peek: true, businessKey: businessKeyOf(prof) });
         }
         catch {
             // Fallback preserves old behaviour if server is offline mid-mount
@@ -73,10 +96,12 @@ export default function ReceiptVoucher() {
         ? receipts.filter(r => (r.clientName || '').toLowerCase().includes(search.toLowerCase()) ||
             (r.receiptNo || '').toLowerCase().includes(search.toLowerCase()))
         : receipts;
-    const openAdd = async () => {
-        const receiptNo = await getNextReceiptNo();
+    // v1.10.86 - prefill (e.g. the client) when opened for a client; a click
+    // passes an event, which is not a prefill.
+    const openAdd = async (prefill, prof) => {
+        const receiptNo = await getNextReceiptNo(prof || profile);
         previewedNoRef.current = receiptNo;
-        setForm({ ...emptyForm, date: localToday(), receiptNo });
+        setForm({ ...emptyForm, date: localToday(), receiptNo, ...(prefill?.clientName ? { clientName: prefill.clientName } : {}) });
         setEditingId(null);
         setShowForm(true);
     };
@@ -92,7 +117,9 @@ export default function ReceiptVoucher() {
             clientName: rcp.clientName || '',
             clientAddress: rcp.clientAddress || '',
             amount: String(rcp.amount ?? ''),
-            paymentMode: rcp.paymentMode || 'Bank Transfer',
+            // v1.10.86 (#202) - a receipt made from a Dashboard payment keeps the
+            // mode as a code (bank-transfer): shown and saved by its name.
+            paymentMode: MODE_NAMES[rcp.paymentMode] || rcp.paymentMode || 'Bank Transfer',
             referenceNo: rcp.referenceNo || '',
             againstInvoice: rcp.againstInvoice || '',
             note: rcp.note || '',
@@ -143,7 +170,14 @@ export default function ReceiptVoucher() {
             // to" banner, never as a side effect of fixing a typo while some other
             // business happens to be selected.
             const existing = editingId ? receipts.find(r => r.id === editingId) : null;
+            // v1.10.86 - an edit keeps the fields the form does not show (billId,
+            // source, currency and the foreign-payment fields a Dashboard payment
+            // stored); the bill link goes only when the invoice was changed here.
+            const kept = existing ? { ...existing } : {};
+            if (existing && (existing.againstInvoice || '') !== (form.againstInvoice || ''))
+                delete kept.billId;
             const receipt = {
+                ...kept,
                 ...form,
                 receiptNo,
                 amount: parseFloat(form.amount),
@@ -169,11 +203,14 @@ export default function ReceiptVoucher() {
             // which also fixes its stock); otherwise paid once the payments cover
             // the total less TDS.
             const statusFor = (bill, paid) => (isCancelledBill(bill) ? 'cancelled' : paymentStatusFor(bill, paid));
+            // v1.10.86 (#202) - this receipt's payment on an invoice: same id or
+            // same receipt number (utils/bankMatch).
+            const isThisReceipt = isReceiptsPayment({ id: receipt.id, receiptNo });
             const stripReceiptFromBill = async (bill) => {
                 if (!bill)
                     return;
                 const priorPayments = bill.payments || [];
-                const kept = priorPayments.filter(p => p.receiptNo !== receiptNo);
+                const kept = priorPayments.filter(p => !isThisReceipt(p));
                 if (kept.length === priorPayments.length)
                     return;
                 const newTotal = kept.reduce((s, p) => s + (Number(p.amount) || 0), 0);
@@ -200,8 +237,6 @@ export default function ReceiptVoucher() {
                     if (!bill)
                         unmatchedRef = form.againstInvoice.trim(); // v1.10.74 - tell the user below
                     if (bill) {
-                        const priorPayments = bill.payments || [];
-                        const priorIdx = priorPayments.findIndex(p => p.receiptNo === receiptNo);
                         const nextEntry = {
                             // The receipt's id, as payments recorded on the Dashboard carry
                             // theirs: editing or deleting the payment there then updates this
@@ -211,12 +246,12 @@ export default function ReceiptVoucher() {
                             date: form.date,
                             mode: modeMap[form.paymentMode] || 'other',
                             note: `Receipt ${receiptNo}${form.referenceNo ? ' · ref ' + form.referenceNo : ''}`,
-                            recordedAt: priorIdx >= 0 ? priorPayments[priorIdx].recordedAt : new Date().toISOString(),
+                            recordedAt: new Date().toISOString(),
                             receiptNo,
                         };
-                        const nextPayments = priorIdx >= 0
-                            ? priorPayments.map((p, i) => i === priorIdx ? nextEntry : p)
-                            : [...priorPayments, nextEntry];
+                        // v1.10.86 (#202) - replaces the payment it already has (same id
+                        // or receipt number), never a second one.
+                        const nextPayments = withReceiptPayment(bill.payments, { id: receipt.id, receiptNo }, nextEntry);
                         const newTotal = nextPayments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
                         await saveBill({ ...bill, paidAmount: newTotal, status: statusFor(bill, newTotal), payments: nextPayments }, { overwrite: true });
                     }
@@ -263,8 +298,11 @@ export default function ReceiptVoucher() {
                 setPreviewReceipt(null);
                 return;
             }
+            // The receipt number is typed by a user: escaped, so it can never add a
+            // script to this window (which runs as the app). The body is React's own
+            // escaped markup.
             printWindow.document.write(`
-        <html><head><title>Receipt ${receipt.receiptNo}</title>
+        <html><head><title>Receipt ${String(receipt.receiptNo ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</title>
         <style>
           body { font-family: 'Inter', Arial, sans-serif; margin: 0; padding: 2rem; color: #1a1a2e; }
           .receipt-box { max-width: 600px; margin: 0 auto; border: 2px solid #e2e8f0; border-radius: 8px; padding: 2rem; }
@@ -294,7 +332,11 @@ export default function ReceiptVoucher() {
     };
     // v1.10.67 (#66 item 12) — no money is owed on a cancelled invoice.
     // v1.10.74 - nor on quotes, challans or credit notes: real sales only.
-    const unpaidBills = bills.filter(b => b.status !== 'paid' && countsAsSales(b));
+    // v1.10.86 - once the client is one with unpaid invoices, only theirs.
+    const unpaidAll = bills.filter(b => b.status !== 'paid' && countsAsSales(b));
+    const formClient = clientKey(form.clientName);
+    const unpaidOfClient = formClient ? unpaidAll.filter(b => clientKey(b.clientName) === formClient) : [];
+    const unpaidBills = unpaidOfClient.length ? unpaidOfClient : unpaidAll;
     // v1.10.66 (#64 item 2) — receipts saved before this release carry no
     // business. As with expenses they are never assigned automatically: only the
     // user knows which business took the money.
@@ -308,16 +350,9 @@ export default function ReceiptVoucher() {
         loadData();
     };
     return (h("div", { className: "dashboard-container" },
-        h("div", { className: "page-header" },
-            h("div", { style: { display: 'flex', alignItems: 'center', gap: 6 } },
-                h("div", null,
-                    h("h1", { className: "page-title" },
-                        "Receipts ",
-                        h(HelpButton, { title: "Receipts \u2014 how to use", doc: "receipts", size: 16 })),
-                    h("p", { className: "page-subtitle" }, "Generate payment receipts for clients"))),
-            h("button", { className: "btn btn-primary", onClick: openAdd },
+        h(PageHeader, { title: "Receipts", help: { title: 'Receipts — how to use', doc: 'receipts' }, subtitle: "Generate payment receipts for clients", primary: h("button", { className: "btn btn-primary", onClick: openAdd },
                 h(Plus, { size: 18 }),
-                " New Receipt")),
+                " New Receipt") }),
         h(UnassignedBanner, { count: unassignedReceipts.length, businessName: profile?.businessName, noun: "receipt", onAssign: assignUnassignedReceipts }),
         showForm && (h("div", { className: "modal-overlay", onClick: closeForm },
             h("div", { className: "modal-content", onClick: e => e.stopPropagation(), style: { maxWidth: '600px' } },
@@ -341,8 +376,8 @@ export default function ReceiptVoucher() {
                         h("label", { className: "form-label" }, "Date"),
                         h("input", { type: "date", className: "form-input", value: form.date, onChange: e => updateField('date', e.target.value) })),
                     h("div", { className: "form-group", style: { gridColumn: 'span 2' } },
-                        h("label", { className: "form-label" }, "Received From (Client Name) *"),
-                        h("input", { type: "text", className: "form-input", value: form.clientName, onChange: e => updateField('clientName', e.target.value) })),
+                        h("label", { className: "form-label", htmlFor: "receipt-client" }, "Received From (Client Name) *"),
+                        h(ComboInput, { id: "receipt-client", type: "text", className: "form-input", options: clientNames, listLabel: "Clients", placeholder: "Start typing a client name", value: form.clientName, onChange: e => updateField('clientName', e.target.value) })),
                     h("div", { className: "form-group" },
                         h("label", { className: "form-label" }, "Amount *"),
                         h("input", { type: "number", className: "form-input", value: form.amount, onChange: e => updateField('amount', e.target.value), min: "0" })),
@@ -417,7 +452,7 @@ export default function ReceiptVoucher() {
                 h("p", null, receipts.length === 0 ? 'No receipts generated yet.' : 'No receipts match your search.'),
                 receipts.length === 0 && h("button", { className: "btn btn-primary", onClick: openAdd },
                     h(Plus, { size: 18 }),
-                    " Create Receipt"))) : (h("div", { className: "table-scroll" },
+                    " New Receipt"))) : (h("div", { className: "table-scroll" },
                 h("table", { className: "data-table", style: { minWidth: '700px' } },
                     h("thead", null,
                         h("tr", null,

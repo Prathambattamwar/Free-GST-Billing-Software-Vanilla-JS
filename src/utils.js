@@ -113,7 +113,55 @@ const finiteNonNeg = (n) => {
 // tax") or no tax is charged at all (bill of supply). A with-tax discount is
 // then taken off as entered - backing tax out of it again under-discounted
 // the line (₹118 off an inclusive ₹1,180 line took only ₹100 off).
+// v1.10.85 (#190) - plus the line's part of a whole-bill discount taken
+// before GST (billDiscShare, set by spreadBillDiscount), so the taxable value,
+// GST, GSTR-1, the HSN summary and the e-way bill all follow it. Lines without
+// it (every line saved before) are unchanged.
 export const resolveLineDiscount = (item = {}, taxIncluded = false) => {
+  const own = lineOwnDiscount(item, taxIncluded);
+  const share = finiteNonNeg(item.billDiscShare);
+  if (share <= 0) return own;
+  return Math.min(finiteNonNeg(item.quantity) * finiteNonNeg(item.rate), own + share);
+};
+
+// v1.10.85 (#190) - a whole-bill discount "Before GST" (a trade discount) is
+// spread over the lines in proportion to their value after line discounts (as
+// entered: GST included on a bill whose prices include tax), and GST is then
+// worked out on what is left. The parts are whole paise and add up exactly to
+// the discount (largest remainder). Returns new items, each with its part as
+// billDiscShare; any old part is dropped first, so it never goes stale. With
+// the default "After GST" the items come back without a part.
+export const spreadBillDiscount = (items, invoiceOptions = {}, taxIncluded = false) => {
+  const list = (items || []).map((it) => {
+    if (!it || it.billDiscShare === undefined) return it;
+    const { billDiscShare: _old, ...rest } = it;
+    return rest;
+  });
+  const opts = invoiceOptions || {};
+  const value = finiteNonNeg(opts.invoiceDiscountValue);
+  // (review) only while GST is charged: with GST off it is an ordinary discount.
+  if (!opts.invoiceDiscountBeforeGst || opts.showGST === false || value <= 0) return list;
+  const bases = list.map((it) => Math.max(0,
+    finiteNonNeg(it?.quantity) * finiteNonNeg(it?.rate) - lineOwnDiscount(it || {}, taxIncluded)));
+  const totalBase = bases.reduce((s, b) => s + b, 0);
+  if (totalBase <= 0) return list;
+  const discount = opts.invoiceDiscountType === 'percent'
+    ? totalBase * Math.min(value, 100) / 100
+    : Math.min(value, totalBase);
+  const paise = Math.min(Math.round(discount * 100), Math.floor(totalBase * 100 + 1e-6));
+  const raw = bases.map((b) => paise * b / totalBase);
+  const parts = raw.map((r) => Math.floor(r + 1e-9));
+  let left = paise - parts.reduce((s, n) => s + n, 0);
+  const order = raw.map((r, i) => [r - parts[i], i]).sort((a, b) => b[0] - a[0] || a[1] - b[1]);
+  for (let k = 0; left > 0 && k < order.length; k++) {
+    const i = order[k][1];
+    if (bases[i] <= 0) continue;
+    parts[i] += 1; left -= 1;
+  }
+  return list.map((it, i) => (parts[i] > 0 ? { ...it, billDiscShare: parts[i] / 100 } : it));
+};
+
+const lineOwnDiscount = (item = {}, taxIncluded = false) => {
   const qty = finiteNonNeg(item.quantity);
   const rate = finiteNonNeg(item.rate);
   const net = qty * rate;
@@ -164,7 +212,7 @@ export const calculateLineItemTax = (item = {}, taxInclusive = false) => {
 // v1.10.1 — Pure invoice totals computation.
 //
 // Prior to this release, the totals math lived inside a giant `useEffect`
-// in InvoiceGenerator.js (~120 lines). That made it impossible to
+// in InvoiceGenerator.jsx (~120 lines). That made it impossible to
 // unit-test and let several bugs go unnoticed for months:
 //
 //   • UTGST bucket never existed (audit C6). Intra-Chandigarh supplies
@@ -181,7 +229,7 @@ export const calculateLineItemTax = (item = {}, taxInclusive = false) => {
 //   • `totalTaxAmount` in saved bills omitted cess (M8).
 //   • Non-numeric `rate` from CSV import produced `NaN` totals (M10).
 //
-// Extracting to a pure function fixes each of those. The view effect
+// Extracting to a pure function fixes each of those. The React effect
 // now just calls this and stores the result in state.
 //
 // @param opts {{
@@ -220,13 +268,16 @@ export function computeInvoiceTotals(opts) {
   // and blew up on `profile.country` reading null. Explicit `|| {}`
   // normalises both cases so the totals calc never crashes on cold load.
   const rawOpts = opts || {};
-  const items = rawOpts.items || [];
   const profile = rawOpts.profile || {};
   const client = rawOpts.client || {};
   const details = rawOpts.details || {};
   const showGST = rawOpts.showGST !== false;
   const taxInclusive = !!rawOpts.taxInclusive;
   const invoiceOptions = rawOpts.invoiceOptions || {};
+  // v1.10.85 (#190) - a whole-bill discount before GST goes onto the lines
+  // first (their part is in each line's discount from here on).
+  const discBeforeGst = !!invoiceOptions.invoiceDiscountBeforeGst && showGST;
+  const items = spreadBillDiscount(rawOpts.items || [], discBeforeGst ? invoiceOptions : { ...invoiceOptions, invoiceDiscountBeforeGst: false }, !showGST || taxInclusive);
 
   const warnings = [];
   const isIndia = (profile.country || 'India') === 'India';
@@ -360,7 +411,7 @@ export function computeInvoiceTotals(opts) {
   // ordinary 194J invoice. No section given = the threshold sections (their
   // defaults), which keeps older saved invoices computing as before.
   const tcsThresholded = !invoiceOptions.tcsSection || invoiceOptions.tcsSection === '206C(1H)';
-  const tdsThresholded = !invoiceOptions.tdsSection || invoiceOptions.tdsSection === '194Q';
+  const tdsThresholded = isPurchaseOfGoodsTds(invoiceOptions.tdsSection); // 194Q, or 393(1) Sl. 8(ii) from 1 Apr 2026
   const tcsCumBefore = tcsThresholded ? (Number(invoiceOptions.tcsCumulativeThisYear) || 0) : Infinity;
   const tdsCumBefore = tdsThresholded ? (Number(invoiceOptions.tdsCumulativeThisYear) || 0) : Infinity;
 
@@ -404,8 +455,8 @@ export function computeInvoiceTotals(opts) {
 
   // v1.10.22 — invoice-level (whole-bill) discount. Treated as a cash
   // discount / trade allowance: subtracted from the post-tax total.
-  // Doesn't affect taxable value or the GSTR-1 payload. Users who need
-  // pre-tax GST-compliant discount should use per-line discount instead.
+  // Doesn't affect taxable value or the GSTR-1 payload.
+  // v1.10.85 (#190) - unless "Before GST" is chosen (see spreadBillDiscount).
   const invDiscValue = finiteNonNeg(invoiceOptions.invoiceDiscountValue);
   const invDiscType = invoiceOptions.invoiceDiscountType === 'percent' ? 'percent' : 'fixed';
   // v1.10.31 — GST-C4: cess is also subject to RCM under §8(2) of the GST
@@ -414,7 +465,10 @@ export function computeInvoiceTotals(opts) {
   // AND remitted own → double payment.
   const cessOnInvoice = isReverseCharge ? 0 : cessTotal;
   const preInvDiscTotal = baseTotal + tcsAmount + cessOnInvoice;
-  const invoiceDiscountAmount = invDiscType === 'percent'
+  // v1.10.85 (#190) - before GST it is already in the lines' discounts (and so
+  // in totalDiscount): nothing more comes off the total here.
+  const billDiscountBeforeGst = discBeforeGst ? r2(sum(items.map((it) => finiteNonNeg(it?.billDiscShare)))) : 0;
+  const invoiceDiscountAmount = discBeforeGst ? 0 : invDiscType === 'percent'
     ? Math.min(preInvDiscTotal, r2(preInvDiscTotal * Math.min(invDiscValue, 100) / 100))
     : Math.min(preInvDiscTotal, r2(invDiscValue));
 
@@ -455,6 +509,9 @@ export function computeInvoiceTotals(opts) {
     // v1.10.22 — invoice-level (post-tax) discount amount + type + raw
     // value carried through so the preview / PDF can show its own line.
     invoiceDiscountAmount, invoiceDiscountType: invDiscType, invoiceDiscountValue: invDiscValue,
+    // v1.10.85 (#190) - the whole-bill discount taken before GST (0 after GST).
+    // It is part of totalDiscount; printed on its own line.
+    billDiscountBeforeGst,
     // Grand
     total,
     netReceivable: r2(total - tdsAmount),
@@ -485,19 +542,28 @@ export function computeInvoiceTotals(opts) {
 // showGST when it has one, else its type (as the printed invoice does): a
 // template made on the Recurring screen has no invoiceOptions.showGST, and
 // the server used to charge GST on its bills of supply and challans.
+const templateShowsGst = (t, invoiceOptions) => (typeof invoiceOptions.showGST === 'boolean' ? invoiceOptions.showGST
+  : (INVOICE_TYPES[t.invoiceType || 'tax-invoice'] || INVOICE_TYPES['tax-invoice']).showGST);
 export const templateTotals = (tpl, profile, extraOptions = {}) => {
   const t = tpl || {};
   const invoiceOptions = { ...(t.invoiceOptions || {}), ...extraOptions };
-  const typeShowsGst = (INVOICE_TYPES[t.invoiceType || 'tax-invoice'] || INVOICE_TYPES['tax-invoice']).showGST;
   return computeInvoiceTotals({
     items: t.items || [],
     profile,
     client: { name: t.clientName, state: t.clientState, gstin: t.clientGstin, country: t.clientCountry, isSEZ: !!t.isSEZ },
     details: { placeOfSupply: t.placeOfSupply || '' },
-    showGST: typeof invoiceOptions.showGST === 'boolean' ? invoiceOptions.showGST : typeShowsGst,
+    showGST: templateShowsGst(t, invoiceOptions),
     taxInclusive: !!t.taxInclusive,
     invoiceOptions,
   });
+};
+// v1.10.85 (#190) - the lines a recurring invoice saves: with their part of a
+// before-GST bill discount, as the invoice screen saves them, so GSTR-1 and
+// the HSN summary (worked out from the saved lines) match the totals.
+export const templateItems = (tpl) => {
+  const t = tpl || {};
+  const invoiceOptions = t.invoiceOptions || {};
+  return spreadBillDiscount(t.items || [], invoiceOptions, !templateShowsGst(t, invoiceOptions) || !!t.taxInclusive);
 };
 
 // Invoice type configuration
@@ -518,6 +584,17 @@ export const INVOICE_TYPES = {
     title: 'QUOTATION',
     showGST: true,
     description: 'Priced offer for work or supply — not a tax document. Convert it to a tax invoice when accepted',
+  },
+  // v1.10.85 (#135, #112, #115) - the customer's confirmed order. Not a sale:
+  // never in totals, reports or GST returns, never moves stock. It is sent in
+  // parts with delivery challans (or invoices); utils/salesOrders.js works out
+  // what is dispatched and invoiced from the documents made from it.
+  'sales-order': {
+    label: 'Sales Order',
+    prefix: 'SO',
+    title: 'SALES ORDER',
+    showGST: true,
+    description: "The customer's confirmed order - not a tax document. Send it in parts with delivery challans, and invoice it when the goods go",
   },
   'proforma': {
     label: 'Proforma / Estimate',
@@ -583,7 +660,8 @@ export const ORDER_DETAIL_FIELDS = [
 // box can never show one thing while the invoice prints another (and the first
 // click always flips what you see - it used to take two clicks for options
 // that had never been saved).
-export const OPTIONS_OFF_BY_DEFAULT = ['showRoundOff', 'showAccountLabel', 'showCess', 'reverseCharge', 'showSystemGeneratedNote'];
+// v1.10.86 - (#189, #192) showMRP: the MRP column, off unless chosen.
+export const OPTIONS_OFF_BY_DEFAULT = ['showRoundOff', 'showAccountLabel', 'showCess', 'reverseCharge', 'showSystemGeneratedNote', 'showMRP'];
 export const OPTIONS_ON_FOR_TALLY = ['showHsnSummary', 'showTaxInWords', 'showDeclaration', 'showCustomerSeal'];
 export const invoiceOptionOn = (options, key, style = options?.pdfStyle) => {
   const v = options?.[key];
@@ -602,9 +680,29 @@ export const formatShortDate = (iso) => {
   return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }).replace(/ /g, '-');
 };
 // The filled-in order details, ready to print as label / value pairs.
-export const filledOrderDetails = (details = {}) => ORDER_DETAIL_FIELDS
-  .filter((f) => String(details[f.key] || '').trim())
-  .map((f) => ({ ...f, value: f.type === 'date' ? formatShortDate(details[f.key]) : String(details[f.key]).trim() }));
+// v1.10.84 (#126) - plus the fields the user named (details.customFields:
+// [{ label, value }]), e.g. an optician's R SPH / L SPH or a patient name.
+export const filledOrderDetails = (details = {}) => [
+  ...ORDER_DETAIL_FIELDS
+    .filter((f) => String(details[f.key] || '').trim())
+    .map((f) => ({ ...f, value: f.type === 'date' ? formatShortDate(details[f.key]) : String(details[f.key]).trim() })),
+  ...customFieldsOf(details)
+    .filter((f) => f.label && f.value)
+    .map((f, i) => ({ key: `custom${i}`, label: f.label, value: f.value, custom: true })),
+];
+// v1.10.84 (#172) - the Invoices search also finds a bill by its order /
+// dispatch / reference details (marketplace order ID, AWB in Dispatch Doc No,
+// your own fields) and the client's phone or GSTIN.
+export const billMatchesSearch = (bill, query) => {
+  const q = String(query || '').trim().toLowerCase();
+  if (!q) return true;
+  const c = bill?.data?.client || {};
+  return [bill?.clientName, bill?.invoiceNumber, c.phone, c.gstin,
+    ...filledOrderDetails(bill?.data?.details || {}).map((f) => f.value)]
+    .some((v) => String(v || '').toLowerCase().includes(q));
+};
+export const customFieldsOf = (details = {}) => (Array.isArray(details?.customFields) ? details.customFields : [])
+  .map((f) => ({ label: String(f?.label || '').trim(), value: String(f?.value || '').trim() }));
 
 // v1.10.70 - where a PDF page is allowed to end.
 //
@@ -700,15 +798,27 @@ export const setOffITC = (liability, credit) => {
 // save applies only the difference from what the bill last did.
 const STOCK_SIGN = {
   'tax-invoice': -1, 'bill-of-supply': -1, composition: -1, 'delivery-challan': -1,
-  'credit-note': 1, quotation: 0, proforma: 0,
+  'credit-note': 1, quotation: 0, proforma: 0, 'sales-order': 0,
 };
+// v1.10.85 (#148) - alternate units. A line billed in a product's second unit
+// (Box = 12 Pcs) keeps unitFactor 12 and baseUnit 'Pcs': stock, cost and the
+// GSTR-1 HSN summary count it in the base unit (2 boxes = 24 Pcs). Lines
+// without unitFactor (every line saved before) count as they always did.
+export const lineFactor = (it) => (Number(it?.unitFactor) > 0 ? Number(it.unitFactor) : 1);
+// A line without a factor gives its quantity exactly as before (no rounding).
+export const baseQty = (it) => (lineFactor(it) === 1 ? (Number(it?.quantity) || 0)
+  : Math.round((Number(it?.quantity) || 0) * lineFactor(it) * 1000) / 1000);
+// The alternate-unit fields a copied line keeps (none for a plain line). The
+// base unit is never blank: GSTR-1 reads its UQC.
+export const altLineFields = (it) => (lineFactor(it) !== 1
+  ? { unitFactor: lineFactor(it), baseUnit: String(it?.baseUnit || '').trim() || 'Nos' } : {});
 // What a bill of this type and status should have done to stock.
 export const stockEffect = (items, invoiceType, status) => {
   const sign = status === 'cancelled' ? 0 : (STOCK_SIGN[invoiceType || 'tax-invoice'] ?? -1);
   const out = {};
   if (!sign) return out;
   for (const it of items || []) {
-    const q = Number(it?.quantity) || 0;
+    const q = baseQty(it); // #148 - in the product's base unit
     if (!it?.productId || !q) continue;
     out[it.productId] = Math.round(((out[it.productId] || 0) + sign * q) * 1000) / 1000;
   }
@@ -761,6 +871,12 @@ export const printedSubtotal = (t) => (t?.taxInclusive
   ? Math.round(((Number(t.taxableAmount) || 0) + (Number(t.totalDiscount) || 0)) * 100) / 100
   : (Number(t?.subtotal) || 0));
 
+// v1.10.86 (#202) - ONE key for a client's name, used wherever a bill, a
+// receipt or a saved client is matched by name: case, spaces at the ends and
+// extra spaces inside do not count ("ABC  Traders " is "abc traders"). Bills
+// typed with odd spacing or case fall into the same ledger as the saved client.
+export const clientKey = (name) => String(name || '').trim().replace(/\s+/g, ' ').toLowerCase();
+
 // What this client has already been billed in the financial year of
 // `invoiceDate` (sales only, rupees, including GST), for the ₹50L threshold of
 // sections 194Q / 206C(1H). `excludeId` leaves out the invoice being edited.
@@ -768,14 +884,18 @@ export const printedSubtotal = (t) => (t?.taxInclusive
 // count the same way (the invoice screen used to always pass 0, which made
 // TCS/TDS 0 on any invoice under ₹50L however much the client had bought).
 export const clientYearToDate = (bills, clientName, invoiceDate, excludeId = null) => {
-  const name = String(clientName || '').trim().toLowerCase();
+  const name = clientKey(clientName);
   if (!name) return 0;
   const fy = getFinancialYearLabel(invoiceDate ? parseLocalDate(invoiceDate) : new Date());
   return (bills || []).reduce((sum, b) => {
     if (!b || b.id === excludeId || !countsAsSales(b)) return sum;
     if ((b.currency || 'INR') !== 'INR') return sum;
-    if (String(b.clientName || '').trim().toLowerCase() !== name) return sum;
+    if (clientKey(b.clientName) !== name) return sum;
     if (!b.invoiceDate || getFinancialYearLabel(parseLocalDate(b.invoiceDate)) !== fy) return sum;
+    // v1.10.85 (review) - only what was billed up to this invoice's date: an
+    // old invoice opened again must not count the ones made after it (its
+    // TDS / TCS, and so its total, would change).
+    if (invoiceDate && String(b.invoiceDate).slice(0, 10) > String(invoiceDate).slice(0, 10)) return sum;
     return sum + (Number(b.totalAmount) || 0);
   }, 0);
 };
@@ -784,7 +904,8 @@ export const clientYearToDate = (bills, clientName, invoiceDate, excludeId = nul
 // owed, so payment history, receipts and reports agree with the status. Used
 // by the Dashboard and the Clients screen (Clients used to set the paid amount
 // only, with no payment). The id gives the payment a real receipt number.
-export const markPaidPatch = (bill, note = 'Marked paid') => {
+// v1.10.85 (#184) - mode: how it was paid (askPaidMode); a cash one reaches the Cash book.
+export const markPaidPatch = (bill, note = 'Marked paid', mode = 'other') => {
   const payments = Array.isArray(bill.payments) ? bill.payments : [];
   const already = payments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
   // TDS the client deducts is not paid to us (see amountDue).
@@ -797,8 +918,27 @@ export const markPaidPatch = (bill, note = 'Marked paid') => {
     // when more had been received or TDS was deducted).
     paidAmount: Math.round((already + (add ? amount : 0)) * 100) / 100,
     payments: add
-      ? [...payments, { id: `pay_${now.getTime()}`, amount, date: localToday(), mode: 'other', note, recordedAt: now.toISOString(), auto: true }]
+      ? [...payments, { id: `pay_${now.getTime()}`, amount, date: localToday(), mode: mode || 'other', note, recordedAt: now.toISOString(), auto: true }]
       : payments,
+  };
+};
+
+// v1.10.85 (#185) - New Invoice's "Received now": ONE payment on the bill,
+// kept under the same id on every save (auto-saves too). Returns the payments
+// with that one (ownId) taken out and the new one, when there is one, added:
+// a re-save replaces it, a cleared amount removes it, never a second copy.
+export const withReceivedNow = (payments, ownId, payment) => [
+  ...(Array.isArray(payments) ? payments : []).filter((p) => !ownId || p?.id !== ownId),
+  ...(payment ? [payment] : []),
+];
+// The payment itself, with the fields the Dashboard's Record Payment gives one.
+export const receivedNowPayment = ({ id, amount, mode, date, recordedAt }) => {
+  const amt = Math.round((Number(amount) || 0) * 100) / 100;
+  if (!(amt > 0)) return null;
+  return {
+    id: id || 'pay_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    amount: amt, date: date || localToday(), mode: mode || 'cash',
+    note: 'Received with the invoice', recordedAt: recordedAt || new Date().toISOString(),
   };
 };
 
@@ -814,16 +954,6 @@ export const markUnpaidPatch = (bill) => {
   const payments = (Array.isArray(bill.payments) ? bill.payments : []).filter((p) => !isAutoPaidPayment(p));
   const paidAmount = Math.round(payments.reduce((s, p) => s + (Number(p.amount) || 0), 0) * 100) / 100;
   return { payments, paidAmount, status: paymentStatusFor(bill, paidAmount) };
-};
-
-// The online documentation. Help buttons link straight to the section for
-// their screen, and the sidebar User Guide opens the start (v1.10.75). The
-// build of docs-site checks that every doc="page#section" used in src exists.
-export const DOCS_URL = 'https://dicecodes.com/free-gst-software-documentation/';
-export const docsLink = (doc = '') => {
-  const [page, section] = String(doc).split('#');
-  if (!page || page === 'index') return DOCS_URL + (section ? `#${section}` : '');
-  return `${DOCS_URL}${page}.html${section ? `#${section}` : ''}`;
 };
 
 // GSTR-1 B2C Large: an inter-state sale to an unregistered buyer above this
@@ -872,7 +1002,7 @@ export const AUSTRALIA_STATES = [
   'Western Australia','Tasmania','Australian Capital Territory','Northern Territory'
 ];
 
-// Returns states/provinces list for a country, or [] if manual text entry is better
+// Returns states/provinces list for a country, or [] if free-text is better
 export const getStatesForCountry = (countryName) => {
   switch (countryName) {
     case 'India': return INDIAN_STATES;
@@ -888,7 +1018,7 @@ export const getStatesForCountry = (countryName) => {
 // taxRates: common rates for that country's tax dropdown (always allow custom entry)
 // taxIdRegex: optional pattern for soft validation (warning only, never blocks save)
 export const COUNTRIES = [
-  { name: 'India', code: 'IN', currency: 'INR', currencySymbol: '₹', taxLabel: 'GST', taxIdLabel: 'GSTIN', taxIdPlaceholder: '22AAAAA0000A1Z5', bankLabel: 'IFSC Code', postalLabel: 'PIN Code', stateLabel: 'State', hasStates: true, taxRates: [0, 0.1, 0.25, 3, 5, 12, 18, 28, 40], taxIdRegex: /^\d{2}[A-Z]{5}\d{4}[A-Z]\d[A-Z][A-Z\d]$/ },
+  { name: 'India', code: 'IN', currency: 'INR', currencySymbol: '₹', taxLabel: 'GST', taxIdLabel: 'GSTIN', taxIdPlaceholder: '22AAAAA0000A1Z5', bankLabel: 'IFSC Code', postalLabel: 'PIN Code', stateLabel: 'State', hasStates: true, taxRates: [0, 0.1, 0.25, 3, 5, 12, 18, 28, 40], taxIdRegex: /^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d][A-Z][A-Z\d]$/ },
   { name: 'United Arab Emirates', code: 'AE', currency: 'AED', currencySymbol: 'AED', taxLabel: 'VAT', taxIdLabel: 'TRN', taxIdPlaceholder: '100123456700003', bankLabel: 'IBAN', postalLabel: 'Postal Code', stateLabel: 'Emirate', hasStates: false, taxRates: [0, 5], taxIdRegex: /^\d{15}$/ },
   { name: 'United States', code: 'US', currency: 'USD', currencySymbol: '$', taxLabel: 'Sales Tax', taxIdLabel: 'EIN / TIN', taxIdPlaceholder: '12-3456789', bankLabel: 'Routing Number', postalLabel: 'ZIP Code', stateLabel: 'State', hasStates: false, taxRates: [0, 4, 6, 7, 8, 9, 10], taxIdRegex: /^\d{2}-?\d{7}$/ },
   { name: 'United Kingdom', code: 'GB', currency: 'GBP', currencySymbol: '£', taxLabel: 'VAT', taxIdLabel: 'VAT Number', taxIdPlaceholder: 'GB123456789', bankLabel: 'Sort Code', postalLabel: 'Postcode', stateLabel: 'County', hasStates: false, taxRates: [0, 5, 20], taxIdRegex: /^GB\d{9}(\d{3})?$/i },
@@ -997,6 +1127,18 @@ export const decodeGstin = (value) => {
     taxpayerType: GSTIN_TAXPAYER_TYPES[gstin[13]] || null,
     checksumOk: gstinChecksumOk(gstin),
   };
+};
+
+// v1.10.86 - what a typed GSTIN fills in on the business form (first-run
+// welcome, Settings → Company): the state and the PAN, only where still empty,
+// never over what was typed. {} for a GSTIN that is short or fails its checksum.
+export const gstinFill = (current, gstin) => {
+  const d = decodeGstin(gstin);
+  if (!d || !d.checksumOk) return {};
+  const patch = {};
+  if (d.state && !String(current?.state || '').trim()) patch.state = d.state;
+  if (!String(current?.pan || '').trim()) patch.pan = d.pan;
+  return patch;
 };
 
 // v1.10.31 — GST-H1: legacy codes normalized.
@@ -1139,7 +1281,7 @@ export const generateEWayBillJSON = (profile, client, details, items, totals, in
       productDesc: item.name || '',
       hsnCode: Number(item.hsn) || 0,
       quantity: item.quantity || 0,
-      qtyUnit: getUnitUQC(item.unit),
+      qtyUnit: getUnitUQC(item.unit) === 'NA' ? 'OTH' : getUnitUQC(item.unit), // NA is not an e-way bill unit
       taxableAmount: Math.round(taxable * 100) / 100,
       cgstRate: isInterstate ? 0 : taxRate / 2,
       sgstRate: isInterstate ? 0 : taxRate / 2,
@@ -1209,11 +1351,11 @@ export const generateEWayBillJSON = (profile, client, details, items, totals, in
 export const getUpcomingFilings = (today = new Date()) => {
   const out = [];
   const t = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  const push = (label, dueDate) => {
+  const push = (label, dueDate, extra) => {
     const diff = Math.round((dueDate - t) / 86400000);
     // Local date: toISOString() is UTC, which in India is the previous day
     // for a local midnight, so every due date was shown a day early.
-    if (diff >= 0 && diff <= 60) out.push({ label, dueDate: toLocalIsoDate(dueDate), daysAway: diff });
+    if (diff >= 0 && diff <= 60) out.push({ label, dueDate: toLocalIsoDate(dueDate), daysAway: diff, ...extra });
   };
   // From LAST month: its returns fall due this month (GSTR-3B for September
   // is due 20 October) and are the most urgent ones. Starting at this month
@@ -1222,8 +1364,11 @@ export const getUpcomingFilings = (today = new Date()) => {
     const nextMonth = new Date(t.getFullYear(), t.getMonth() + i, 1);
     const m = nextMonth.getMonth();
     const y = nextMonth.getFullYear();
-    push(`GSTR-1 (${nextMonth.toLocaleString('en-IN', { month: 'short', year: 'numeric' })})`, new Date(y, m + 1, 11));
-    push(`GSTR-3B (${nextMonth.toLocaleString('en-IN', { month: 'short', year: 'numeric' })})`, new Date(y, m + 1, 20));
+    // v1.10.86 - type + period: the month's "Filed" mark on GST Returns
+    // (`${month 0-11}_${year}`) takes the reminder off (utils/attention.js).
+    const period = `${m}_${y}`;
+    push(`GSTR-1 (${nextMonth.toLocaleString('en-IN', { month: 'short', year: 'numeric' })})`, new Date(y, m + 1, 11), { type: 'gstr1', period });
+    push(`GSTR-3B (${nextMonth.toLocaleString('en-IN', { month: 'short', year: 'numeric' })})`, new Date(y, m + 1, 20), { type: 'gstr3b', period });
     // Quarterly TDS / TCS — applies to the quarter the month falls into.
     const quarterEnd = m % 3 === 2; // Mar / Jun / Sep / Dec
     if (quarterEnd) {
@@ -1444,6 +1589,21 @@ export const htmlHasText = (html) => {
   }
 };
 
+// ERR-006 - a client's paper is saved and restored WITH its custom size: the
+// key 'custom' alone came back with no width, which getPaperSize reads as
+// 80mm, i.e. a thermal receipt. Falls back to the invoice's current paper, not
+// to A4 (a shop that prints everything on 80mm keeps it). Tested in tax-test.
+export const clientPaperPrefs = (options = {}) => ({
+  preferredPaperSize: options.paperSize || 'a4',
+  preferredCustomPaperWidth: options.customPaperWidth || 80,
+  preferredCustomPaperHeight: options.customPaperHeight || 297,
+});
+export const clientPaperOptions = (cli, prev = {}) => ({
+  paperSize: cli?.preferredPaperSize || prev.paperSize || 'a4',
+  customPaperWidth: cli?.preferredCustomPaperWidth || prev.customPaperWidth || 80,
+  customPaperHeight: cli?.preferredCustomPaperHeight || prev.customPaperHeight || 297,
+});
+
 export const getPaperSize = (key, options = {}) => {
   const base = PAPER_SIZES[key] || PAPER_SIZES.a4;
   if (base.kind !== 'custom') return base;
@@ -1655,6 +1815,7 @@ export const BUILTIN_UNITS = [
   { label: 'cm',      uqc: 'CMS', kind: 'goods' },
   { label: 'Ft',      uqc: 'FTS', kind: 'goods' },
   { label: 'In',      uqc: 'INS', kind: 'goods' },
+  { label: 'Rft',     uqc: 'OTH', kind: 'goods' }, // running feet (#140): glass polish, channel
   { label: 'Sq.ft',   uqc: 'SQF', kind: 'both'  }, // construction services use this too
   { label: 'Sq.m',    uqc: 'SQM', kind: 'both'  },
   { label: 'Hrs',     uqc: 'HRS', kind: 'services' },
@@ -1674,6 +1835,10 @@ export const BUILTIN_UNITS = [
   { label: 'Bag',     uqc: 'BAG', kind: 'goods' },
   { label: 'Roll',    uqc: 'ROL', kind: 'goods' },
   { label: 'Bottle',  uqc: 'BTL', kind: 'goods' },
+  // v1.10.84 (#143) - a service with no quantity: the line's amount is its
+  // rate (quantity is held at 1 and printed as "-"), and GSTR-1 reports UQC
+  // NA with quantity 0, as the portal expects.
+  { label: 'NA',      uqc: 'NA',  kind: 'both' },
 ];
 
 // Default unit per invoice mode — used when adding a new line item so the user
@@ -1748,7 +1913,9 @@ export const getUnitUQC = (label) => {
 };
 // v1.10.77 - GSTR-1 HSN summary: a service (SAC 99xxxx) has no unit; the
 // portal expects UQC "NA" and quantity 0 for it (delivery charges, setup fees).
-export const hsnUqc = (item) => (/^99/.test(String(item?.hsn || '').trim()) ? 'NA' : getUnitUQC(item?.unit));
+// v1.10.85 (#148) - a line in an alternate unit reports its base unit.
+export const hsnUqc = (item) => (/^99/.test(String(item?.hsn || '').trim()) ? 'NA'
+  : getUnitUQC(lineFactor(item) !== 1 ? (String(item?.baseUnit || '').trim() || 'Nos') : item?.unit));
 
 // ========== Tax ID validation ==========
 // Returns { ok: boolean, message: string }. Empty value is treated as ok (field is optional).
@@ -1906,26 +2073,28 @@ export const isValidUpiId = (s) => /^[\w.-]+@[\w.-]+$/.test(String(s || '').trim
 // v1.10.83 - the sidebar is listed item by item in MENU_ITEMS (order,
 // switch, one plain line each), and the other modules are grouped by the
 // screen they live on, so the Features tab reads like the app itself.
-// `module: null` = always shown (Settings and Lock app, which only appears
-// once a PIN is set).
+// `module: null` = always shown (Settings and Lock app, once a PIN is set).
 // `section` is the part of the sidebar: 'main' (top) or 'bottom'.
 export const MENU_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', module: 'dashboard', core: true, section: 'main', help: 'Your sales, dues and shortcuts at a glance.' },
   { id: 'new', label: 'New invoice', module: 'invoicing', core: true, section: 'main', help: 'Tax invoices, quotations, credit notes and challans.' },
   { id: 'clients', label: 'Clients', module: 'clients', core: true, section: 'main', help: 'The people and businesses you bill.' },
-  { id: 'inventory', label: 'Products', module: 'inventory', section: 'main', help: 'Your product and service list, with stock.' },
-  { id: 'expenses', label: 'Expenses', module: 'expenses', section: 'main', help: 'Rent, salaries and other running costs.' },
-  { id: 'purchases', label: 'Purchases', module: 'purchases', section: 'main', help: 'Bills from your suppliers, for stock and input tax credit.' },
-  { id: 'recurring', label: 'Recurring', module: 'recurring', section: 'main', help: 'Invoices that repeat every week, month or year.' },
+  // v1.10.86 - listed in the order of the default menu groups
+  // (utils/menuGroups.js): Sales, Stock & buying, Money & reports.
   { id: 'receipts', label: 'Receipts', module: 'receipts', section: 'main', help: 'Payment receipts for money you receive.' },
+  { id: 'recurring', label: 'Recurring', module: 'recurring', section: 'main', help: 'Invoices that repeat every week, month or year.' },
+  { id: 'inventory', label: 'Products', module: 'inventory', section: 'main', help: 'Your product and service list, with stock.' },
+  { id: 'purchases', label: 'Purchases', module: 'purchases', section: 'main', help: 'Bills from your suppliers, for stock and input tax credit.' },
+  { id: 'expenses', label: 'Expenses', module: 'expenses', section: 'main', help: 'Rent, salaries and other running costs.' },
   { id: 'cashbook', label: 'Cash book', module: 'cashBook', section: 'main', help: 'Cash in and out with names and notes, and the cash in hand.' },
   { id: 'reports', label: 'Reports', module: 'reports', section: 'main', help: 'Sales, profit and loss, dues and stock reports.' },
   { id: 'filing', label: 'GST returns', module: 'gstReturns', section: 'main', indiaOnly: true, help: 'GSTR-1 and GSTR-3B files, with a filing guide.' },
   { id: 'incometax', label: 'Income tax', module: 'incomeTax', section: 'main', indiaOnly: true, help: 'Old vs new regime calculator and bank statement import.' },
   { id: 'notifications', label: 'Notifications', module: 'notifications', section: 'top', help: 'Bell at the top right: overdue invoices, GST due dates and low stock.' },
-  { id: 'lock', label: 'Lock app', module: null, section: 'top', help: 'Padlock at the top right, shown only when a PIN is set.' },
   { id: 'offline', label: 'Offline mode', module: 'offlineButton', section: 'top', help: 'Wi-Fi button at the top right: turn Offline mode on or off, and see what changes.' },
   { id: 'darkMode', label: 'Dark mode', module: 'darkMode', section: 'top', help: 'Moon / sun button at the top right: light or dark screens.' },
+  // v1.10.86 - Control Panel moved into Settings (App & updates, Data & Backups).
+  // A saved order or hidden list naming 'controlpanel' still loads: unknown ids are ignored.
   { id: 'settings', label: 'Settings', module: null, section: 'bottom', help: 'Always here, so you can turn things back on.' },
 ];
 
@@ -1949,7 +2118,18 @@ export const FEATURE_GROUPS = [
       // v1.10.83 (#111) - off by default: only businesses above the turnover
       // limit need it, and everyone else should never see it.
       { id: 'einvoice', label: 'E-invoicing (IRN)', help: 'Only if your yearly turnover is above ₹5 crore: make the e-invoice file and print the IRN with its QR code.', defaultOn: false, indiaOnly: true },
+      // v1.10.84 (#129) - cafes and shops find or add the customer by phone.
+      { id: 'phoneFirst', label: 'Customer phone box', help: 'A phone box at the top of the invoice: typing a number fills in that customer, or adds a new one with just a name. Clients shows their visits.', defaultOn: true },
+      // v1.10.85 (#135) - off by default, like purchase orders; on for the
+      // wholesale, manufacturing and everything business types.
+      { id: 'salesOrders', label: 'Sales orders', help: "Take the customer's order (or turn a quotation into one), send it in parts with delivery challans and invoice it. A Sales orders tab on the Dashboard shows Open, Partly dispatched, Dispatched or Invoiced.", defaultOn: false },
       { id: 'upiQr', label: 'UPI QR code', help: 'Print a UPI QR code so customers can pay by scanning.', defaultOn: true, indiaOnly: true },
+      // v1.10.85 (#147) - counter shops: a new invoice starts with the customer "Cash Sale".
+      { id: 'cashSaleDefault', label: 'Start with "Cash Sale"', help: 'New invoices start with the customer "Cash Sale", for walk-in counter sales. Type or pick a name to bill someone else.', defaultOn: false },
+      // v1.10.84 (#140) - glass, mirror, flex, tile shops; off until wanted.
+      { id: 'sizeBilling', label: 'Size billing (Sq.ft)', help: 'For glass, mirror, flex and tile shops: an item line can be "Sq.ft" - type Length x Width in inches and the pieces, pick 3 or 6 inch rounding, and the square feet and amount are worked out. An "Rft" line (polish, channel) takes the square feet or the edges of the glass lines. The invoice prints Size and SQFT columns.', defaultOn: false },
+      // v1.10.85 - off until wanted; the level names are set below the switch.
+      { id: 'priceLevels', label: 'Price levels', help: 'Up to 3 price lists (for example Retail, Wholesale, Dealer). A product can have a price for each level and a client can be given a level; their invoices then take that price.', defaultOn: false },
     ],
   },
   {
@@ -1967,6 +2147,10 @@ export const FEATURE_GROUPS = [
     modules: [
       // v1.10.83 (#115) - off by default: most shops buy and sell, they do not make.
       { id: 'manufacturing', label: 'Manufacturing (bill of materials)', help: 'Say what goes into a product, then "Make" it to move the stock.', defaultOn: false },
+      // v1.10.85 (#137, #158) - on by default (nothing shows until a product
+      // has a barcode, except the box in the product form); a business type
+      // turns it on only for retail, wholesale and manufacturing.
+      { id: 'barcodes', label: 'Barcodes', help: 'A barcode on each product, a Scan barcode box on New Invoice for a USB scanner, and barcode labels to print from Products or a purchase bill.', defaultOn: true },
     ],
   },
   {
@@ -1976,13 +2160,6 @@ export const FEATURE_GROUPS = [
       // v1.10.83 (#112) - off by default: most shops have one branch, and the
       // picker on every form would only be noise for them.
       { id: 'costCentres', label: 'Cost centres', help: 'Tag bills, purchases and expenses with a branch, site or project, and see profit for each.', defaultOn: false },
-    ],
-  },
-  {
-    id: 'integrations',
-    label: 'Integrations',
-    modules: [
-      { id: 'googleDrive', label: 'Invoice PDF archive', help: 'Keep generated invoice PDFs in this browser profile. Primary business records remain stored locally.', defaultOn: true },
     ],
   },
 ];
@@ -2042,7 +2219,7 @@ export const TERMS_PRESETS = [
 <ul>
   <li>Payment is due within <strong>7 days</strong> from invoice date.</li>
   <li>Late payments accrue interest at <strong>1.5% per month</strong>.</li>
-  <li>TDS, if applicable, may be deducted under Section 194J. Please share Form 16A.</li>
+  <li>TDS, if applicable, may be deducted under section 393(1) [Table: Sl. No. 6(iii)] of the Income-tax Act, 2025 (old 194J). Please share the TDS certificate (Form 131).</li>
 </ul>
 <p><strong>Intellectual Property:</strong> Final deliverables transfer to client only after the full invoice value is settled.</p>
 <p>Disputes subject to <em>[your city]</em> jurisdiction.</p>`,
@@ -2061,7 +2238,7 @@ export const TERMS_PRESETS = [
 <ul>
   <li>Net <strong>30 days</strong> from date of invoice.</li>
   <li>Interest @ <strong>24% p.a.</strong> on overdue amounts.</li>
-  <li>TDS under Section 194Q applicable for buyers with turnover &gt; ₹10 cr.</li>
+  <li>TDS under section 393(1) [Table: Sl. No. 8(ii)] (old 194Q) applies for buyers with turnover &gt; ₹10 cr.</li>
 </ul>
 <p><strong>Returns:</strong> Goods sold are not returnable unless defective and notified within 7 days of delivery.</p>
 <p>Subject to <em>[your city]</em> jurisdiction.</p>`,
@@ -2103,7 +2280,7 @@ export const TERMS_PRESETS = [
 <ul>
   <li>Net <strong>15 days</strong> from invoice date.</li>
   <li>Late payments accrue interest at <strong>18% p.a.</strong></li>
-  <li>TDS under Section 194J applicable.</li>
+  <li>TDS under section 393(1) [Table: Sl. No. 6(iii)] (old 194J) applicable.</li>
 </ul>
 <p><strong>SLA & Support:</strong> Support is provided per the agreed SLA. Outages caused by hosting providers, third-party APIs, or scheduled maintenance are excluded.</p>
 <p><strong>IP & Confidentiality:</strong> Custom code is licensed to client on full settlement. Confidential information is protected per the signed NDA.</p>
@@ -2123,7 +2300,7 @@ export const TERMS_PRESETS = [
 <ul>
   <li>Payment as per agreed milestones in the contract.</li>
   <li>Final payment due within <strong>30 days</strong> of completion certificate.</li>
-  <li>TDS under Section 194C applicable.</li>
+  <li>TDS under section 393(1) [Table: Sl. No. 6(i)] (old 194C) applicable.</li>
   <li>Retention, if any, will be released as per the contract terms.</li>
 </ul>
 <p><strong>Defects Liability:</strong> 12 months from handover, covering workmanship only.</p>
@@ -2173,7 +2350,7 @@ export const TERMS_PRESETS = [
     body: `<ul>
   <li>Rent is payable on or before the <strong>5th of every month</strong>.</li>
   <li>Late payments attract a penalty of ₹100 per day after grace period.</li>
-  <li>TDS under Section 194I applicable for tenant if annual rent exceeds ₹2.4 lakh.</li>
+  <li>TDS under section 393(1) [Table: Sl. No. 2(ii)] (old 194-I) applicable for the tenant when rent is above ₹50,000 a month.</li>
   <li>Maintenance, electricity, and water charges are billed separately as per usage.</li>
   <li>Premises must be vacated in the same condition as handed over, normal wear and tear excepted.</li>
   <li>Disputes subject to <em>[your city]</em> jurisdiction.</li>
@@ -2230,8 +2407,10 @@ export const TDS_SECTIONS = [
   { code: '194J-tech', label: '194J — Technical services (lower rate)', rate: 2 },
   { code: '194I', label: '194I — Rent (land / building)', rate: 10 },
   { code: '194I-pm', label: '194I — Rent (plant / machinery)', rate: 2 },
-  { code: '194H', label: '194H — Commission / brokerage', rate: 5 },
-  { code: '194O', label: '194O — E-commerce participant', rate: 1 },
+  // v1.10.85 - 2% and 0.1% from 1 October 2024 (Finance (No. 2) Act 2024;
+  // they were 5% and 1%). Saved invoices keep the rate they were made with.
+  { code: '194H', label: '194H — Commission / brokerage', rate: 2 },
+  { code: '194O', label: '194O — E-commerce participant', rate: 0.1 },
   { code: '195',  label: '195 — Payments to non-residents (varies)', rate: 0 },
   { code: 'custom', label: 'Custom section / rate', rate: 0 },
 ];
@@ -2250,6 +2429,105 @@ export const TCS_SECTIONS = [
   { code: '206C(1)',  label: '206C(1) — Tendu leaves / scrap / minerals (varies)', rate: 1 },
   { code: 'custom',   label: 'Custom rate', rate: 0 },
 ];
+
+// v1.10.85 (#180) - the Income-tax Act, 2025 (from 1 April 2026) moved TDS
+// to sections 392-393 and TCS to section 394, each with a Table and serial
+// number; returns must quote those, not 194C or 206C (CBDT FAQ Q2.5). Rates
+// and thresholds as amended by the Finance Act, 2026. Checked against the Act
+// as amended, the Income-tax Rules 2026 and the CBDT transition FAQs.
+// An invoice dated before 1 April 2026 is under the 1961 Act and keeps the
+// lists above; saved invoices keep the section they were made with.
+// `short` is what is printed ("TDS (393(1) Sl. 6(i) @ 2%)"); `old` is the
+// 1961 section it replaces.
+export const NEW_ACT_FROM = '2026-04-01';
+export const TDS_SECTIONS_2025 = [
+  { code: '393-8ii', short: '393(1) Sl. 8(ii)', old: '194Q', rate: 0.1, label: '393(1) Table Sl. 8(ii) — Purchase of goods (buyer turnover > ₹10 cr; on the amount above ₹50 lakh)' },
+  { code: '393-6i-ind', short: '393(1) Sl. 6(i)', old: '194C', rate: 1, label: '393(1) Table Sl. 6(i) — Contractor, incl. manpower supply (individual / HUF)' },
+  { code: '393-6i-oth', short: '393(1) Sl. 6(i)', old: '194C-co', rate: 2, label: '393(1) Table Sl. 6(i) — Contractor, incl. manpower supply (others)' },
+  { code: '393-6iii-prof', short: '393(1) Sl. 6(iii)', old: '194J', rate: 10, label: '393(1) Table Sl. 6(iii) — Professional fees, director fees, royalty (10%)' },
+  { code: '393-6iii-tech', short: '393(1) Sl. 6(iii)', old: '194J-tech', rate: 2, label: '393(1) Table Sl. 6(iii) — Technical services, film royalty, call centre (2%)' },
+  { code: '393-2ii-lb', short: '393(1) Sl. 2(ii)', old: '194I', rate: 10, label: '393(1) Table Sl. 2(ii) — Rent: land, building, furniture (above ₹50,000 a month)' },
+  { code: '393-2ii-pm', short: '393(1) Sl. 2(ii)', old: '194I-pm', rate: 2, label: '393(1) Table Sl. 2(ii) — Rent: plant, machinery, equipment (above ₹50,000 a month)' },
+  { code: '393-1ii', short: '393(1) Sl. 1(ii)', old: '194H', rate: 2, label: '393(1) Table Sl. 1(ii) — Commission / brokerage (above ₹20,000 a year)' },
+  { code: '393-8v', short: '393(1) Sl. 8(v)', old: '194O', rate: 0.1, label: '393(1) Table Sl. 8(v) — E-commerce participant (deducted by the operator)' },
+  { code: '393-2-17', short: '393(2) Sl. 17', old: '195', rate: 0, label: '393(2) Table Sl. 17 — Payments to non-residents (rates in force or DTAA)' },
+  { code: 'custom', short: '', label: 'Custom section / rate', rate: 0 },
+];
+// TCS on sale of goods (old 206C(1H)) has no place in section 394: it stays
+// gone. GST's own TCS (CGST section 52) is not income tax and is unchanged.
+export const TCS_SECTIONS_2025 = [
+  { code: '52', short: 'CGST 52', rate: 0.5, label: 'CGST 52 — E-commerce operator (GST)' },
+  { code: '394-1', short: '394(1) Sl. 1', old: '206C(1)', rate: 2, label: '394(1) Table Sl. 1 — Alcoholic liquor for human consumption' },
+  { code: '394-2', short: '394(1) Sl. 2', old: '206C(1)', rate: 2, label: '394(1) Table Sl. 2 — Tendu leaves' },
+  { code: '394-3', short: '394(1) Sl. 3', old: '206C(1)', rate: 2, label: '394(1) Table Sl. 3 — Timber, other forest produce' },
+  { code: '394-4', short: '394(1) Sl. 4', old: '206C(1)', rate: 2, label: '394(1) Table Sl. 4 — Scrap' },
+  { code: '394-5', short: '394(1) Sl. 5', old: '206C(1)', rate: 2, label: '394(1) Table Sl. 5 — Coal, lignite, iron ore' },
+  { code: '394-6', short: '394(1) Sl. 6', old: '206C(1F)', rate: 1, label: '394(1) Table Sl. 6 — Motor vehicle sold for more than ₹10 lakh' },
+  { code: '394-9', short: '394(1) Sl. 9', old: '206C(1C)', rate: 2, label: '394(1) Table Sl. 9 — Licence or lease of a parking lot, toll plaza, mine or quarry' },
+  { code: 'custom', short: '', label: 'Custom rate', rate: 0 },
+];
+// The lists for a date: the 2025 Act from 1 April 2026 (no date = today).
+const underNewAct = (date) => String(date || new Date().toISOString().slice(0, 10)).slice(0, 10) >= NEW_ACT_FROM;
+export const tdsSectionsFor = (date) => (underNewAct(date) ? TDS_SECTIONS_2025 : TDS_SECTIONS);
+export const tcsSectionsFor = (date) => (underNewAct(date) ? TCS_SECTIONS_2025 : TCS_SECTIONS);
+// A 1961 code moved to the 2025 Act for a new document dated from 1 April
+// 2026 (null when there is no single place for it, e.g. 206C(1) "varies").
+export const newActCode = (code, kind = 'tds') => {
+  const list = kind === 'tcs' ? TCS_SECTIONS_2025 : TDS_SECTIONS_2025;
+  if (list.some((s) => s.code === code)) return code;
+  const hits = list.filter((s) => s.old === code);
+  return hits.length === 1 ? hits[0].code : null;
+};
+// A document's TDS / TCS moved to the 2025 Act: { section, rate }, or null when
+// it stays. The rate follows the new section only when it was the old one's
+// usual rate (a rate typed for a lower-deduction certificate stays).
+const OLD_DEFAULT_RATES = { '194H': [5, 2], '194O': [1, 0.1] }; // before / after 1 Oct 2024
+export const movedSection = (code, rate, kind = 'tds') => {
+  const to = code ? newActCode(code, kind) : null;
+  if (!to || to === code) return null;
+  const oldList = kind === 'tcs' ? TCS_SECTIONS : TDS_SECTIONS;
+  const newList = kind === 'tcs' ? TCS_SECTIONS_2025 : TDS_SECTIONS_2025;
+  const usual = [oldList.find((s) => s.code === code)?.rate, ...(OLD_DEFAULT_RATES[code] || [])];
+  const typed = Number(rate);
+  const keep = rate !== undefined && rate !== '' && !usual.includes(typed);
+  return { section: to, rate: keep ? rate : newList.find((s) => s.code === to)?.rate ?? rate };
+};
+// A document's options with its 1961 sections moved, when its date is under
+// the 2025 Act (recurring invoices made from an older template).
+export const withNewActSections = (opts = {}, date) => {
+  if (!underNewAct(date)) return opts;
+  const tds = movedSection(opts.tdsSection, opts.tdsRate, 'tds');
+  const tcs = movedSection(opts.tcsSection, opts.tcsRate, 'tcs');
+  if (!tds && !tcs) return opts;
+  return {
+    ...opts,
+    ...(tds ? { tdsSection: tds.section, tdsRate: tds.rate } : {}),
+    ...(tcs ? { tcsSection: tcs.section, tcsRate: tcs.rate } : {}),
+  };
+};
+// What an invoice, a PDF and the TDS / TCS report print for a section.
+export const sectionShort = (code) => {
+  const s = [...TDS_SECTIONS_2025, ...TCS_SECTIONS_2025].find((x) => x.code === code);
+  if (s) return s.short || '';
+  return String(code || '').replace(/-(co|tech|pm)$/, '');
+};
+// " (393(1) Sl. 6(i) @ 2%)" after TDS / TCS on an invoice; " (@ 2%)" for a
+// custom section; '' with no section.
+export const sectionPrint = (code, rate) => {
+  if (!code) return '';
+  const short = code === 'custom' ? '' : sectionShort(code);
+  return ` (${short ? `${short} @ ` : '@ '}${Number(rate) || 0}%)`;
+};
+// The full name of any section ever offered (a saved invoice keeps its own).
+export const sectionOptionLabel = (code) => {
+  const now = [...TDS_SECTIONS_2025, ...TCS_SECTIONS_2025].find((x) => x.code === code && x.code !== 'custom');
+  if (now) return now.label;
+  const before = [...TDS_SECTIONS, ...TCS_SECTIONS].find((x) => x.code === code && x.code !== 'custom');
+  if (before) return `${before.label} (Income-tax Act, 1961)`;
+  return REMOVED_TCS_SECTIONS[code] || String(code || '');
+};
+// 194Q and its 2025 place (Sl. 8(ii)) count only above ₹50 lakh a year.
+export const isPurchaseOfGoodsTds = (code) => !code || code === '194Q' || code === '393-8ii';
 
 // v1.10.6 — audit L3: getTDSSection / getTCSSection had no importers.
 // Components filter TDS_SECTIONS / TCS_SECTIONS directly.
@@ -2337,7 +2615,7 @@ export const startFor = (invoiceType, numberSettings) =>
 // Each business can have its own series (own prefix, start, counters) or use
 // the shared one. Invoices are stored under their number, so a business with
 // its own series must print a prefix no other series uses.
-export const DOC_TYPE_PREFIXES = ['INV', 'QUO', 'EST', 'BOS', 'COMP', 'CN', 'DC', 'RCP'];
+export const DOC_TYPE_PREFIXES = ['INV', 'QUO', 'SO', 'EST', 'BOS', 'COMP', 'CN', 'DC', 'RCP', 'DN'];
 export const DEFAULT_NUMBER_SETTINGS = { format: 'branded', brandPrefix: '', separator: '/', showFinYear: true, startNumber: 1, padDigits: 4 };
 // Who a series belongs to: the GSTIN, else the business name (as belongsToProfile matches).
 export const businessKeyOf = (profile) => {
@@ -2373,6 +2651,20 @@ export const formatDocNumber = ({ settings, typePrefix, next, explicitPrefix = f
   return s.showFinYear && fy ? `${pfx}${sep}${fy}${sep}${padded}` : `${pfx}${sep}${padded}`;
 };
 
+// v1.10.84 (#145) - the counter value a hand-typed number stands for, when it
+// is written exactly as the series writes its numbers (same prefix, year,
+// separator; any zero padding); otherwise null. `format` is the series'
+// value -> number function.
+export const seriesNumberOf = (typed, format) => {
+  const t = String(typed || '').trim();
+  const m = t.match(/(\d+)$/);
+  const n = m ? Number(m[1]) : 0;
+  if (!(n >= 1) || n > MAX_START_NUMBER) return null;
+  const w = String(format(n));
+  const wm = w.match(/(\d+)$/);
+  return wm && Number(wm[1]) === n && w.slice(0, -wm[1].length) === t.slice(0, -m[1].length) ? n : null;
+};
+
 // GST (CGST Rule 46 / 53): an invoice, bill of supply or credit note number is
 // at most 16 characters of letters, digits, "-" and "/"; GSTR-1 refuses any
 // other. Why this number format breaks that, or '' when it does not.
@@ -2398,10 +2690,22 @@ export const numberFormatProblem = (settings, { nextInvoice = 1, own = false, cu
 };
 // Why a business's own prefix cannot be used, or '' when it can. Its numbers
 // must never look like another series' numbers.
+// v1.10.85 - SO (sales orders) and DN (debit notes) became document prefixes
+// in 1.10.85. A business that already numbered with one of them keeps it (its
+// settings save as before; prefixClashWarning says what to watch for).
+export const NEW_TYPE_PREFIXES = ['SO', 'DN'];
+const savedOwnPrefix = (seriesMap, businessKey) => String(seriesMap?.[businessKey]?.brandPrefix || '').trim().toUpperCase();
+export const prefixClashWarning = (prefix) => {
+  const p = String(prefix || '').trim().toUpperCase();
+  if (p === 'SO') return 'SO is also the prefix of Sales Orders: a sales order could get a number one of these invoices already has (the app then takes the next available number). Choose another prefix to keep them apart.';
+  if (p === 'DN') return 'DN is also the prefix of debit notes (purchase returns): a debit note can carry the same number as one of these invoices. Choose another prefix to keep them apart.';
+  return '';
+};
 export const ownPrefixProblem = (prefix, { shared, seriesMap, businessKey, customPrefixes } = {}) => {
   const p = String(prefix || '').trim().toUpperCase();
   if (!p) return 'A business with its own numbering needs its own prefix, such as its initials.';
-  if (DOC_TYPE_PREFIXES.includes(p)) return `${p} is used for every business by default. Choose another prefix.`;
+  const keptFromBefore = NEW_TYPE_PREFIXES.includes(p) && savedOwnPrefix(seriesMap, businessKey) === p;
+  if (DOC_TYPE_PREFIXES.includes(p) && !keptFromBefore) return `${p} is used for every business by default. Choose another prefix.`;
   if (p === String(shared?.brandPrefix || '').trim().toUpperCase()) return `${p} is the shared numbering's prefix. Choose another.`;
   const takenBy = Object.entries(seriesMap || {}).find(([k, v]) => k !== businessKey && String(v?.brandPrefix || '').trim().toUpperCase() === p);
   if (takenBy) return `Another business already numbers with ${p}. Choose another.`;

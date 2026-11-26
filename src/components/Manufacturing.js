@@ -1,3 +1,4 @@
+import { h, Fragment } from '../vanilla/dom.js';
 // v1.10.83 (#115) - simple manufacturing on the Products screen, shown only
 // when Settings -> Features -> "Manufacturing (bill of materials)" is on:
 //   BomEditor      - "Made here" + raw materials list inside the product form
@@ -6,7 +7,7 @@
 //   ProductionList - this business's production entries: view, delete
 // The arithmetic is in utils/manufacturing.js (unit-tested); the server moves
 // the stock in the same request that saves or deletes an entry.
-import { useEffect, useState, h, Fragment } from '../vanilla/dom.js';
+import { useEffect, useState } from '../vanilla/dom.js';
 import { Plus, Trash2, X, Save, Eye, Factory } from '../vanilla/icons.js';
 import { getAllProductions, saveProduction, deleteProduction, getProfile } from '../store.js';
 import { formatCurrency, formatDateGST, localToday, belongsToProfile, isServiceProduct } from '../utils.js';

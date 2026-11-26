@@ -27,7 +27,7 @@ export const billRate = (b, base = 'INR') => {
 // Amounts on an invoice's totals (the rest are flags, percentages and text).
 const TOTAL_KEYS = ['subtotal', 'totalDiscount', 'taxableAmount', 'cgst', 'sgst', 'utgst', 'igst', 'cess',
   'tcsAmount', 'tdsAmount', 'roundOff', 'invoiceDiscountAmount', 'total', 'netReceivable', 'totalTaxAmount',
-  'rcmTaxCgst', 'rcmTaxSgst', 'rcmTaxUtgst', 'rcmTaxIgst', 'rcmTaxTotal'];
+  'rcmTaxCgst', 'rcmTaxSgst', 'rcmTaxUtgst', 'rcmTaxIgst', 'rcmTaxTotal', 'billDiscountBeforeGst'];
 const LINE_KEYS = ['rate', 'disc', 'gross', 'afterDisc', 'taxable', 'tax', 'cess'];
 
 const scaleKeys = (obj, keys, rate, round = r2) => {
@@ -54,6 +54,8 @@ export const billInInr = (bill, base = 'INR') => {
     ...it,
     rate: (Number(it.rate) || 0) * rate,
     ...(it.discountType === 'percent' ? {} : { discount: (Number(it.discount) || 0) * rate }),
+    // v1.10.85 (#190) - the line's part of a before-GST bill discount.
+    ...(Number(it.billDiscShare) > 0 ? { billDiscShare: Number(it.billDiscShare) * rate } : {}),
   }));
   return {
     ...bill,
@@ -79,6 +81,15 @@ export const billsInInr = (bills, base = 'INR') => (bills || []).reduce((acc, b)
 export const isForeignClient = (client, profile) => {
   const country = String(client?.country || '').trim();
   return !!country && country !== (profile?.country || 'India');
+};
+
+// ERR-069 - billing in a foreign currency while the client is saved in India
+// (and is not an SEZ): the invoice is domestic, with no LUT, whatever the
+// currency. The invoice screen warns and offers to set the client's country.
+// An Indian client can pay in dollars, so the country is never guessed.
+export const currencyCountryMismatch = ({ currency, client, profile }) => {
+  const base = baseCurrencyOf(profile);
+  return base === 'INR' && (currency || base) !== base && !isForeignClient(client, profile) && !client?.isSEZ;
 };
 
 // The currency a new invoice for this client starts in: the client's saved

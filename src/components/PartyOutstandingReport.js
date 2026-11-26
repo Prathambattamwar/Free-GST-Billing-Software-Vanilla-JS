@@ -1,10 +1,12 @@
+import { h, Fragment } from '../vanilla/dom.js';
 // v1.10.75 - Party outstanding in Tally's layout: parties down the side,
 // months across, totals on the right and at the bottom. Calculation lives in
 // utils/partyOutstanding.js (unit-tested); this file only shows and exports it.
-import { useState, useEffect, h, Fragment } from '../vanilla/dom.js';
+import { useState, useEffect } from '../vanilla/dom.js';
 import { Wallet } from '../vanilla/icons.js';
 import { getFinancialYearStart, belongsToProfile } from '../utils.js';
-import { getAllPurchases, getProfile } from '../store.js';
+import { getAllPurchases, getProfile, getAllDebitNotes } from '../store.js';
+import { withReturns } from '../utils/debitNotes.js';
 import { periodMonths, partyOutstanding, supplierOutstanding, billCurrency } from '../utils/partyOutstanding.js';
 import TableExport from './TableExport.js';
 import HelpButton from './HelpButton.js';
@@ -22,8 +24,9 @@ export default function PartyOutstandingReport({ bills, businessName }) {
     useEffect(() => {
         if (side !== 'suppliers' || purchases)
             return;
-        Promise.all([getAllPurchases(), getProfile().catch(() => null)])
-            .then(([rows, prof]) => setPurchases((rows || []).filter((r) => belongsToProfile(r, prof))))
+        // v1.10.85 (#168) - goods returned on debit notes are not owed.
+        Promise.all([getAllPurchases(), getProfile().catch(() => null), getAllDebitNotes().catch(() => [])])
+            .then(([rows, prof, dns]) => setPurchases(withReturns((rows || []).filter((r) => belongsToProfile(r, prof)), (dns || []).filter((r) => belongsToProfile(r, prof)))))
             .catch(() => setPurchases([]));
     }, [side, purchases]);
     const suppliers = side === 'suppliers';

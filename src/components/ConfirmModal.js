@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useRef, h, Fragment } from '../vanilla/dom.js';
+import { h, Fragment } from '../vanilla/dom.js';
+import { useState, useEffect, useCallback, useRef } from '../vanilla/dom.js';
 import { AlertTriangle, Trash2, Info } from '../vanilla/icons.js';
 // v1.10.34 — In-app replacement for `window.confirm()` and `window.prompt()`.
 // The native dialogs look like OS chrome (title bar with the URL, generic
@@ -87,7 +88,7 @@ export default function ConfirmModalContainer() {
         const t = setTimeout(() => {
             if (modal.kind === 'prompt' && inputRef.current) {
                 inputRef.current.focus();
-                inputRef.current.select();
+                inputRef.current.select?.(); // a <select> (a choice) has no select()
             }
             else {
                 // Confirm modal — focus the primary button.
@@ -114,7 +115,7 @@ export default function ConfirmModalContainer() {
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-        // eslint-disable-next-line vanilla-runtime/exhaustive-deps
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [modal]);
     const cancel = useCallback(() => {
         if (!modal)
@@ -151,7 +152,16 @@ export default function ConfirmModalContainer() {
                 h("div", { style: { flex: 1, minWidth: 0 } },
                     h("h3", { id: "confirm-modal-title", style: { margin: 0, fontSize: '1.05rem', lineHeight: 1.35 } }, modal.title),
                     modal.message && (h("p", { style: { margin: '0.4rem 0 0', fontSize: '0.87rem', color: 'var(--text-muted)', lineHeight: 1.5, whiteSpace: 'pre-wrap' } }, modal.message)),
-                    modal.kind === 'prompt' && (h("form", { onSubmit: (e) => { e.preventDefault(); confirm(); } },
+                    modal.kind === 'prompt' && Array.isArray(modal.options) && (
+                    // v1.10.85 - a prompt with options is a choice: [[value, label], ...].
+                    h("form", { onSubmit: (e) => { e.preventDefault(); confirm(); } },
+                        h("select", { ref: inputRef, className: "form-input", value: value, "aria-label": modal.title, onChange: (e) => setValue(e.target.value), style: { marginTop: '0.9rem', width: '100%' }, 
+                            // Chromium does not submit a form on Enter from a select.
+                            onKeyDown: (e) => { if (e.key === 'Enter') {
+                                e.preventDefault();
+                                confirm();
+                            } } }, modal.options.map(([v, label]) => h("option", { key: v, value: v }, label))))),
+                    modal.kind === 'prompt' && !Array.isArray(modal.options) && (h("form", { onSubmit: (e) => { e.preventDefault(); confirm(); } },
                         h("input", { ref: inputRef, type: modal.inputType || 'text', className: "form-input", value: value, onChange: (e) => setValue(e.target.value), placeholder: modal.placeholder || '', style: { marginTop: '0.9rem', width: '100%' } }))))),
             h("div", { style: { display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1.25rem' } },
                 h("button", { type: "button", className: "btn btn-secondary", onClick: cancel, style: { fontSize: '0.85rem', padding: '0.5rem 1rem' } }, secondaryLabel),

@@ -15,6 +15,7 @@ import { confirmAction } from './ConfirmModal.js';
 import PrintSettings from './PrintSettings.js';
 import HelpButton from './HelpButton.js';
 import AppLockSettings from './AppLockSettings.js';
+import BooksLockSettings from './BooksLockSettings.js';
 import PrivacyInternet from './PrivacyInternet.js';
 import CostCentreSettings from './CostCentreSettings.js';
 import { BusinessTypePanel, FeaturesPanel, useFeatureDraft } from './FeatureSettings.js';
@@ -39,6 +40,7 @@ const JUMP_NAV_SECTIONS = [
     ['section-lock', 'App lock'],
     ['section-privacy', 'Privacy & internet'],
     ['section-backups', 'Backups'],
+    ['section-books', 'Close books & edit history'],
     ['section-cloud', 'Local storage'],
     ['section-data', 'Import/Export'],
     ['section-updates', 'Updates'],
@@ -905,6 +907,8 @@ export default function SettingsView({ onSaved }) {
                 h(PrintSettings, null)),
             h("div", { id: "section-backups", style: { order: 8 } },
                 h(BackupAndTrashPanel, null)),
+            h("div", { id: "section-books", className: "glass-panel p-6 mb-6", style: { order: 9 } },
+                h(BooksLockSettings, null)),
             h(BusinessTypePanel, { features: features }),
             h(FeaturesPanel, { features: features, regionMode: regionMode }),
             isModuleEnabled('costCentres', features.saved.modules) && (h("div", { id: "section-costcentres", style: { order: 5 } },
@@ -1343,50 +1347,8 @@ export default function SettingsView({ onSaved }) {
                                 h(Trash2, { size: 14 })))),
                     h("p", { className: "template-card-preview" }, tpl.content))))))),
             h("div", { id: "section-updates", className: "glass-panel p-6 mb-6", style: { order: 11 } },
-                h("h3", { className: "section-title" },
-                    "App Updates ",
-                    h(HelpButton, { title: "App Updates", doc: "settings#updates", size: 16, style: { marginLeft: 6 } })),
-                h("p", { className: "page-subtitle mb-4" }, "Check if a newer version is available."),
-                h("div", { className: "flex gap-4 items-center" },
-                    h("button", { type: "button", className: "btn btn-secondary", disabled: checkingUpdate, onClick: async () => {
-                            setCheckingUpdate(true);
-                            try {
-                                const res = await fetch('/api/check-update?now=1');
-                                const data = await res.json();
-                                setUpdateInfo(data);
-                                if (data.updateAvailable) {
-                                    toast(`Update available: v${data.latest}`, 'info');
-                                }
-                                else if (data.error) {
-                                    toast('Could not check for updates. Check internet connection.', 'warning');
-                                }
-                                else {
-                                    toast('You are on the latest version!', 'success');
-                                }
-                            }
-                            catch {
-                                toast('Could not check for updates.', 'error');
-                            }
-                            setCheckingUpdate(false);
-                        } },
-                        h(RefreshCw, { size: 18, className: checkingUpdate ? 'spin' : '' }),
-                        " ",
-                        checkingUpdate ? 'Checking...' : 'Check for Updates'),
-                    updateInfo && (h("span", { style: { fontSize: '0.85rem', color: 'var(--text-muted)' } },
-                        "Current: v",
-                        updateInfo.current,
-                        updateInfo.latest ? ` | Latest: v${updateInfo.latest}` : ''))),
-                updateInfo?.updateAvailable && (h("div", { className: "update-available-box" },
-                    h("p", null,
-                        h("strong", null,
-                            "New version v",
-                            updateInfo.latest,
-                            " is available!")),
-                    h("p", null, "The app is delivered as a static website. Open the release details here; the website owner publishes updates to the hosted app. Your local browser data is separate and is not affected."),
-                    h("button", { type: "button", className: "btn btn-primary", disabled: updatingNow, onClick: handleSettingsUpdateNow, style: { marginTop: '0.5rem', display: 'inline-flex' } },
-                        h(Download, { size: 18 }),
-                        " ",
-                        updatingNow ? 'Opening…' : 'View Release')))),
+                h("h3", { className: "section-title" }, "App Updates"),
+                h("p", { className: "page-subtitle mb-4" }, "This is a static browser app. Updates are published with the website files; refresh the page after the site owner deploys a new version. Your IndexedDB business records remain in this browser profile.")),
             h("div", { id: "section-data", className: "glass-panel p-6 mb-6", style: { order: 10 } },
                 h("h3", { className: "section-title" },
                     "Data Management ",

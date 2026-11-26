@@ -9,7 +9,7 @@
 // Every amount comes from the invoice's own saved totals and the same per-line
 // maths as the printed invoice (computeInvoiceTotals), so the JSON can never
 // disagree with the paper copy. Pure functions only, so
-// scripts/einvoice-test.mjs can test them without loading the app UI.
+// scripts/einvoice-test.mjs can test them without the React app.
 import {
   computeInvoiceTotals, INVOICE_TYPES, getStateCode, getUnitUQC, gstinChecksumOk,
   GST_PORTAL_RATES, parseLocalDate, localToday, isCancelledBill,
@@ -64,10 +64,10 @@ const addrLines = (s) => {
 const billType = (bill) => bill?.invoiceType || bill?.data?.invoiceType || 'tax-invoice';
 const sellerGstinOf = (bill) => upper(bill?.data?.profile?.gstin);
 // Exports and zero-rated supplies under a Letter of Undertaking: the same rules
-// the GSTR-1 export uses (GSTReturns.js), so both agree on every invoice.
+// the GSTR-1 export uses (GSTReturns.jsx), so both agree on every invoice.
 // An invoice whose terms say LUT but which charges GST is refused below (its
 // printed terms say "without payment"); the GSTR-1 file reports such an invoice
-// as with payment, since the tax was charged (GSTReturns.js billIsLut).
+// as with payment, since the tax was charged (GSTReturns.jsx billIsLut).
 const isLut = (data) => !!data?.invoiceOptions?.isLUT || /\bLUT\b|Letter of Undertaking/i.test(data?.customTerms || '');
 const isExport = (data) => {
   const country = clean(data?.client?.country);

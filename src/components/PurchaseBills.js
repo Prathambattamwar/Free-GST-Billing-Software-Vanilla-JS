@@ -1,12 +1,15 @@
-import { useState, useEffect, useMemo, useRef, lazy, Suspense, h, Fragment } from '../vanilla/dom.js';
-import { ShoppingCart, Plus, Edit3, Trash2, Search, X, Save, Download, Wand2, Eye, ClipboardList, IndianRupee } from '../vanilla/icons.js';
+import { h, Fragment } from '../vanilla/dom.js';
+import { useState, useEffect, useMemo, useRef, lazy, Suspense } from '../vanilla/dom.js';
+import { ShoppingCart, Plus, Edit3, Trash2, Search, X, Save, Download, Wand2, Eye, ClipboardList, IndianRupee, RotateCcw, FileText } from '../vanilla/icons.js';
 import HelpButton from './HelpButton.js';
-import { getAllPurchases, savePurchase, deletePurchase, getAllProducts, saveProduct, getProfile, getEnabledModules, getAllPurchaseOrders, savePurchaseOrder, getNextPoNumber } from '../store.js';
-import { formatCurrency, getFYOptions, belongsToProfile, isUnassignedToBusiness, isInterstateSupply, localToday, roundQty, splitPurchaseTax, isModuleEnabled, businessKeyOf, getAllUnits, TDS_SECTIONS } from '../utils.js';
+import PageHeader, { BarButton } from './PageHeader.js';
+import { getAllPurchases, savePurchase, deletePurchase, getAllProducts, saveProduct, getProfile, getEnabledModules, getAllPurchaseOrders, savePurchaseOrder, getNextPoNumber, getAllDebitNotes, saveDebitNote } from '../store.js';
+import { formatCurrency, getFYOptions, belongsToProfile, isUnassignedToBusiness, isInterstateSupply, localToday, roundQty, splitPurchaseTax, isModuleEnabled, businessKeyOf, getAllUnits, TDS_SECTIONS_2025, tdsSectionsFor, movedSection, sectionOptionLabel, sectionShort } from '../utils.js';
 import { purchaseTdsAmount } from '../utils/tdsTcs.js';
-import { purchaseTotals as calcPurchaseTotal, billFormFromPo } from '../utils/purchaseOrders.js';
+import { purchaseTotals as calcPurchaseTotal, billFormFromPo, purchaseLineTax, lineDiscountFields, purchaseHasSerial, withBillDiscount } from '../utils/purchaseOrders.js';
 import PurchaseOrders from './PurchaseOrders.js';
 import TableExport from './TableExport.js';
+import ActionsMenu from './ActionsMenu.js';
 import BulkCsvImport from './BulkCsvImport.js';
 import UnassignedBanner from './UnassignedBanner.js';
 import { getPrintSettings } from '../utils/printSettings.js';
@@ -15,8 +18,41 @@ import { confirmAction, promptAction } from './ConfirmModal.js';
 import { useCostCentres } from './useCostCentres.js';
 import { CostCentreSelect, CostCentreFilter } from './CostCentrePicker.js';
 import { matchesCentre, centreFields } from '../utils/costCentres.js';
-import { PURCHASE_STATUS_LABEL, OVERPAY_SLACK, purchaseStatus, purchaseBalance, purchasePaid, purchaseOwed, hasPurchasePayments, withPurchasePayments, markPurchasePaid, markPurchaseUnpaid, purchasePaymentModeName } from '../utils/purchasePayments.js';
+import { PURCHASE_STATUS_LABEL, OVERPAY_SLACK, purchaseStatus, purchaseBalance, purchasePaid, purchaseOwed, purchaseRcmTax, hasPurchasePayments, withPurchasePayments, markPurchasePaid, markPurchaseUnpaid, purchasePaymentModeName, purchasePaymentDue } from '../utils/purchasePayments.js';
 import PurchasePaymentModal from './PurchasePaymentModal.js';
+import DebitNotesList, { ReturnToSupplierModal } from './DebitNotes.js';
+import { askPaidMode } from './askPaidMode.js';
+import { withReturns, returnableLines, debitNoteTotals, editProblem, notesToRestamp } from '../utils/debitNotes.js';
+// v1.10.85 (#137, #158) - barcodes: labels for a bill, and a scanned code in
+// the item name box. Kept to these imports, one state, one button, one modal
+// and one onKeyDown, marked "#137 barcodes" below.
+import { Barcode } from '../vanilla/icons.js';
+import BarcodeLabels from './BarcodeLabels.js';
+import { findByBarcode } from '../utils/barcode.js';
+// v1.10.85 (#148) - alternate units on a purchase line, and the low-stock PO
+// handed over from Products or the Dashboard.
+import { lineFactor, altLineFields } from '../utils.js';
+import { hasAltUnit, lineInUnit } from '../utils/stock.js';
+import { takeReorderDraft } from '../utils/reorderDraft.js';
+// v1.10.86 - sort by a column header, remembered in this browser.
+import { useListSort, sortRows } from '../utils/listPrefs.js';
+import SortTh from './SortTh.js';
+const SORT_GETTERS = {
+    date: (p) => p.date,
+    supplier: (p) => p.supplierName,
+    invoice: (p) => p.invoiceNumber,
+    taxable: (p) => calcPurchaseTotal(p.items, !!p.applyRoundOff).taxable,
+    tax: (p) => calcPurchaseTotal(p.items, !!p.applyRoundOff).tax,
+    total: (p) => calcPurchaseTotal(p.items, !!p.applyRoundOff).finalTotal,
+    balance: (p) => purchaseBalance(p),
+    status: (p) => purchaseStatus(p),
+};
+// v1.10.86 - (#148, #194) a supplier's statement, from the Purchase Records header.
+import SupplierStatement from './SupplierStatement.js';
+import ComboInput from './ComboInput.js';
+// v1.10.86 - (#175) a bill handed over from GST Returns -> GSTR-2B ("2B only").
+import { takeTwoBDraft, markBackToTwoB } from '../utils/gstr2bBill.js';
+import { productKey, findLineProduct, purchaseStockPlan, purchaseStockReversal, lineProductHint } from '../utils/purchaseStock.js';
 // v1.10.31 — UI-C3: Same accent-color helper as ClientsView so the
 // Purchase Bill PDF header rule + totals line pick up the user's brand.
 function getAccentRGB() {
@@ -52,6 +88,8 @@ const PAYMENT_STATUS_COLORS = {
 // _auto marks the 18% default as not typed by the user (see isOursToReplace),
 // so picking a 12% product sets 12%. Before, the default was never replaced
 // and every product picked on a new row came in at 18%.
+// v1.10.86 (#199) - a new product's id, made here so the bill's line can keep it.
+const newProductId = () => 'prod_' + Date.now() + Math.random().toString(16).slice(2, 8);
 const emptyItem = { name: '', hsn: '', quantity: 1, unit: '', rate: 0, taxPercent: 18, cessPercent: 0, _auto: { taxPercent: 18 } };
 const emptyForm = {
     date: '', // v1.10.74 - set to localToday() when the form opens
@@ -64,6 +102,7 @@ const emptyForm = {
     items: [{ ...emptyItem }],
     paymentStatus: 'Unpaid',
     interstate: false, // true ⇒ supplier charged IGST; false ⇒ CGST + SGST. Routes ITC correctly in GSTR-3B.
+    reverseCharge: false, // v1.10.86 - you pay the GST yourself (GSTR-3B 3.1(d)); off for every older bill
     applyRoundOff: false, // off by default — purchase bill totals are usually pre-rounded by the supplier. Users with suppliers that don't pre-round can opt in here.
     note: '',
     // v1.10.83 (#112) - the same form edits purchase orders (kind 'po'): it
@@ -82,10 +121,30 @@ const emptyForm = {
     tdsSection: '194C',
     tdsRate: 1,
     tdsAmountManual: '',
+    // v1.10.86 - a discount on the whole bill, before GST (see withBillDiscount).
+    billDiscountValue: '',
+    billDiscountType: 'fixed',
 };
+// v1.10.86 - the bill discount's line on the view and the PDF.
+const billDiscLabel = (p) => `Less: discount on bill${p?.billDiscountType === 'percent' && p?.billDiscountValue ? ` (${p.billDiscountValue}%)` : ''}`;
 // v1.10.83 (#112) - calcItemTax / calcPurchaseTotal moved to
 // utils/purchaseOrders.js unchanged, shared with purchase orders.
 // v1.10.6 — audit L4: local copy removed, imported from utils above.
+// v1.10.85 (#171, #160) - the small print under a line's name: its discount
+// and its serial numbers / IMEI.
+const lineNote = (it) => [
+    (Number(it?.discount) || 0) > 0 ? `Discount ${it.discountType === 'percent' ? `${it.discount}%` : formatCurrency(it.discount)}` : '',
+    String(it?.serialNo || '').trim() ? `S/N: ${String(it.serialNo).trim()}` : '',
+].filter(Boolean).join(' · ');
+// v1.10.85 - the Discount and Serial No. columns of the form: shown when
+// switched on (remembered in this browser) or when a line already has one.
+const COLS_KEY = 'fgsb_purchaseLineCols';
+const savedCols = () => { try {
+    return JSON.parse(localStorage.getItem(COLS_KEY) || '{}') || {};
+}
+catch {
+    return {};
+} };
 // The TDS fields stored on a purchase bill (cleared when TDS is off).
 const purchaseTdsFields = (form, taxable) => {
     if (!form.tdsOn)
@@ -98,7 +157,7 @@ const purchaseTdsFields = (form, taxable) => {
         tdsManual: manual !== '',
     };
 };
-export default function PurchaseBills() {
+export default function PurchaseBills({ onOpenGstReturns } = {}) {
     const [purchases, setPurchases] = useState([]);
     // v1.10.65 (#58 item 3) — the business these records belong to.
     const [ownerProfile, setOwnerProfile] = useState(null);
@@ -112,12 +171,26 @@ export default function PurchaseBills() {
     const [showForm, setShowForm] = useState(false);
     const [editingId, setEditingId] = useState(null);
     const [form, setForm] = useState({ ...emptyForm, items: [{ ...emptyItem }] });
+    // v1.10.85 (#171, #160) - optional Discount and Serial No. columns.
+    const [lineCols, setLineCols] = useState(savedCols);
+    const toggleLineCol = (key) => setLineCols(prev => {
+        const next = { ...prev, [key]: !prev[key] };
+        try {
+            localStorage.setItem(COLS_KEY, JSON.stringify(next));
+        }
+        catch { /* private mode */ }
+        return next;
+    });
+    const showDiscountCol = !!lineCols.discount || form.items.some(i => (Number(i.discount) || 0) > 0);
+    const showSerialCol = !!lineCols.serial || form.items.some(i => String(i.serialNo || '').trim());
     // v1.10.22 — OCR modal state.
     const [showOCR, setShowOCR] = useState(false);
     // v1.10.30 — reported: "add a view only option modal type so can user
     // check the price without downloading the file every time". Holds the
     // purchase being previewed; modal has a Download PDF button inside.
     const [viewPurchase, setViewPurchase] = useState(null);
+    // #137 barcodes - the bill whose labels are being printed.
+    const [labelBill, setLabelBill] = useState(null);
     // v1.10.83 (#123) - the bill whose supplier payments are open, and the
     // status filter ('' all, 'due' unpaid or partly paid, 'Paid').
     const [payPurchase, setPayPurchase] = useState(null);
@@ -126,6 +199,10 @@ export default function PurchaseBills() {
     const [poEnabled] = useState(() => isModuleEnabled('purchaseOrders', getEnabledModules()));
     const [tab, setTab] = useState('bills');
     const [orders, setOrders] = useState([]);
+    // v1.10.85 (#168) - purchase returns, and the bill being returned.
+    const [debitNotes, setDebitNotes] = useState([]);
+    const [returnBill, setReturnBill] = useState(null);
+    const [statementFor, setStatementFor] = useState(null); // v1.10.86 - (#194) '' or a supplier name: statement open
     // The number shown on a new PO; only that one is swapped for a reserved
     // number on save, so a number the user typed is kept.
     const previewedPoRef = useRef('');
@@ -183,25 +260,42 @@ export default function PurchaseBills() {
     // record belonged to, so guessing would file it into the wrong books.
     const unassignedPurchases = purchases.filter(isUnassignedToBusiness);
     const assignUnassignedPurchases = async () => {
-        await Promise.all(unassignedPurchases.map(r => savePurchase({
+        const assigned = unassignedPurchases.map(r => ({
             ...r,
             ownerGstin: ownerProfile?.gstin || '',
             ownerName: ownerProfile?.businessName || '',
-        })));
+        }));
+        await Promise.all(assigned.map(r => savePurchase(r)));
+        await restampDebitNotes(assigned);
         loadPurchases();
+    };
+    // v1.10.85 (#168) - a bill's debit notes follow it to its business, so they
+    // never show under every company. Loads every note: one under another
+    // business (or none) is exactly the one to fix.
+    const restampDebitNotes = async (bills) => {
+        try {
+            const all = await getAllDebitNotes();
+            await Promise.all(notesToRestamp(bills, all).map(dn => saveDebitNote(dn)));
+        }
+        catch { /* shown again next time; the bills are saved */ }
     };
     const loadPurchases = async () => {
         try {
-            const [rows, prof, pos] = await Promise.all([
+            const [rows, prof, pos, dns] = await Promise.all([
                 getAllPurchases(),
                 getProfile().catch(() => null),
                 poEnabled ? getAllPurchaseOrders().catch(() => []) : [],
+                getAllDebitNotes().catch(() => []),
             ]);
             setOwnerProfile(prof);
             // v1.10.65 (#58 item 3) — show only this business's records. Anything
             // saved before businesses were separated has no owner recorded and is
             // always shown, so nothing disappears from an existing ledger.
-            setPurchases((rows || []).filter(r => belongsToProfile(r, prof)));
+            // v1.10.85 (#168) - each bill knows what its debit notes took off it
+            // (_returned), so its balance and status follow.
+            const mineDn = (dns || []).filter(r => belongsToProfile(r, prof));
+            setDebitNotes(mineDn);
+            setPurchases(withReturns((rows || []).filter(r => belongsToProfile(r, prof)), mineDn));
             setOrders((pos || []).filter(r => belongsToProfile(r, prof)));
         }
         catch {
@@ -235,9 +329,11 @@ export default function PurchaseBills() {
     const filtered = purchases.filter(p => {
         if (search.trim()) {
             const q = search.toLowerCase();
+            // v1.10.85 (#160) - also a serial number / IMEI on any line.
             if (!(p.supplierName || '').toLowerCase().includes(q) &&
                 !(p.invoiceNumber || '').toLowerCase().includes(q) &&
-                !(p.supplierGstin || '').toLowerCase().includes(q))
+                !(p.supplierGstin || '').toLowerCase().includes(q) &&
+                !purchaseHasSerial(p, q))
                 return false;
         }
         if (fyFilter) {
@@ -253,10 +349,17 @@ export default function PurchaseBills() {
             return false;
         return matchesCentre(p, centreFilter);
     });
+    const { sort, toggle: toggleSort } = useListSort('purchases', Object.keys(SORT_GETTERS));
+    const sortedPurchases = sortRows(filtered, sort, SORT_GETTERS);
     const totalStats = filtered.reduce((acc, p) => {
         const t = calcPurchaseTotal(p.items, !!p.applyRoundOff);
         return { taxable: acc.taxable + t.taxable, tax: acc.tax + t.tax, total: acc.total + t.finalTotal, owed: acc.owed + purchaseBalance(p) };
     }, { taxable: 0, tax: 0, total: 0, owed: 0 });
+    // v1.10.85 (#168) - returns against the bills shown come off the cards.
+    const shownIds = new Set(filtered.map(p => p.id));
+    const returnStats = debitNotes.filter(dn => !dn.cancelled && shownIds.has(dn.purchaseId)).map(debitNoteTotals)
+        .reduce((acc, t) => ({ total: acc.total + t.total, tax: acc.tax + t.tax }), { total: 0, tax: 0 });
+    const canReturn = (p) => returnableLines(p, debitNotes).some(l => l.left > 0);
     const openAdd = () => {
         setForm({ ...emptyForm, date: localToday(), items: [{ ...emptyItem }] });
         setEditingId(null);
@@ -272,6 +375,7 @@ export default function PurchaseBills() {
             items: purchase.items && purchase.items.length > 0 ? purchase.items.map(i => ({ ...i })) : [{ ...emptyItem }],
             paymentStatus: purchase.paymentStatus || 'Unpaid',
             interstate: !!purchase.interstate,
+            reverseCharge: !!purchase.reverseCharge, // v1.10.86
             // Detect round-off from older entries: if roundOff field exists and is
             // non-zero, treat applyRoundOff as on. Older entries without the field
             // just default to off — they won't suddenly change totals on re-save.
@@ -287,6 +391,8 @@ export default function PurchaseBills() {
             tdsSection: purchase.tdsSection || '194C',
             tdsRate: purchase.tdsRate ?? 1,
             tdsAmountManual: purchase.tdsManual ? String(purchase.tdsAmount) : '',
+            billDiscountValue: purchase.billDiscountValue || '',
+            billDiscountType: purchase.billDiscountType === 'percent' ? 'percent' : 'fixed',
         });
         setEditingId(purchase.id);
         setShowForm(true);
@@ -318,6 +424,40 @@ export default function PurchaseBills() {
         }
         catch { /* offline: the user can type a number */ }
     };
+    // v1.10.85 - "Make purchase order" for low stock: the lines handed over open
+    // in a new PO once the business is known (its PO number series).
+    const reorderRef = useRef(null);
+    useEffect(() => {
+        reorderRef.current = reorderRef.current || takeReorderDraft();
+    }, []);
+    // v1.10.86 - (#175) a 2B entry opens in a new bill once the business is
+    // known (the bill is stamped with it); the user checks it and saves.
+    const twoBRef = useRef(null);
+    useEffect(() => {
+        twoBRef.current = twoBRef.current || takeTwoBDraft();
+    }, []);
+    useEffect(() => {
+        if (!twoBRef.current || !ownerProfile)
+            return;
+        const draft = twoBRef.current;
+        twoBRef.current = null;
+        setTab('bills');
+        setForm({ ...emptyForm, ...draft, date: draft.date || localToday(), items: draft.items.map(i => ({ ...i })), from2b: true });
+        setEditingId(null);
+        setShowForm(true);
+    }, [ownerProfile]);
+    useEffect(() => {
+        if (!reorderRef.current || !ownerProfile)
+            return;
+        const items = reorderRef.current;
+        reorderRef.current = null;
+        if (poEnabled)
+            setTab('orders');
+        openNewPo({ items });
+        toast('Purchase order for the low-stock products: pick the supplier, check the quantities and save', 'info');
+        // Runs when the business has loaded; openNewPo reads it.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [ownerProfile]);
     const openEditPo = (po) => {
         setForm({
             ...emptyForm,
@@ -381,6 +521,8 @@ export default function PurchaseBills() {
             rate: parseFloat(i.rate) || 0,
             taxPercent: parseFloat(i.taxPercent) || 0,
             cessPercent: parseFloat(i.cessPercent) || 0,
+            ...lineDiscountFields(i), // v1.10.85 (#171)
+            ...altLineFields(i), // v1.10.85 (#148) - ordered in boxes: billed in boxes
         }));
         if (!items.length) {
             toast('Add at least one item with a quantity', 'warning');
@@ -468,7 +610,7 @@ export default function PurchaseBills() {
             y += 5;
             doc.text(`Date: ${purchase.date ? new Date(purchase.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '-'}`, marginL, y);
             y += 5;
-            doc.text(`Payment: ${PURCHASE_STATUS_LABEL[purchaseStatus(purchase)]}   ·   ${purchase.interstate ? 'Interstate (IGST)' : 'Intrastate (CGST+SGST)'}`, marginL, y);
+            doc.text(`Payment: ${PURCHASE_STATUS_LABEL[purchaseStatus(purchase)]}   ·   ${purchase.interstate ? 'Interstate (IGST)' : 'Intrastate (CGST+SGST)'}${purchase.reverseCharge ? '   ·   Reverse charge: Yes' : ''}`, marginL, y);
             y += 8;
             doc.setDrawColor(...getAccentRGB());
             doc.setLineWidth(0.5);
@@ -514,7 +656,8 @@ export default function PurchaseBills() {
                     doc.addPage();
                     y = 20;
                 }
-                const lineTotal = (Number(item.quantity) || 0) * (Number(item.rate) || 0);
+                // v1.10.85 (#171) - after its discount. v1.10.86 - before the bill discount (in the totals).
+                const lineTotal = purchaseLineTax({ ...item, quantity: Number(item.quantity) || 0, rate: Number(item.rate) || 0, billDiscShare: 0 }).amount;
                 const withTax = lineTotal * (1 + (Number(item.taxPercent) || 0) / 100);
                 // v1.10.30 — reported: "in purchase bill pdf long names got cut in
                 // pdf fix". Prior code used `.slice(0, 40)` which mid-word truncated
@@ -523,7 +666,8 @@ export default function PurchaseBills() {
                 // width). The row height grows to fit the wrapped text so nothing
                 // clips into the next line.
                 const nameCol = 70; // mm — width of description column
-                const nameLines = doc.splitTextToSize(String(item.name || '-'), nameCol);
+                // v1.10.85 (#171, #160) - its discount and serial numbers under the name.
+                const nameLines = [String(item.name || '-'), lineNote(item)].filter(Boolean).flatMap((s) => doc.splitTextToSize(s, nameCol));
                 const rowH = Math.max(6, nameLines.length * 4.5);
                 // Page break if this row won't fit.
                 if (y + rowH > 275) {
@@ -553,6 +697,14 @@ export default function PurchaseBills() {
             doc.setFontSize(9);
             doc.setFont('helvetica', 'normal');
             doc.setTextColor(80);
+            if (t.billDiscount > 0.005) {
+                doc.text('Value of goods', marginL + 100, y);
+                doc.text(fmt(t.taxable + t.billDiscount), marginR, y, { align: 'right' });
+                y += 5;
+                doc.text(billDiscLabel(purchase), marginL + 100, y);
+                doc.text('-' + fmt(t.billDiscount), marginR, y, { align: 'right' });
+                y += 5;
+            }
             doc.text('Taxable', marginL + 100, y);
             doc.text(fmt(t.taxable), marginR, y, { align: 'right' });
             y += 5;
@@ -591,16 +743,24 @@ export default function PurchaseBills() {
             doc.setTextColor(0);
             doc.text('TOTAL', marginL + 100, y);
             doc.text(fmt(t.finalTotal), marginR, y, { align: 'right' });
-            if ((Number(purchase.tdsAmount) || 0) > 0) {
+            if ((Number(purchase.tdsAmount) || 0) > 0 || purchase.reverseCharge) {
                 doc.setFont('helvetica', 'normal');
                 doc.setFontSize(9);
                 y += 6;
-                doc.text(`Less: TDS (${String(purchase.tdsSection || '').replace(/-(co|tech|pm)$/, '')})`, marginL + 100, y);
-                doc.text('-' + fmt(purchase.tdsAmount), marginR, y, { align: 'right' });
-                y += 5;
+                // v1.10.86 - reverse charge: the GST is paid to the government by you.
+                if (purchase.reverseCharge) {
+                    doc.text('Less: GST you pay (reverse charge)', marginL + 100, y);
+                    doc.text('-' + fmt(purchaseRcmTax(purchase)), marginR, y, { align: 'right' });
+                    y += 5;
+                }
+                if ((Number(purchase.tdsAmount) || 0) > 0) {
+                    doc.text(`Less: TDS (${sectionShort(purchase.tdsSection) || 'TDS'})`, marginL + 100, y);
+                    doc.text('-' + fmt(purchase.tdsAmount), marginR, y, { align: 'right' });
+                    y += 5;
+                }
                 doc.setFont('helvetica', 'bold');
                 doc.text('Paid to supplier', marginL + 100, y);
-                doc.text(fmt(t.finalTotal - purchase.tdsAmount), marginR, y, { align: 'right' });
+                doc.text(fmt(purchaseOwed(purchase)), marginR, y, { align: 'right' });
             }
             // v1.10.83 (#123) - payments made to the supplier, and what is left.
             const pays = purchase.payments || [];
@@ -633,7 +793,7 @@ export default function PurchaseBills() {
                     y += 5;
                 }
             }
-            if (pays.length || purchaseStatus(purchase) === 'Paid') {
+            if (pays.length || purchaseStatus(purchase) === 'Paid' || purchase._returned > 0) {
                 y += pays.length ? 1 : 8;
                 doc.setFontSize(9);
                 doc.setFont('helvetica', 'normal');
@@ -641,6 +801,11 @@ export default function PurchaseBills() {
                 if (pays.length) {
                     doc.text('Paid', marginL + 100, y);
                     doc.text(fmt(purchasePaid(purchase)), marginR, y, { align: 'right' });
+                    y += 5;
+                }
+                if (purchase._returned > 0) {
+                    doc.text('Returned (debit notes)', marginL + 100, y);
+                    doc.text('-' + fmt(purchase._returned), marginR, y, { align: 'right' });
                     y += 5;
                 }
                 doc.setFont('helvetica', 'bold');
@@ -666,6 +831,7 @@ export default function PurchaseBills() {
     const handleSave = async () => {
         if (form.kind === 'po')
             return handleSavePo();
+        const from2b = !!form.from2b && !editingId; // v1.10.86 - (#175) back to GSTR-2B once saved
         if (!form.supplierName.trim()) {
             toast('Supplier name is required', 'warning');
             return;
@@ -686,8 +852,46 @@ export default function PurchaseBills() {
             toast('Add at least one item with a quantity and rate', 'warning');
             return;
         }
+        // v1.10.86 - the discount on the whole bill: 0 or more, at most 100% or
+        // what the items come to.
+        const billDisc = parseFloat(form.billDiscountValue) || 0;
+        const billDiscType = form.billDiscountType === 'percent' ? 'percent' : 'fixed';
+        const discProblem = billDisc < 0 ? 'The discount on the whole bill cannot be less than 0'
+            : billDiscType === 'percent' && billDisc > 100 ? 'The discount on the whole bill cannot be more than 100%'
+                : billDiscType === 'fixed' && billDisc > calcPurchaseTotal(withBillDiscount(form.items, 0)).taxable + 0.005 ? 'The discount on the whole bill is more than the items come to'
+                    : '';
+        if (discProblem) {
+            toast(discProblem, 'warning');
+            return;
+        }
+        // v1.10.85 (#168) - goods already sent back on a debit note: their line
+        // cannot drop below what went back, nor be renamed or removed.
+        // v1.10.86 - nor can the bill discount change.
+        const returnsProblem = editingId ? editProblem(purchases.find(p => p.id === editingId), form.items, debitNotes, { value: billDisc, type: billDiscType }) : '';
+        if (returnsProblem) {
+            toast(returnsProblem, 'warning', 10000);
+            return;
+        }
         try {
-            const totals = calcPurchaseTotal(form.items, form.applyRoundOff);
+            // v1.10.86 - each line keeps its part of the bill discount (billDiscShare).
+            const items = withBillDiscount(form.items.map(i => ({
+                name: (i.name || '').trim(),
+                // v1.10.86 (#199) - the product this line is (see utils/purchaseStock.js).
+                ...(i.productId ? { productId: i.productId } : {}),
+                hsn: (i.hsn || '').trim(),
+                quantity: parseFloat(i.quantity) || 0,
+                rate: parseFloat(i.rate) || 0,
+                taxPercent: parseFloat(i.taxPercent) || 0,
+                cessPercent: parseFloat(i.cessPercent) || 0,
+                // v1.10.83 (#112) - only lines from a purchase order carry a unit.
+                ...(String(i.unit || '').trim() ? { unit: String(i.unit).trim() } : {}),
+                // v1.10.85 (#171, #160) - a discount and serial numbers only when given.
+                ...lineDiscountFields(i),
+                ...(String(i.serialNo || '').trim() ? { serialNo: String(i.serialNo).trim() } : {}),
+                // v1.10.85 (#148) - bought in the product's second unit (Box = 12).
+                ...altLineFields(i),
+            })), billDisc, billDiscType);
+            const totals = calcPurchaseTotal(items, form.applyRoundOff);
             const before = editingId ? purchases.find(p => p.id === editingId) : null;
             const purchaseFields = {
                 ...(editingId ? { id: editingId } : {}),
@@ -700,16 +904,11 @@ export default function PurchaseBills() {
                 // directly above, which is who sold it.
                 ownerGstin: ownerProfile?.gstin || '',
                 ownerName: ownerProfile?.businessName || '',
-                items: form.items.map(i => ({
-                    name: (i.name || '').trim(),
-                    hsn: (i.hsn || '').trim(),
-                    quantity: parseFloat(i.quantity) || 0,
-                    rate: parseFloat(i.rate) || 0,
-                    taxPercent: parseFloat(i.taxPercent) || 0,
-                    cessPercent: parseFloat(i.cessPercent) || 0,
-                    // v1.10.83 (#112) - only lines from a purchase order carry a unit.
-                    ...(String(i.unit || '').trim() ? { unit: String(i.unit).trim() } : {}),
-                })),
+                items,
+                ...(billDisc > 0 ? { billDiscountValue: billDisc, billDiscountType: billDiscType } : {}),
+                // v1.10.85 (#168) - what its debit notes took off (never saved), so
+                // Paid below records the balance less the returns.
+                ...(before?._returned ? { _returned: before._returned } : {}),
                 // The purchase order this bill was made from; its status follows the
                 // quantities on the bills linked to it.
                 ...(form.fromPo ? { fromPo: form.fromPo } : {}),
@@ -723,6 +922,8 @@ export default function PurchaseBills() {
                 roundOff: totals.roundOff,
                 paymentStatus: form.paymentStatus,
                 interstate: !!form.interstate,
+                // v1.10.86 - written only when ticked, so an unticked bill is saved as before.
+                ...(form.reverseCharge ? { reverseCharge: true } : {}),
                 note: form.note.trim(),
                 ...centreFields(form.costCentre, form.costCentreName),
                 ...purchaseTdsFields(form, totals.taxable),
@@ -740,122 +941,36 @@ export default function PurchaseBills() {
                 }
             }
             else if (form.paymentStatus === 'Paid' && (before?.paymentStatus || 'Unpaid') !== 'Paid') {
-                purchase = markPurchasePaid(purchaseFields, localToday());
+                // v1.10.85 (#184) - how it was paid: Cash reaches the Cash book.
+                const mode = purchasePaymentDue(purchaseFields) > 0.005 ? await askPaidMode('How was this bill paid?') : 'other';
+                if (!mode)
+                    return;
+                purchase = markPurchasePaid(purchaseFields, localToday(), new Date(), mode);
+            }
+            // v1.10.29 - items on a purchase bill go into Products: an existing
+            // product gets the quantity and the latest cost (its selling price is
+            // left alone), a new item becomes a product. v1.10.31 - an edit moves
+            // stock by what changed. v1.10.86 (#199) - each line is matched by its
+            // productId, then name (spaces and case ignored), then barcode, and keeps
+            // the productId, so a renamed line or a new spelling no longer makes a
+            // second product. See utils/purchaseStock.js.
+            let plan = null;
+            try {
+                const priorLines = before?.items || [];
+                plan = purchaseStockPlan(await getAllProducts(), purchase.items, priorLines, newProductId);
+                purchase = { ...purchase, items: plan.items };
+            }
+            catch (e) {
+                console.warn('Reading Products for the purchase failed (non-fatal):', e);
             }
             await savePurchase(purchase);
-            // v1.10.29 — reported: "items added in purchase bill also available
-            // for sale means automatically added to the product page too".
-            // On save, upsert each line item into Products. Match by trimmed
-            // lowercase name to avoid duplicates. For existing products we
-            // update purchasePrice (latest cost) but leave sellingPrice alone
-            // so we don't accidentally overwrite the user's margin. For new
-            // products we seed sellingPrice = purchasePrice as a starting
-            // point (user can raise it in Inventory later). Runs in parallel
-            // and non-fatal — a single-item failure doesn't block the
-            // purchase-bill save.
-            // v1.10.31 — Data-F10.1-3: delta-based stock sync. Previously stock
-            // was incremented only on FIRST save (create). If the user edited the
-            // purchase later — changing qty from 10 → 20, or removing a line, or
-            // renaming a line — the product's stock stayed at 10 (F10.1) or a
-            // duplicate product was created (F10.3). Now:
-            //   • Save (edit path): compute per-line delta from the pre-edit
-            //     snapshot; apply that delta to each existing product's stock.
-            //   • Save (create path): increment stock by full quantity.
-            //   • Rename detection: match by productId first (persisted below),
-            //     then by name — a rename with productId keeps the same product.
+            if (editingId)
+                await restampDebitNotes([purchase]);
             try {
-                const existingProducts = await getAllProducts();
-                const byName = new Map(existingProducts.map(p => [(p.name || '').trim().toLowerCase(), p]));
-                const byId = new Map(existingProducts.map(p => [p.id, p]));
-                // Pre-edit snapshot: on edit, compute deltas per productId/name.
-                const priorLines = editingId
-                    ? (purchases.find(p => p.id === editingId)?.items || [])
-                    : [];
-                const priorQtyByKey = new Map();
-                for (const p of priorLines) {
-                    const key = p.productId || `name:${(p.name || '').trim().toLowerCase()}`;
-                    priorQtyByKey.set(key, (priorQtyByKey.get(key) || 0) + (Number(p.quantity) || 0));
-                }
-                // Batch stock adjustments per product so we don't race on parallel saves.
-                const stockDeltaById = new Map();
-                const productsToUpsert = new Map();
-                const seenPriorKeys = new Set();
-                for (const it of purchase.items.filter(x => x.name)) {
-                    const qty = Number(it.quantity) || 0;
-                    // Match order: productId (persisted below) → name (case-insensitive).
-                    let existing = it.productId ? byId.get(it.productId) : null;
-                    if (!existing) {
-                        const key = it.name.trim().toLowerCase();
-                        existing = byName.get(key);
-                    }
-                    if (existing) {
-                        // Delta = current qty − prior qty (for this product).
-                        const priorKey = it.productId
-                            ? it.productId
-                            : `name:${(it.name || '').trim().toLowerCase()}`;
-                        const priorQty = priorQtyByKey.get(priorKey) || 0;
-                        seenPriorKeys.add(priorKey);
-                        const delta = qty - priorQty; // may be negative (line reduced) or zero (unchanged)
-                        stockDeltaById.set(existing.id, (stockDeltaById.get(existing.id) || 0) + delta);
-                        productsToUpsert.set(existing.id, {
-                            ...existing,
-                            purchasePrice: it.rate,
-                            hsn: existing.hsn || it.hsn,
-                            taxPercent: existing.taxPercent || it.taxPercent,
-                            cessPercent: existing.cessPercent || it.cessPercent || 0,
-                            // stock filled after we sum all deltas for this product.
-                            _placeholderId: existing.id,
-                        });
-                    }
-                    else {
-                        // New product — seed stock with the line qty (all its lines: two
-                        // lines of the same new item used to keep only the last one's).
-                        const newKey = `__new__::${it.name.trim().toLowerCase()}`;
-                        const seeded = Number(productsToUpsert.get(newKey)?.stock) || 0;
-                        productsToUpsert.set(newKey, {
-                            name: it.name.trim(),
-                            hsn: it.hsn || '',
-                            purchasePrice: it.rate,
-                            sellingPrice: it.rate,
-                            rate: it.rate,
-                            taxPercent: it.taxPercent || 0,
-                            cessPercent: it.cessPercent || 0,
-                            unit: it.unit || 'Nos',
-                            stock: roundQty(seeded + qty),
-                            description: '',
-                        });
-                    }
-                }
-                // Rows removed while editing: their stock was added when the bill was
-                // first saved, so take it back out (it used to stay in stock forever).
-                for (const [key, priorQty] of priorQtyByKey) {
-                    if (seenPriorKeys.has(key))
-                        continue;
-                    const gone = key.startsWith('name:') ? byName.get(key.slice(5)) : byId.get(key);
-                    if (!gone)
-                        continue;
-                    stockDeltaById.set(gone.id, (stockDeltaById.get(gone.id) || 0) - priorQty);
-                    if (!productsToUpsert.has(gone.id))
-                        productsToUpsert.set(gone.id, { ...gone, _placeholderId: gone.id });
-                }
-                // Apply deltas + write.
-                const upserts = [];
-                for (const [, prod] of productsToUpsert) {
-                    if (prod._placeholderId) {
-                        const existing = byId.get(prod._placeholderId);
-                        const delta = stockDeltaById.get(prod._placeholderId) || 0;
-                        // Not clamped at 0: sales may take stock below zero, and clamping
-                        // here made a purchase edit and its undo leave different stock
-                        // (stock 2, reduce a purchase by 5 -> 0, put it back -> 5).
-                        const newStock = roundQty((Number(existing.stock) || 0) + delta);
-                        upserts.push(saveProduct({ ...prod, stock: newStock, _placeholderId: undefined }));
-                    }
-                    else {
-                        upserts.push(saveProduct(prod));
-                    }
-                }
-                await Promise.all(upserts);
-                toast(editingId ? 'Purchase updated' : 'Purchase added — items synced to Products', 'success');
+                if (!plan)
+                    throw new Error('no products');
+                await Promise.all(plan.writes.map(p => saveProduct(p)));
+                toast(editingId ? 'Purchase updated' : from2b ? 'Purchase added. Back to GSTR-2B.' : 'Purchase added — items synced to Products', 'success');
             }
             catch (e) {
                 console.warn('Products auto-sync from purchase failed (non-fatal):', e);
@@ -868,6 +983,10 @@ export default function PurchaseBills() {
             // refresh it too. Otherwise a brand-new item would not appear in the
             // suggestions until the page was reloaded.
             loadProducts();
+            if (from2b && onOpenGstReturns) {
+                markBackToTwoB();
+                onOpenGstReturns();
+            }
         }
         catch {
             toast('Failed to save purchase', 'error');
@@ -886,7 +1005,16 @@ export default function PurchaseBills() {
             setPayPurchase(purchase);
             return;
         }
-        const next = paymentStatus === 'Paid' ? markPurchasePaid(purchase, localToday()) : markPurchaseUnpaid(purchase);
+        // v1.10.85 (#184) - Paid asks how it was paid (Cash reaches the Cash book).
+        let mode = 'other';
+        if (paymentStatus === 'Paid' && purchasePaymentDue(purchase) > 0.005) {
+            mode = await askPaidMode('How was this bill paid?');
+            if (!mode) {
+                loadPurchases();
+                return;
+            }
+        }
+        const next = paymentStatus === 'Paid' ? markPurchasePaid(purchase, localToday(), new Date(), mode) : markPurchaseUnpaid(purchase);
         try {
             await savePurchase(next);
             const now = purchaseStatus(next);
@@ -901,26 +1029,22 @@ export default function PurchaseBills() {
     // Take a deleted bill's quantities back out of product stock.
     // Matches products the same way saving does: productId, then name.
     const revertPurchaseStock = async (bill) => {
-        const lines = (bill?.items || []).filter(it => it.name && Number(it.quantity) > 0);
-        if (!lines.length)
-            return;
         const products = await getAllProducts();
-        const byName = new Map(products.map(p => [(p.name || '').trim().toLowerCase(), p]));
-        const byId = new Map(products.map(p => [p.id, p]));
-        const minus = new Map();
-        for (const it of lines) {
-            const prod = (it.productId && byId.get(it.productId)) || byName.get(it.name.trim().toLowerCase());
-            if (prod)
-                minus.set(prod.id, (minus.get(prod.id) || 0) + Number(it.quantity));
-        }
-        await Promise.all([...minus].map(([pid, qty]) => {
-            const prod = byId.get(pid);
-            return saveProduct({ ...prod, stock: roundQty((Number(prod.stock) || 0) - qty) });
+        const minus = purchaseStockReversal(products, bill?.items);
+        await Promise.all(Object.entries(minus).map(([pid, qty]) => {
+            const prod = products.find(p => p.id === pid);
+            return saveProduct({ ...prod, stock: roundQty((Number(prod.stock) || 0) + qty) });
         }));
     };
     const handleDelete = async (id) => {
         // A bill's payments are kept only on the bill, so they go with it.
         const target = purchases.find(p => p.id === id);
+        // v1.10.85 (#168) - its returns would be left pointing at nothing.
+        const dns = debitNotes.filter(dn => dn.purchaseId === id);
+        if (dns.length) {
+            toast(`This bill has ${dns.length === 1 ? 'a debit note' : `${dns.length} debit notes`} (${dns.map(dn => dn.dnNumber).join(', ')}). Delete ${dns.length === 1 ? 'it' : 'them'} on the Returns tab first.`, 'warning', 8000);
+            return;
+        }
         const paidNote = hasPurchasePayments(target)
             ? ` Its payments of ${formatCurrency(purchasePaid(target))} are deleted with it and leave the Cash book. To re-enter the bill, edit it instead.`
             : '';
@@ -1005,7 +1129,7 @@ export default function PurchaseBills() {
             const name = (pr.name || '').trim();
             if (!name)
                 continue;
-            seen.set(name.toLowerCase(), {
+            seen.set(productKey(name), {
                 name,
                 hsn: (pr.hsn || '').trim(),
                 // purchasePrice is what we PAY a supplier; `rate`/sellingPrice is
@@ -1022,7 +1146,7 @@ export default function PurchaseBills() {
                 const name = (it.name || '').trim();
                 if (!name)
                     continue;
-                const key = name.toLowerCase();
+                const key = productKey(name);
                 if (!seen.has(key)) {
                     seen.set(key, {
                         name,
@@ -1037,6 +1161,9 @@ export default function PurchaseBills() {
         }
         return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
     }, [products, purchases]);
+    // v1.10.86 - the names for the item boxes' suggestion lists (ComboInput), and the units on an order.
+    const itemNames = useMemo(() => itemHistory.map(i => i.name), [itemHistory]);
+    const unitNames = getAllUnits().map(u => u.label);
     const updateField = (field, value) => setForm(prev => ({ ...prev, [field]: value }));
     // v1.10.76 (#82) - a full supplier GSTIN sets "Inter-state" from the two
     // states, the way sales invoices already work it out. The box stays
@@ -1104,10 +1231,25 @@ export default function PurchaseBills() {
         return cur === String(lastAuto).trim(); // untouched since we filled it
     };
     const updateItemName = (index, value) => {
-        const match = itemHistory.find(i => i.name.toLowerCase() === value.trim().toLowerCase());
+        const match = itemHistory.find(i => productKey(i.name) === productKey(value));
+        // v1.10.86 (#199) - a product's name (or barcode) links the line to it. Any
+        // other name keeps the product already linked (a renamed line is still that
+        // product; the form says so), and a cleared name drops it.
+        const prod = findLineProduct(products, { name: value });
         setForm(prev => {
             const items = [...prev.items];
             const cur = { ...items[index], name: value };
+            if (prod)
+                cur.productId = prod.id;
+            else if (!value.trim())
+                delete cur.productId;
+            // #148 - a new item name starts in its own unit again.
+            if (cur.unitFactor) {
+                delete cur.unitFactor;
+                delete cur.baseUnit;
+                if (prev.kind !== 'po')
+                    delete cur.unit;
+            }
             if (match) {
                 const last = cur._auto || {};
                 if (isOursToReplace(cur.hsn, last.hsn))
@@ -1146,7 +1288,7 @@ export default function PurchaseBills() {
         });
     };
     const addItem = () => {
-        // Tag the new row so we can focus its first input after the browser updates the row.
+        // Tag the new row so we can focus its first input after React renders.
         // Tab → Enter on the Add Item button now keeps the user in keyboard
         // flow instead of forcing a mouse click on the empty row.
         const focusKey = 'new-' + Date.now();
@@ -1176,46 +1318,44 @@ export default function PurchaseBills() {
             for (const k of Object.keys(sum))
                 sum[k] += Number(t[k]) || 0;
             return [p.date || '', p.supplierName || '', p.supplierGstin || '', p.invoiceNumber || '', r2(t.taxable), r2(t.cgst), r2(t.sgst), r2(t.igst), r2(t.cess),
-                p.interstate ? 'Y' : 'N', r2(t.roundOff), r2(t.finalTotal), r2(t.paid), r2(t.balance), PURCHASE_STATUS_LABEL[purchaseStatus(p)], p.note || ''];
+                p.interstate ? 'Y' : 'N', p.reverseCharge ? 'Y' : 'N', r2(t.roundOff), r2(t.finalTotal), r2(t.paid), r2(t.balance), PURCHASE_STATUS_LABEL[purchaseStatus(p)], p.note || ''];
         });
-        return [...rows, ['Total', '', '', '', r2(sum.taxable), r2(sum.cgst), r2(sum.sgst), r2(sum.igst), r2(sum.cess), '', r2(sum.roundOff), r2(sum.finalTotal), r2(sum.paid), r2(sum.balance), '', '']];
+        return [...rows, ['Total', '', '', '', r2(sum.taxable), r2(sum.cgst), r2(sum.sgst), r2(sum.igst), r2(sum.cess), '', '', r2(sum.roundOff), r2(sum.finalTotal), r2(sum.paid), r2(sum.balance), '', '']];
     })();
     const isPo = form.kind === 'po';
     const editingBill = !isPo && editingId ? purchases.find(p => p.id === editingId) : null;
     const fromPoNumber = form.fromPo ? orders.find(o => o.id === form.fromPo)?.poNumber : '';
-    const formTotals = calcPurchaseTotal(form.items, !isPo && form.applyRoundOff);
+    const formTotals = calcPurchaseTotal(withBillDiscount(form.items, isPo ? 0 : form.billDiscountValue, form.billDiscountType), !isPo && form.applyRoundOff);
     const formTds = !isPo && form.tdsOn ? purchaseTdsFields(form, formTotals.taxable).tdsAmount : 0;
     return (h("div", { className: "dashboard-container" },
-        h("div", { className: "page-header" },
-            h("div", { style: { display: 'flex', alignItems: 'center', gap: 6 } },
-                h("div", null,
-                    h("h1", { className: "page-title" },
-                        poEnabled ? 'Purchases' : 'Purchase Bills',
-                        " ",
-                        h(HelpButton, { title: "Purchase Bills \u2014 how to use", doc: "purchases", size: 16 })),
-                    h("p", { className: "page-subtitle" }, "Track supplier invoices for ITC claims in GSTR-3B"))),
-            tab === 'orders' ? (h("div", { className: "flex gap-2" },
-                h("button", { className: "btn btn-primary", onClick: () => openNewPo() },
+        h(PageHeader, { title: "Purchases", help: { title: 'Purchases — how to use', doc: 'purchases' }, subtitle: "Track supplier invoices for ITC claims in GSTR-3B", secondary: tab !== 'orders' && h(Fragment, null,
+                h(BarButton, { icon: Wand2, label: "Import from image (OCR)", onClick: () => setShowOCR(true), title: "Import from image (OCR): fill in a bill from a photo or scan of it" }),
+                h(BulkCsvImport, { kind: "purchase", onDone: () => { loadPurchases(); loadProducts(); } })), primary: tab === 'orders'
+                ? h("button", { className: "btn btn-primary", onClick: () => openNewPo() },
                     h(Plus, { size: 18 }),
-                    " New purchase order"))) : (h("div", { className: "flex gap-2", style: { flexWrap: 'wrap' } },
-                h("button", { className: "btn btn-secondary", onClick: () => setShowOCR(true), title: "Extract fields from a bill photo/scan" },
-                    h(Wand2, { size: 16 }),
-                    " Import from image (OCR)"),
-                h(BulkCsvImport, { kind: "purchase", onDone: () => { loadPurchases(); loadProducts(); } }),
-                h("button", { className: "btn btn-primary", onClick: openAdd },
+                    " New purchase order")
+                : h("button", { className: "btn btn-primary", onClick: openAdd },
                     h(Plus, { size: 18 }),
-                    " Add Purchase")))),
-        poEnabled && (h("div", { style: { display: 'flex', gap: '0.5rem', marginBottom: '1.25rem', flexWrap: 'wrap' } },
+                    " Add Purchase Bill") }),
+        h("div", { style: { display: 'flex', gap: '0.5rem', marginBottom: '1.25rem', flexWrap: 'wrap' } },
             h("button", { className: `btn ${tab === 'bills' ? 'btn-primary' : 'btn-secondary'}`, onClick: () => setTab('bills'), "aria-pressed": tab === 'bills' },
                 h(ShoppingCart, { size: 16 }),
                 " Purchase bills"),
-            h("button", { className: `btn ${tab === 'orders' ? 'btn-primary' : 'btn-secondary'}`, onClick: () => setTab('orders'), "aria-pressed": tab === 'orders' },
+            poEnabled && (h("button", { className: `btn ${tab === 'orders' ? 'btn-primary' : 'btn-secondary'}`, onClick: () => setTab('orders'), "aria-pressed": tab === 'orders' },
                 h(ClipboardList, { size: 16 }),
-                " Purchase orders"))),
+                " Purchase orders")),
+            h("button", { className: `btn ${tab === 'returns' ? 'btn-primary' : 'btn-secondary'}`, onClick: () => setTab('returns'), "aria-pressed": tab === 'returns' },
+                h(RotateCcw, { size: 16 }),
+                " Returns",
+                debitNotes.length > 0 ? ` (${debitNotes.length})` : '')),
+        statementFor !== null && (h(SupplierStatement, { purchases: purchases, debitNotes: debitNotes, profile: ownerProfile, initialSupplier: statementFor, onClose: () => setStatementFor(null) })),
+        tab === 'returns' && h(DebitNotesList, { notes: debitNotes, purchases: purchases, ownerProfile: ownerProfile, onChanged: () => { loadPurchases(); loadProducts(); } }),
+        returnBill && (h(ReturnToSupplierModal, { bill: returnBill, debitNotes: debitNotes, ownerProfile: ownerProfile, onClose: () => setReturnBill(null), onSaved: () => { setReturnBill(null); setTab('returns'); loadPurchases(); loadProducts(); } })),
         tab === 'orders' && (h(PurchaseOrders, { orders: orders, purchases: purchases, ownerProfile: ownerProfile, onNew: () => openNewPo(), onEdit: openEditPo, onConvert: openBillFromPo, onDuplicate: openNewPo, onCancel: cancelPo })),
         showOCR && (h(Suspense, { fallback: h("div", { className: "modal-overlay" },
                 h("div", { className: "modal-content", style: { maxWidth: 320, textAlign: 'center' } }, "Loading OCR\u2026")) },
             h(BillOCR, { onClose: () => setShowOCR(false), onExtracted: applyOCR }))),
+        labelBill && h(BarcodeLabels, { bill: labelBill, debitNotes: debitNotes, title: "Print labels for this purchase", onClose: () => setLabelBill(null) }),
         viewPurchase && (() => {
             const p = viewPurchase;
             const t = calcPurchaseTotal(p.items, !!p.applyRoundOff);
@@ -1234,7 +1374,8 @@ export default function PurchaseBills() {
                         " \u00B7 ",
                         PURCHASE_STATUS_LABEL[purchaseStatus(p)],
                         " \u00B7 ",
-                        p.interstate ? 'Interstate (IGST)' : 'Intrastate (CGST+SGST)'),
+                        p.interstate ? 'Interstate (IGST)' : 'Intrastate (CGST+SGST)',
+                        p.reverseCharge ? ' · Reverse charge: Yes' : ''),
                     h("div", { style: { background: 'var(--bg-secondary)', padding: '0.75rem 1rem', borderRadius: 6, marginBottom: '1rem' } },
                         h("div", { style: { fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 4 } }, "Supplier"),
                         h("div", { style: { fontWeight: 600 } }, p.supplierName || '—'),
@@ -1254,11 +1395,13 @@ export default function PurchaseBills() {
                                     h("th", { style: { textAlign: 'right' } }, "GST%"),
                                     h("th", { style: { textAlign: 'right' } }, "Amount"))),
                             h("tbody", null, (p.items || []).map((it, idx) => {
-                                const line = (Number(it.quantity) || 0) * (Number(it.rate) || 0);
+                                const line = purchaseLineTax({ ...it, quantity: Number(it.quantity) || 0, rate: Number(it.rate) || 0, billDiscShare: 0 }).amount;
                                 const withTax = line * (1 + (Number(it.taxPercent) || 0) / 100);
                                 return (h("tr", { key: idx },
                                     h("td", { style: { color: 'var(--text-muted)' } }, idx + 1),
-                                    h("td", { style: { whiteSpace: 'normal', wordBreak: 'break-word' } }, it.name || '—'),
+                                    h("td", { style: { whiteSpace: 'normal', wordBreak: 'break-word' } },
+                                        it.name || '—',
+                                        lineNote(it) && h("div", { className: "text-muted", style: { fontSize: '0.75rem' } }, lineNote(it))),
                                     h("td", { style: { color: 'var(--text-muted)' } }, it.hsn || '—'),
                                     h("td", { style: { textAlign: 'right' } }, it.quantity || 0),
                                     h("td", { style: { textAlign: 'right' } }, formatCurrency(it.rate || 0)),
@@ -1268,6 +1411,13 @@ export default function PurchaseBills() {
                                     h("td", { style: { textAlign: 'right', fontWeight: 600 } }, formatCurrency(withTax))));
                             })))),
                     h("div", { style: { display: 'grid', gridTemplateColumns: '1fr auto', gap: '0.35rem 1rem', fontSize: '0.9rem', maxWidth: 320, marginLeft: 'auto' } },
+                        t.billDiscount > 0.005 && (h(Fragment, null,
+                            h("span", { style: { color: 'var(--text-muted)' } }, "Value of goods"),
+                            h("span", { style: { textAlign: 'right' } }, formatCurrency(t.taxable + t.billDiscount)),
+                            h("span", { style: { color: 'var(--text-muted)' } }, billDiscLabel(p)),
+                            h("span", { style: { textAlign: 'right' } },
+                                "-",
+                                formatCurrency(t.billDiscount)))),
                         h("span", { style: { color: 'var(--text-muted)' } }, "Taxable"),
                         h("span", { style: { textAlign: 'right' } }, formatCurrency(t.taxable)),
                         p.interstate ? (h(Fragment, null,
@@ -1285,20 +1435,31 @@ export default function PurchaseBills() {
                             h("span", { style: { textAlign: 'right', fontStyle: 'italic' } }, (t.roundOff > 0 ? '+' : '') + formatCurrency(t.roundOff))),
                         h("span", { style: { borderTop: '2px solid var(--text)', paddingTop: 6, fontWeight: 700 } }, "TOTAL"),
                         h("span", { style: { borderTop: '2px solid var(--text)', paddingTop: 6, textAlign: 'right', fontWeight: 700, fontSize: '1.05rem', color: 'var(--text)' } }, formatCurrency(t.finalTotal)),
-                        (Number(p.tdsAmount) || 0) > 0 && (h(Fragment, null,
-                            h("span", { style: { color: 'var(--text-muted)' } },
-                                "Less: TDS (",
-                                String(p.tdsSection || '').replace(/-(co|tech|pm)$/, ''),
-                                p.tdsRate ? ` @ ${p.tdsRate}%` : '',
-                                ")"),
-                            h("span", { style: { textAlign: 'right' } },
-                                "-",
-                                formatCurrency(p.tdsAmount)),
+                        ((Number(p.tdsAmount) || 0) > 0 || p.reverseCharge) && (h(Fragment, null,
+                            p.reverseCharge && h(Fragment, null,
+                                h("span", { style: { color: 'var(--text-muted)' } }, "Less: GST you pay (reverse charge)"),
+                                h("span", { style: { textAlign: 'right' } },
+                                    "-",
+                                    formatCurrency(purchaseRcmTax(p)))),
+                            (Number(p.tdsAmount) || 0) > 0 && h(Fragment, null,
+                                h("span", { style: { color: 'var(--text-muted)' } },
+                                    "Less: TDS (",
+                                    sectionShort(p.tdsSection),
+                                    p.tdsRate ? ` @ ${p.tdsRate}%` : '',
+                                    ")"),
+                                h("span", { style: { textAlign: 'right' } },
+                                    "-",
+                                    formatCurrency(p.tdsAmount))),
                             h("span", { style: { fontWeight: 600 } }, "Paid to supplier"),
-                            h("span", { style: { textAlign: 'right', fontWeight: 600 } }, formatCurrency(t.finalTotal - p.tdsAmount)))),
+                            h("span", { style: { textAlign: 'right', fontWeight: 600 } }, formatCurrency(purchaseOwed(p))))),
                         hasPurchasePayments(p) && (h(Fragment, null,
                             h("span", { style: { color: 'var(--text-muted)' } }, "Paid"),
                             h("span", { style: { textAlign: 'right' } }, formatCurrency(purchasePaid(p))))),
+                        p._returned > 0 && (h(Fragment, null,
+                            h("span", { style: { color: 'var(--text-muted)' } }, "Returned (debit notes)"),
+                            h("span", { style: { textAlign: 'right' } },
+                                "-",
+                                formatCurrency(p._returned)))),
                         h("span", { style: { fontWeight: 600 } }, "Balance due"),
                         h("span", { style: { textAlign: 'right', fontWeight: 600, color: purchaseBalance(p) > 0.005 ? 'var(--danger)' : 'var(--success)' } }, formatCurrency(purchaseBalance(p)))),
                     hasPurchasePayments(p) && (h("div", { style: { marginTop: '1rem' } },
@@ -1323,6 +1484,9 @@ export default function PurchaseBills() {
                         h("button", { className: "btn btn-secondary", onClick: () => { openEdit(p); setViewPurchase(null); } },
                             h(Edit3, { size: 14 }),
                             " Edit"),
+                        isModuleEnabled('barcodes', getEnabledModules()) && (h("button", { className: "btn btn-secondary", onClick: () => { setLabelBill(p); setViewPurchase(null); } },
+                            h(Barcode, { size: 14 }),
+                            " Print labels for this purchase")),
                         h("button", { className: "btn btn-primary", onClick: () => viewAsPdf(p) },
                             h(Download, { size: 14 }),
                             " Download PDF")))));
@@ -1335,8 +1499,13 @@ export default function PurchaseBills() {
                     h("div", { className: "stat-icon stat-icon-purple" },
                         h(ShoppingCart, { size: 22 })),
                     h("div", null,
-                        h("p", { className: "stat-label" }, "Total Purchases"),
-                        h("h2", { className: "stat-value stat-value-purple" }, formatCurrency(totalStats.total)))),
+                        h("p", { className: "stat-label" }, returnStats.total > 0 ? 'Total Purchases (less returns)' : 'Total Purchases'),
+                        h("h2", { className: "stat-value stat-value-purple", style: { '--len': formatCurrency(totalStats.total - returnStats.total).length } }, formatCurrency(totalStats.total - returnStats.total)),
+                        returnStats.total > 0 && h("p", { className: "text-muted", style: { fontSize: '0.72rem', margin: 0 } },
+                            formatCurrency(totalStats.total),
+                            " bought, ",
+                            formatCurrency(returnStats.total),
+                            " returned"))),
                 h("div", { className: "stat-card" },
                     h("div", { className: "stat-icon stat-icon-amber" },
                         h(IndianRupee, { size: 22 })),
@@ -1344,13 +1513,13 @@ export default function PurchaseBills() {
                         h("p", { className: "stat-label" },
                             "Owed to suppliers ",
                             h(HelpButton, { title: "Owed to suppliers", doc: "purchases#owed-to-suppliers", size: 13 })),
-                        h("h2", { className: "stat-value", style: { color: totalStats.owed > 0.005 ? 'var(--danger)' : undefined } }, formatCurrency(totalStats.owed)))),
+                        h("h2", { className: "stat-value", style: { color: totalStats.owed > 0.005 ? 'var(--danger)' : undefined, '--len': formatCurrency(totalStats.owed).length } }, formatCurrency(totalStats.owed)))),
                 h("div", { className: "stat-card" },
                     h("div", { className: "stat-icon stat-icon-green" },
                         h(ShoppingCart, { size: 22 })),
                     h("div", null,
                         h("p", { className: "stat-label" }, "GST (ITC Eligible)"),
-                        h("h2", { className: "stat-value stat-value-green" }, formatCurrency(totalStats.tax)))),
+                        h("h2", { className: "stat-value stat-value-green", style: { '--len': formatCurrency(totalStats.tax - returnStats.tax).length } }, formatCurrency(totalStats.tax - returnStats.tax)))),
                 h("div", { className: "stat-card" },
                     h("div", { className: "stat-icon stat-icon-blue" },
                         h(ShoppingCart, { size: 22 })),
@@ -1378,6 +1547,7 @@ export default function PurchaseBills() {
                     isPo ? (editingId ? 'Edit purchase order' : 'New purchase order') : (editingId ? 'Edit Purchase Bill' : 'Add Purchase Bill'),
                     " ",
                     h(HelpButton, { title: "Purchases", doc: isPo ? 'purchases#new-po' : (fromPoNumber && !editingId) ? 'purchases#convert-po' : 'purchases#add-purchase', size: 16, style: { marginLeft: 6 } })),
+                !isPo && form.from2b && !editingId && (h("div", { className: "notice notice-info twob-draft-note", style: { display: 'block', marginBottom: '0.75rem', fontSize: '0.8rem', lineHeight: 1.5 } }, "Filled in from GSTR-2B: one line per GST rate. Check it and Save. To add the goods to stock, change each line to your item name, quantity and rate; lines left as \"(from GSTR-2B)\" are not added to Products.")),
                 !isPo && fromPoNumber && (h("p", { style: { fontSize: '0.82rem', color: 'var(--text-muted)', margin: '0 0 0.75rem' } },
                     "From purchase order ",
                     h("strong", null, fromPoNumber),
@@ -1401,8 +1571,7 @@ export default function PurchaseBills() {
                             " (\u20B9 button in the list)")) : (h("select", { className: "form-input", value: form.paymentStatus, onChange: e => updateField('paymentStatus', e.target.value) }, PAYMENT_STATUSES.filter(s => s !== 'Partial' || form.paymentStatus === 'Partial').map(s => h("option", { key: s, value: s }, PURCHASE_STATUS_LABEL[s])))))),
                     h("div", { className: "form-group" },
                         h("label", { className: "form-label" }, "Supplier Name *"),
-                        h("input", { type: "text", className: "form-input", value: form.supplierName, list: "fgsb-supplier-history", autoComplete: "off", onChange: e => updateSupplierName(e.target.value), placeholder: supplierHistory.length ? 'Type or pick a previous supplier' : 'Vendor / Supplier name' }),
-                        h("datalist", { id: "fgsb-supplier-history" }, supplierHistory.map(s => h("option", { key: s.name, value: s.name })))),
+                        h(ComboInput, { type: "text", className: "form-input", value: form.supplierName, listId: "fgsb-supplier-history", listLabel: "Previous suppliers", options: supplierHistory.map(s => s.name), onChange: e => updateSupplierName(e.target.value), placeholder: supplierHistory.length ? 'Type or pick a previous supplier' : 'Vendor / Supplier name' })),
                     h("div", { className: "form-group" },
                         h("label", { className: "form-label" }, "Supplier GSTIN"),
                         h("input", { type: "text", className: "form-input", value: form.supplierGstin, onChange: e => updateSupplierGstin(e.target.value), placeholder: "15-digit GSTIN", maxLength: 15 })),
@@ -1431,28 +1600,90 @@ export default function PurchaseBills() {
                             h("span", null,
                                 h("strong", null, "Inter-state purchase"),
                                 " \u2014 supplier charged IGST (different state)",
-                                h("span", { style: { color: '#94a3b8', fontSize: '0.72rem', display: 'block' } }, "Routes ITC to IGST in GSTR-3B instead of CGST + SGST. Tip: first 2 digits of supplier GSTIN = their state code."))))),
-                h("h4", { style: { marginTop: '1rem', marginBottom: '0.5rem', fontWeight: 600, fontSize: '0.9rem' } },
-                    "Items ",
-                    h(HelpButton, { title: "Items on the bill", doc: "purchases#purchase-items", size: 16 })),
-                h("datalist", { id: "fgsb-item-history" }, itemHistory.map(i => h("option", { key: i.name, value: i.name }))),
-                isPo && (h("datalist", { id: "fgsb-unit-list" }, getAllUnits().map(u => h("option", { key: u.label, value: u.label })))),
+                                h("span", { style: { color: '#94a3b8', fontSize: '0.72rem', display: 'block' } }, "Routes ITC to IGST in GSTR-3B instead of CGST + SGST. Tip: first 2 digits of supplier GSTIN = their state code.")))),
+                    !isPo && (h("div", { className: "form-group", style: { gridColumn: 'span 2' } },
+                        h("label", { style: { display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', cursor: 'pointer' } },
+                            h("input", { type: "checkbox", className: "purchase-rcm", checked: !!form.reverseCharge, onChange: e => updateField('reverseCharge', e.target.checked), style: { width: 16, height: 16, accentColor: 'var(--primary)' } }),
+                            h("span", null,
+                                h("strong", null, "Reverse charge"),
+                                " \u2014 you pay this GST to the government, not the supplier",
+                                h("span", { style: { color: '#94a3b8', fontSize: '0.72rem', display: 'block' } }, "For example a transporter (GTA), an advocate, or goods the law puts under reverse charge. GSTR-3B shows the tax in 3.1(d), paid in cash, and as credit in 4(A)(3). The supplier is owed the bill without GST.")))))),
+                h("div", { style: { display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', marginTop: '1rem', marginBottom: '0.5rem' } },
+                    h("h4", { style: { margin: 0, fontWeight: 600, fontSize: '0.9rem' } },
+                        "Items ",
+                        h(HelpButton, { title: "Items on the bill", doc: "purchases#purchase-items", size: 16 })),
+                    h("label", { style: { display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.78rem', cursor: 'pointer', color: 'var(--text-muted)' } },
+                        h("input", { type: "checkbox", checked: showDiscountCol, disabled: showDiscountCol && !lineCols.discount, onChange: () => toggleLineCol('discount'), style: { accentColor: 'var(--primary)' } }),
+                        " Discount column"),
+                    !isPo && (h("label", { style: { display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.78rem', cursor: 'pointer', color: 'var(--text-muted)' } },
+                        h("input", { type: "checkbox", checked: showSerialCol, disabled: showSerialCol && !lineCols.serial, onChange: () => toggleLineCol('serial'), style: { accentColor: 'var(--primary)' } }),
+                        " Serial No. column"))),
                 form.items.map((item, idx) => (h("div", { key: idx, "data-focus-key": item._focusKey, style: { display: 'flex', gap: '0.5rem', marginBottom: '0.5rem', flexWrap: 'wrap', alignItems: 'flex-end' } },
                     h("div", { className: "form-group", style: { flex: isPo ? 1.2 : 2, margin: 0 } },
                         idx === 0 && h("label", { className: "form-label" }, "Name"),
-                        h("input", { type: "text", className: "form-input", value: item.name, list: "fgsb-item-history", autoComplete: "off", onChange: e => updateItemName(idx, e.target.value), placeholder: itemHistory.length ? 'Type or pick a previous item' : 'Item name' })),
+                        h(ComboInput, { type: "text", className: "form-input", value: item.name, listId: "fgsb-item-history", listLabel: "Previous items", options: itemNames, onChange: e => updateItemName(idx, e.target.value), 
+                            // #137 barcodes - a scanned (or typed) barcode + Enter puts in its product.
+                            // Only with Barcodes on, and not when a product is called exactly what was typed.
+                            onKeyDown: e => {
+                                if (e.key !== 'Enter' || !isModuleEnabled('barcodes', getEnabledModules()))
+                                    return;
+                                const typed = (item.name || '').trim().toLowerCase();
+                                const hit = !products.some(pr => productKey(pr.name) === productKey(typed)) && findByBarcode(products, item.name);
+                                if (hit) {
+                                    e.preventDefault();
+                                    updateItemName(idx, hit.name);
+                                }
+                            }, placeholder: itemHistory.length ? 'Type or pick a previous item' : 'Item name' }),
+                        !isPo && (() => {
+                            const hint = lineProductHint(products, item);
+                            if (!hint)
+                                return null;
+                            return (h("div", { className: "not-in-products text-muted", style: { fontSize: '0.72rem', marginTop: 2 } }, hint.kind === 'new' ? 'New product: added to Products when you save. To use one you have, pick it from the list.' : (h(Fragment, null,
+                                "Stock goes to ",
+                                hint.product.name,
+                                ".",
+                                ' ',
+                                h("button", { type: "button", className: "link-btn", style: { fontSize: '0.72rem' }, onClick: () => setForm(prev => ({ ...prev, items: prev.items.map((x, i) => {
+                                            if (i !== idx)
+                                                return x;
+                                            const { productId: _drop, ...rest } = x;
+                                            return rest;
+                                        }) })) }, "Make it a new product")))));
+                        })()),
                     h("div", { className: "form-group", style: { flex: isPo ? 0.8 : 1, margin: 0 } },
                         idx === 0 && h("label", { className: "form-label" }, "HSN"),
                         h("input", { type: "text", className: "form-input", value: item.hsn, onChange: e => updateItem(idx, 'hsn', e.target.value), placeholder: "HSN" })),
                     h("div", { className: "form-group", style: { flex: isPo ? 0.9 : 0.7, margin: 0 } },
                         idx === 0 && h("label", { className: "form-label" }, "Qty"),
                         h("input", { type: "number", className: "form-input", value: item.quantity, min: "0", step: "any", onFocus: e => e.target.select(), onChange: e => updateItem(idx, 'quantity', e.target.value) })),
-                    isPo && (h("div", { className: "form-group", style: { flex: 0.8, margin: 0 } },
-                        idx === 0 && h("label", { className: "form-label" }, "Unit"),
-                        h("input", { type: "text", className: "form-input", value: item.unit || '', list: "fgsb-unit-list", autoComplete: "off", onChange: e => updateItem(idx, 'unit', e.target.value), placeholder: "Nos" }))),
+                    (() => {
+                        // v1.10.85 (#148) - a product with a second unit: pick Pcs or Box.
+                        const linked = findLineProduct(products, item); // v1.10.86 (#199)
+                        const altProduct = hasAltUnit(linked) ? linked : null;
+                        if (altProduct) {
+                            return (h("div", { className: "form-group", style: { flex: 0.8, margin: 0 } },
+                                idx === 0 && h("label", { className: "form-label" }, "Unit"),
+                                h("select", { className: "form-input", "aria-label": `Unit of ${item.name}`, value: lineFactor(item) !== 1 ? altProduct.altUnit : (altProduct.unit || 'Nos'), onChange: e => { const unit = e.target.value; setForm(prev => ({ ...prev, items: prev.items.map((x, i) => (i === idx ? lineInUnit(x, altProduct, unit, { kind: 'purchase' }) : x)) })); } },
+                                    h("option", { value: altProduct.unit || 'Nos' }, altProduct.unit || 'Nos'),
+                                    h("option", { value: altProduct.altUnit },
+                                        altProduct.altUnit,
+                                        " of ",
+                                        Number(altProduct.altFactor)))));
+                        }
+                        return isPo && (h("div", { className: "form-group", style: { flex: 0.8, margin: 0 } },
+                            idx === 0 && h("label", { className: "form-label" }, "Unit"),
+                            h(ComboInput, { type: "text", className: "form-input", value: item.unit || '', options: unitNames, listLabel: "Units", onChange: e => updateItem(idx, 'unit', e.target.value), placeholder: "Nos" })));
+                    })(),
                     h("div", { className: "form-group", style: { flex: 1, margin: 0 } },
                         idx === 0 && h("label", { className: "form-label" }, "Rate"),
                         h("input", { type: "number", className: "form-input", value: item.rate, min: "0", step: "any", onFocus: e => e.target.select(), onChange: e => updateItem(idx, 'rate', e.target.value) })),
+                    showDiscountCol && (h("div", { className: "form-group", style: { flex: 1, margin: 0 } },
+                        idx === 0 && h("label", { className: "form-label" }, "Discount"),
+                        h("div", { style: { display: 'flex', gap: 2 } },
+                            h("input", { type: "number", className: "form-input", value: item.discount ?? '', min: "0", step: "any", placeholder: "0", "aria-label": `Discount on line ${idx + 1}`, style: { minWidth: 0 }, onFocus: e => e.target.select(), onChange: e => updateItem(idx, 'discount', e.target.value) }),
+                            h("select", { className: "form-input", value: item.discountType === 'percent' ? 'percent' : 'fixed', style: { width: 52, padding: '0 0.2rem' }, "aria-label": `Discount type on line ${idx + 1}`, onChange: e => updateItem(idx, 'discountType', e.target.value) },
+                                h("option", { value: "percent" }, "%"),
+                                h("option", { value: "fixed" }, "\u20B9"))))),
                     h("div", { className: "form-group", style: { flex: isPo ? 0.95 : 0.75, margin: 0 } },
                         idx === 0 && h("label", { className: "form-label" }, "Tax %"),
                         h("select", { className: "form-input", value: ['0', '0.1', '0.25', '3', '5', '12', '18', '28', '40'].includes(String(item.taxPercent)) ? String(item.taxPercent) : '__custom__', onChange: async (e) => {
@@ -1488,13 +1719,30 @@ export default function PurchaseBills() {
                     h("div", { className: "form-group", style: { flex: 0.7, margin: 0 } },
                         idx === 0 && h("label", { className: "form-label", title: "Compensation Cess \u2014 for tobacco, aerated, motor vehicles, coal, etc." }, "Cess %"),
                         h("input", { type: "number", className: "form-input", value: item.cessPercent ?? 0, min: "0", step: "any", onFocus: e => e.target.select(), onChange: e => updateItem(idx, 'cessPercent', e.target.value) })),
+                    showSerialCol && !isPo && (h("div", { className: "form-group", style: { flex: '1 1 100%', margin: 0 } },
+                        idx === 0 && h("label", { className: "form-label" }, "Serial No. / IMEI"),
+                        h("input", { type: "text", className: "form-input", value: item.serialNo || '', maxLength: 2000, "aria-label": `Serial numbers on line ${idx + 1}`, placeholder: "One per piece, separated by commas", onChange: e => updateItem(idx, 'serialNo', e.target.value) }))),
                     h("div", { style: { flex: '0 0 auto', marginBottom: idx === 0 ? 0 : 0 } }, form.items.length > 1 && (h("button", { className: "icon-btn icon-btn-red", onClick: () => removeItem(idx), title: "Remove" },
                         h(Trash2, { size: 15 }))))))),
                 h("button", { className: "btn btn-secondary", style: { fontSize: '0.8rem', padding: '0.35rem 0.75rem', marginTop: '0.25rem' }, onClick: addItem },
                     h(Plus, { size: 14 }),
                     " Add Item"),
+                !isPo && (h("div", { style: { display: 'flex', alignItems: 'center', gap: 8, marginTop: '0.75rem', flexWrap: 'wrap' } },
+                    h("label", { htmlFor: "bill-discount", style: { fontSize: '0.82rem', color: 'var(--text-muted)' } },
+                        "Discount on whole bill ",
+                        h(HelpButton, { title: "Discount on the whole bill", doc: "purchases#bill-discount", size: 14 })),
+                    h("input", { id: "bill-discount", type: "number", min: "0", step: "any", className: "form-input", style: { width: 110 }, placeholder: "0", value: form.billDiscountValue, onFocus: e => e.target.select(), onChange: e => updateField('billDiscountValue', e.target.value) }),
+                    h("select", { className: "form-input", "aria-label": "Discount on whole bill: amount or percent", style: { width: 72, paddingLeft: '0.7rem', paddingRight: '1.8rem' }, value: form.billDiscountType, onChange: e => updateField('billDiscountType', e.target.value) },
+                        h("option", { value: "fixed" }, "\u20B9"),
+                        h("option", { value: "percent" }, "%")),
+                    h("span", { style: { fontSize: '0.72rem', color: 'var(--text-muted)', fontStyle: 'italic' } }, "Before GST: shared over the items, GST on what is left."))),
                 h("div", { style: { marginTop: '1rem', padding: '0.75rem', background: 'var(--bg-secondary)', borderRadius: 8, fontSize: '0.85rem' } },
                     h("div", { style: { display: 'flex', gap: '1.5rem', flexWrap: 'wrap', alignItems: 'center' } },
+                        formTotals.billDiscount > 0.005 && (h("span", null,
+                            "Discount on bill: ",
+                            h("strong", null,
+                                "-",
+                                formatCurrency(formTotals.billDiscount)))),
                         h("span", null,
                             "Taxable: ",
                             h("strong", null, formatCurrency(formTotals.taxable))),
@@ -1516,16 +1764,23 @@ export default function PurchaseBills() {
                         h("span", null,
                             "Total: ",
                             h("strong", null, formatCurrency(formTotals.finalTotal))),
-                        formTds > 0 && (h(Fragment, null,
-                            h("span", null,
+                        (formTds > 0 || (!isPo && form.reverseCharge)) && (h(Fragment, null,
+                            !isPo && form.reverseCharge && h("span", null,
+                                "Less GST you pay (reverse charge): ",
+                                h("strong", null, formatCurrency(formTotals.tax + formTotals.cess))),
+                            formTds > 0 && h("span", null,
                                 "Less TDS: ",
                                 h("strong", null, formatCurrency(formTds))),
                             h("span", null,
                                 "Paid to supplier: ",
-                                h("strong", null, formatCurrency(formTotals.finalTotal - formTds)))))),
+                                h("strong", null, formatCurrency(formTotals.finalTotal - formTds - (!isPo && form.reverseCharge ? formTotals.tax + formTotals.cess : 0))))))),
                     !isPo && (h("div", { style: { marginTop: '0.6rem' } },
                         h("label", { style: { display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.8rem', cursor: 'pointer' } },
-                            h("input", { type: "checkbox", checked: !!form.tdsOn, onChange: e => updateField('tdsOn', e.target.checked), style: { width: 14, height: 14, accentColor: 'var(--primary)' } }),
+                            h("input", { type: "checkbox", checked: !!form.tdsOn, onChange: e => {
+                                    const on = e.target.checked;
+                                    const moved = on && tdsSectionsFor(form.date) === TDS_SECTIONS_2025 ? movedSection(form.tdsSection, form.tdsRate, 'tds') : null;
+                                    setForm(prev => ({ ...prev, tdsOn: on, ...(moved ? { tdsSection: moved.section, tdsRate: moved.rate } : {}) }));
+                                }, style: { width: 14, height: 14, accentColor: 'var(--primary)' } }),
                             h("span", null,
                                 h("strong", null, "TDS deducted"),
                                 " \u2014 you keep back income-tax TDS from this supplier's payment and deposit it yourself"),
@@ -1533,9 +1788,11 @@ export default function PurchaseBills() {
                         form.tdsOn && (h("div", { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.5rem', marginTop: '0.4rem' } },
                             h("select", { className: "form-input", "aria-label": "TDS section", value: form.tdsSection, onChange: e => {
                                     const code = e.target.value;
-                                    const sec = TDS_SECTIONS.find(x => x.code === code);
+                                    const sec = tdsSectionsFor(form.date).find(x => x.code === code);
                                     setForm(prev => ({ ...prev, tdsSection: code, tdsRate: code === 'custom' ? prev.tdsRate : (sec?.rate ?? prev.tdsRate), tdsAmountManual: '' }));
-                                } }, TDS_SECTIONS.map(x => h("option", { key: x.code, value: x.code }, x.label))),
+                                } },
+                                form.tdsSection && !tdsSectionsFor(form.date).some(x => x.code === form.tdsSection) && (h("option", { value: form.tdsSection, disabled: true }, sectionOptionLabel(form.tdsSection))),
+                                tdsSectionsFor(form.date).map(x => h("option", { key: x.code, value: x.code }, x.label))),
                             h("input", { type: "number", step: "any", min: "0", max: "100", className: "form-input", "aria-label": "TDS rate %", placeholder: "Rate %", value: form.tdsRate, onChange: e => setForm(prev => ({ ...prev, tdsRate: e.target.value, tdsAmountManual: '' })) }),
                             h("input", { type: "number", step: "any", min: "0", className: "form-input", "aria-label": "TDS amount", placeholder: `Amount (${formatCurrency(purchaseTdsAmount(formTotals.taxable, form.tdsRate))})`, value: form.tdsAmountManual, onChange: e => updateField('tdsAmountManual', e.target.value) }))))),
                     !isPo && (h("label", { style: { display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.78rem', cursor: 'pointer', marginTop: '0.6rem', color: '#475569' } },
@@ -1554,27 +1811,30 @@ export default function PurchaseBills() {
                 h("h3", null,
                     "Purchase Records ",
                     h(HelpButton, { title: "Purchase Records", doc: "purchases#purchase-list", size: 16 })),
-                h(TableExport, { title: "Purchase register", filename: "Purchases", landscape: true, subtitle: ownerProfile?.businessName || '', headers: ['Date', 'Supplier', 'GSTIN', 'Invoice No', 'Taxable Amount', 'CGST', 'SGST', 'IGST', 'Cess', 'Inter-state', 'Round-off', 'Total', 'Paid', 'Balance due', 'Status', 'Note'], rows: registerRows })),
+                purchases.length > 0 && (h("button", { type: "button", className: "btn btn-secondary", style: { marginLeft: 'auto' }, title: "A supplier's bills, payments and returns for a period, with what you still owe (PDF, print, WhatsApp, email)", onClick: () => setStatementFor(new Set(filtered.map(p => (p.supplierName || '').trim().toLowerCase())).size === 1 ? filtered[0].supplierName : '') },
+                    h(FileText, { size: 15 }),
+                    " Supplier statement")),
+                h(TableExport, { title: "Purchase register", filename: "Purchases", landscape: true, subtitle: ownerProfile?.businessName || '', headers: ['Date', 'Supplier', 'GSTIN', 'Invoice No', 'Taxable Amount', 'CGST', 'SGST', 'IGST', 'Cess', 'Inter-state', 'Reverse charge', 'Round-off', 'Total', 'Paid', 'Balance due', 'Status', 'Note'], rows: registerRows })),
             filtered.length === 0 ? (h("div", { className: "empty-state" },
                 h(ShoppingCart, { size: 48 }),
                 h("p", null, purchases.length === 0 ? 'No purchase bills recorded yet.' : 'No purchases match your filters.'),
                 purchases.length === 0 && h("button", { className: "btn btn-primary", onClick: openAdd },
                     h(Plus, { size: 18 }),
-                    " Add Purchase"))) : (h("div", { className: "table-scroll" },
+                    " Add Purchase Bill"))) : (h("div", { className: "table-scroll" },
                 h("table", { className: "data-table", style: { minWidth: '800px' } },
                     h("thead", null,
                         h("tr", null,
-                            h("th", null, "Date"),
-                            h("th", null, "Supplier"),
+                            h(SortTh, { col: "date", label: "Date", sort: sort, onSort: toggleSort }),
+                            h(SortTh, { col: "supplier", label: "Supplier", sort: sort, onSort: toggleSort }),
                             h("th", null, "GSTIN"),
-                            h("th", null, "Invoice No"),
-                            h("th", { style: { textAlign: 'right' } }, "Taxable"),
-                            h("th", { style: { textAlign: 'right' } }, "Tax"),
-                            h("th", { style: { textAlign: 'right' } }, "Total"),
-                            h("th", { style: { textAlign: 'right' } }, "Balance due"),
-                            h("th", null, "Status"),
-                            h("th", { className: "col-center" }, "Actions"))),
-                    h("tbody", null, filtered.map(p => {
+                            h(SortTh, { col: "invoice", label: "Invoice No", sort: sort, onSort: toggleSort }),
+                            h(SortTh, { col: "taxable", label: "Taxable", style: { textAlign: 'right' }, sort: sort, onSort: toggleSort }),
+                            h(SortTh, { col: "tax", label: "Tax", style: { textAlign: 'right' }, sort: sort, onSort: toggleSort }),
+                            h(SortTh, { col: "total", label: "Total", style: { textAlign: 'right' }, sort: sort, onSort: toggleSort }),
+                            h(SortTh, { col: "balance", label: "Balance due", style: { textAlign: 'right' }, sort: sort, onSort: toggleSort }),
+                            h(SortTh, { col: "status", label: "Status", sort: sort, onSort: toggleSort }),
+                            h("th", { className: "col-center col-sticky-actions" }, "Actions"))),
+                    h("tbody", null, sortedPurchases.map(p => {
                         const t = calcPurchaseTotal(p.items, !!p.applyRoundOff);
                         const st = purchaseStatus(p);
                         const bal = purchaseBalance(p);
@@ -1590,16 +1850,20 @@ export default function PurchaseBills() {
                             h("td", { style: { textAlign: 'right', color: bal > 0.005 ? 'var(--danger)' : 'var(--text-muted)' } }, bal > 0.005 ? formatCurrency(bal) : '-'),
                             h("td", null,
                                 h("select", { className: "status-select", value: st, "aria-label": `Payment status of ${p.invoiceNumber}`, style: { background: PAYMENT_STATUS_COLORS[st].bg, color: PAYMENT_STATUS_COLORS[st].color, borderColor: PAYMENT_STATUS_COLORS[st].color + '44' }, onChange: e => changePaymentStatus(p, e.target.value) }, PAYMENT_STATUSES.map(s => h("option", { key: s, value: s }, PURCHASE_STATUS_LABEL[s])))),
-                            h("td", null,
+                            h("td", { className: "col-sticky-actions" },
                                 h("div", { className: "table-actions" },
-                                    h("button", { className: "icon-btn", onClick: () => setViewPurchase(p), title: "View details (no download)" },
+                                    h("button", { className: "icon-btn icon-btn-blue", onClick: () => setViewPurchase(p), title: "View details (no download)", "aria-label": `View ${p.invoiceNumber}` },
                                         h(Eye, { size: 15 })),
-                                    h("button", { className: "icon-btn icon-btn-green", onClick: () => setPayPurchase(p), title: st === 'Paid' ? 'Payment history' : 'Record payment to supplier', "aria-label": "Payments to supplier" },
-                                        h(IndianRupee, { size: 15 })),
-                                    h("button", { className: "icon-btn icon-btn-blue", onClick: () => openEdit(p), title: "Edit" },
+                                    h("button", { className: "icon-btn icon-btn-blue", onClick: () => openEdit(p), title: "Edit", "aria-label": `Edit ${p.invoiceNumber}` },
                                         h(Edit3, { size: 15 })),
-                                    h("button", { className: "icon-btn icon-btn-red", onClick: () => handleDelete(p.id), title: "Delete" },
-                                        h(Trash2, { size: 15 }))))));
+                                    h("button", { className: "icon-btn icon-btn-green", onClick: () => setPayPurchase(p), title: st === 'Paid' ? 'Payment history' : 'Payment to supplier', "aria-label": `Payment for ${p.invoiceNumber}` },
+                                        h(IndianRupee, { size: 15 })),
+                                    h(ActionsMenu, { label: `More actions for ${p.invoiceNumber}`, items: [
+                                            // v1.10.85 (#168) - send goods back: a debit note against this bill.
+                                            // v1.10.86 - in More, with its words (the arrow icon read as Undo).
+                                            { label: 'Return to supplier (debit note)', icon: RotateCcw, onClick: () => setReturnBill(p), hidden: !canReturn(p) },
+                                            { label: 'Delete', icon: Trash2, tone: 'danger', onClick: () => handleDelete(p.id) },
+                                        ] })))));
                     })),
                     h("tfoot", null,
                         h("tr", { style: { fontWeight: 'bold', borderTop: '2px solid var(--border)' } },

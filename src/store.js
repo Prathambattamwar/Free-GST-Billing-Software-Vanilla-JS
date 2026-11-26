@@ -1,15 +1,21 @@
-// Business data facade. Calls are handled by the browser-local adapter in
-// src/services/localApi.js and persisted to this browser profile's IndexedDB.
+// File-based storage via local Express API server
+// All data persists as JSON files in the ./data/ folder
 
-import { getFinancialYearLabel, parseLocalDate, nextCounterValue, startFor, numberSeriesFor, counterKeyFor, formatDocNumber, INVOICE_TYPES, savedPdfNameFor, stockUpdates } from './utils.js';
+import { getFinancialYearLabel, parseLocalDate, nextCounterValue, startFor, numberSeriesFor, counterKeyFor, formatDocNumber, seriesNumberOf, INVOICE_TYPES, savedPdfNameFor, stockUpdates, appliedStock, stockDelta, isModuleEnabled, businessKeyOf } from './utils.js';
 import { poCounterKey, formatPoNumber } from './utils/purchaseOrders.js';
+import { dnCounterKey, formatDnNumber } from './utils/debitNotes.js';
+import { salesOrderOf, releaseChallansPlan, reabsorbChallansPlan } from './utils/salesOrders.js';
+import { DEFAULT_LEVEL_NAMES, normaliseLevelNames, priceLevelList } from './utils/priceLevels.js';
 
 import { logProblem } from './utils/problemLog.js';
+import { defaultTermsFor } from './utils/termsDefaults.js';
 
 const API = '/api';
 
-// v1.10.83 - failures from the browser-local data adapter go to the Problem
-// log: network errors and 5xx. 4xx is left alone - a 409
+export const updateProductsFromCsv = (changes, allowStock = false) => apiFetch(`${API}/products/price-update`, { method: 'POST', body: JSON.stringify({ changes, allowStock }) });
+
+// v1.10.83 - failures that are nobody's expected answer go to the Problem
+// log: no answer at all (server stopped) and 5xx. 4xx is left alone - a 409
 // duplicate number or a 404 is an answer the caller handles. Method, path and
 // status only, never the request body (it holds invoices and clients).
 const logApiProblem = (options, url, status, message) => {
@@ -33,23 +39,46 @@ async function apiFetch(url, options = {}) {
     // invoice number). Attach status so callers can branch on it.
     let body = null;
     try { body = await res.json(); } catch { /* non-JSON body */ }
+    // v1.10.85 - a phone removed on the PC (or whose pairing ran out): back to
+    // the pairing page instead of every screen failing.
+    if (res.status === 401 && body?.code === 'not-paired' && typeof location !== 'undefined') location.assign('/pair');
     const err = new Error(body?.error || `API error: ${res.status}`);
     err.status = res.status;
     err.body = body;
+    // v1.10.85 - the books are closed for that date: App.jsx says why, once
+    // for every screen (each screen's own 'Save failed' would not).
+    if (res.status === 423 && body?.code === 'period-locked' && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('fgsb:period-locked', { detail: body }));
+    }
     if (res.status >= 500) {
       logApiProblem(options, url, res.status, err.message);
       err.problemLogged = true;
     }
     throw err;
   }
+  // v1.10.86 - a saved bill, product, template or purchase: the bell and the
+  // menu's red dots look again (App.jsx waits a moment, so a burst is one look).
+  if (options.method && options.method !== 'GET' && DATA_SAVED_PATHS.test(url) && typeof window !== 'undefined') {
+    window.dispatchEvent(new Event(DATA_SAVED_EVENT));
+  }
   return res.json();
 }
+const DATA_SAVED_PATHS = /\/api\/(bills|products|recurring|purchases|receipts|debit-notes|stock-adjustments|bank-statements|cash-book|expenses|productions|import|trash)\b/;
+export const DATA_SAVED_EVENT = 'fgsb:data-saved';
 
-// ---- PIN lock (v1.10.77, #84; verified in the browser against local data) ----
+// ---- Close the books + edit history (v1.10.85; checked by the server) ----
+export const getPeriodLock = () => apiFetch(`${API}/period-lock`);
+export const setPeriodLock = (upTo, pin) => apiFetch(`${API}/period-lock`, { method: 'POST', body: JSON.stringify({ upTo, ...(pin ? { pin } : {}) }) });
+export const getEditHistory = (limit = 200) => apiFetch(`${API}/edit-history?limit=${encodeURIComponent(limit)}`);
+
+// ---- PIN lock (v1.10.77, #84; checked by the server, see AppLock.jsx) ----
 export const getLockStatus = () => apiFetch(`${API}/lock`);
+export const resetAppLock = () => apiFetch(`${API}/lock/reset`, { method: 'POST' });
 export const verifyPin = (pin) => apiFetch(`${API}/lock/verify`, { method: 'POST', body: JSON.stringify({ pin }) });
 // pin null turns the lock off. currentPin is needed when a PIN is already set.
 export const setLockPin = (pin, currentPin) => apiFetch(`${API}/lock/set`, { method: 'POST', body: JSON.stringify({ pin, currentPin }) });
+
+// ---- Phone / tablet access (v1.10.85; server.js PHONE / TABLET ACCESS) ----
 
 // ---- Invoice Number Settings ----
 const DEFAULT_INV_SETTINGS = {
@@ -225,6 +254,60 @@ export const setMenuOrder = (order) => {
   } catch { /* ignore */ }
   menuChanged();
 };
+// v1.10.86 - the sidebar groups that are closed (list of group ids, see
+// utils/menuGroups.js). Mirrored to the data folder like the order.
+const MENU_CLOSED_KEY = 'gst_menuClosed';
+export const getMenuClosed = () => {
+  try {
+    const v = JSON.parse(localStorage.getItem(MENU_CLOSED_KEY) || '[]');
+    return Array.isArray(v) ? v : [];
+  } catch { return []; }
+};
+export const setMenuClosed = (ids) => {
+  try { localStorage.setItem(MENU_CLOSED_KEY, JSON.stringify(ids || [])); } catch { /* ignore */ }
+  menuChanged(); // v1.10.86 - the sidebar and "Customise menu" both show it
+};
+// v1.10.86 - items taken out of the menu in "Customise menu" (list of item
+// ids, see utils/menuGroups.js hiddenItems). Mirrored like the order.
+const MENU_HIDDEN_KEY = 'gst_menuHidden';
+export const getMenuHidden = () => {
+  try {
+    const v = JSON.parse(localStorage.getItem(MENU_HIDDEN_KEY) || '[]');
+    return Array.isArray(v) ? v : [];
+  } catch { return []; }
+};
+export const setMenuHidden = (ids) => {
+  try {
+    if (ids?.length) localStorage.setItem(MENU_HIDDEN_KEY, JSON.stringify(ids));
+    else localStorage.removeItem(MENU_HIDDEN_KEY);
+  } catch { /* ignore */ }
+  menuChanged();
+};
+// v1.10.86 - the red dots in the menu (Settings -> Appearance); on unless
+// switched off. This computer only; the bell is not affected.
+const MENU_DOTS_KEY = 'gst_menuDots';
+export const getMenuDots = () => { try { return localStorage.getItem(MENU_DOTS_KEY) !== '0'; } catch { return true; } };
+export const setMenuDots = (on) => {
+  try { localStorage.setItem(MENU_DOTS_KEY, on ? '1' : '0'); } catch { /* ignore */ }
+  menuChanged();
+};
+
+// v1.10.85 - the names of the price levels (Settings -> Features -> Price
+// levels): three strings, '' = level not used. One per PC like the switches,
+// mirrored to the data folder by prefsMirror.
+const PRICE_LEVELS_KEY = 'gst_priceLevels';
+export const getPriceLevelNames = () => {
+  try {
+    const v = JSON.parse(localStorage.getItem(PRICE_LEVELS_KEY) || 'null');
+    return normaliseLevelNames(Array.isArray(v) ? v : DEFAULT_LEVEL_NAMES);
+  } catch { return normaliseLevelNames(DEFAULT_LEVEL_NAMES); }
+};
+export const setPriceLevelNames = (names) => {
+  try { localStorage.setItem(PRICE_LEVELS_KEY, JSON.stringify(normaliseLevelNames(names))); } catch { /* ignore */ }
+};
+// The levels to offer now: [] while Price levels is switched off.
+export const activePriceLevels = () => (isModuleEnabled('priceLevels', getEnabledModules())
+  ? priceLevelList(getPriceLevelNames()) : []);
 
 // ---- Invoice counter ----
 // Uses the atomic /meta/:key/increment endpoint so two concurrent saves can't both
@@ -242,11 +325,39 @@ export const setMenuOrder = (order) => {
 // `invoiceDate` (YYYY-MM-DD) picks the financial year printed in the number;
 // without it, today's. A back-dated invoice (31 March, made on 2 April) took
 // the new year's label, so its number disagreed with its own date.
-export const getNextInvoiceNumber = async (prefix = 'INV', { peek = false, explicitPrefix = false, invoiceType = null, businessKey = '', invoiceDate = '' } = {}) => {
+// The series a document numbers in: its counter key, start, and how a counter
+// value is written out (shared by the two functions below).
+const seriesOf = async (prefix, { explicitPrefix = false, invoiceType = null, businessKey = '', invoiceDate = '' }) => {
   const settings = await getNumberSeries(businessKey);
   const typePrefix = settings.own ? (INVOICE_TYPES[invoiceType]?.prefix || prefix) : prefix;
-  const key = counterKeyFor(typePrefix, settings, businessKey);
-  const start = invoiceType ? startFor(invoiceType, settings) : 1;
+  return {
+    key: counterKeyFor(typePrefix, settings, businessKey),
+    start: invoiceType ? startFor(invoiceType, settings) : 1,
+    format: (next) => formatDocNumber({
+      settings, typePrefix, next,
+      explicitPrefix: settings.own ? false : explicitPrefix,
+      fyLabel: getFinancialYearLabel(invoiceDate ? parseLocalDate(invoiceDate) : new Date()),
+    }),
+  };
+};
+
+// v1.10.84 (#145) - a number typed by hand that fits the series and is higher
+// than the counter (the user skipped ahead, or carried on from a paper bill
+// book) moves the counter up to it, so the next invoice follows it. A lower
+// one (an old paper bill entered late) leaves the series alone.
+// Two steps, so the counter moves only once the invoice is really saved:
+// typedNumberInSeries looks (n = the typed number's place in the series, or
+// null; next = what the series would give now), raiseInvoiceCounter moves it.
+export const typedNumberInSeries = async (typed, prefix = 'INV', opts = {}) => {
+  const { key, start, format } = await seriesOf(prefix, opts);
+  const { value } = await apiFetch(`${API}/meta/${encodeURIComponent(key)}`);
+  return { key, n: seriesNumberOf(typed, format), next: nextCounterValue(value, start) };
+};
+export const raiseInvoiceCounter = (key, n) =>
+  apiFetch(`${API}/meta/${encodeURIComponent(key)}/raise`, { method: 'POST', body: JSON.stringify({ value: n }) });
+
+export const getNextInvoiceNumber = async (prefix = 'INV', { peek = false, explicitPrefix = false, invoiceType = null, businessKey = '', invoiceDate = '' } = {}) => {
+  const { key, start, format } = await seriesOf(prefix, { explicitPrefix, invoiceType, businessKey, invoiceDate });
   let next;
   if (peek) {
     // Encoded: a key can hold a business name ("M/S Sharma", "Shop #12").
@@ -264,11 +375,7 @@ export const getNextInvoiceNumber = async (prefix = 'INV', { peek = false, expli
   // v1.10.53 — the financial year label is India's April-March FY.
   // v1.10.79 — formatting lives in utils (formatDocNumber), shared with the
   // server's recurring invoices.
-  return formatDocNumber({
-    settings, typePrefix, next,
-    explicitPrefix: settings.own ? false : explicitPrefix,
-    fyLabel: getFinancialYearLabel(invoiceDate ? parseLocalDate(invoiceDate) : new Date()),
-  });
+  return format(next);
 };
 
 // ---- Bills ----
@@ -296,8 +403,8 @@ export const triggerBackup = async () => apiFetch(`${API}/backups/now`, { method
 // v1.10.22 — manual delete for a specific backup date.
 export const deleteBackup = async (date) => apiFetch(`${API}/backups/${encodeURIComponent(date)}`, { method: 'DELETE' });
 
-// v1.10.80 (#99) - compatibility setting retained for older backups.
-// Browser storage cannot write to arbitrary folders on the computer.
+// v1.10.80 (#99) - a second copy of each daily backup in a folder you choose
+// (e.g. on drive D:). setBackupFolder('') turns it off.
 export const getBackupFolder = async () => apiFetch(`${API}/backup-folder`);
 export const setBackupFolder = async (folder) => apiFetch(`${API}/backup-folder`, { method: 'POST', body: JSON.stringify({ path: folder }) });
 export const getTrashedBills = async () => apiFetch(`${API}/trash`);
@@ -337,6 +444,13 @@ export const saveTermsTemplate = async (template) => {
   const res = await apiFetch(`${API}/templates`, { method: 'POST', body: JSON.stringify(template) });
   if (res.id) template.id = res.id;
   return template;
+};
+
+// v1.10.86 - a business type rewords the starting "Standard Terms" to the
+// matching ready-made terms, unless the user wrote or changed them.
+export const applyTypeTerms = async (typeId) => {
+  const next = defaultTermsFor(await getTermsTemplates(), typeId);
+  if (next) await saveTermsTemplate(next);
 };
 
 export const deleteTermsTemplate = async (id) => {
@@ -386,7 +500,10 @@ export const getAllPurchases = async () => {
 };
 
 export const savePurchase = async (purchase) => {
-  const res = await apiFetch(`${API}/purchases`, { method: 'POST', body: JSON.stringify(purchase) });
+  // v1.10.85 (#168) - _returned (what debit notes take off, see
+  // utils/debitNotes.js withReturns) is worked out when shown, never saved.
+  const { _returned, ...stored } = purchase || {};
+  const res = await apiFetch(`${API}/purchases`, { method: 'POST', body: JSON.stringify(stored) });
   if (res.id) purchase.id = res.id;
   return purchase;
 };
@@ -413,6 +530,40 @@ export const getNextPoNumber = async ({ peek = false, businessKey = '', date = '
   return formatPoNumber(next, date);
 };
 
+// ---- v1.10.85 Stock adjustments (damaged, lost, found, ...) ----
+// Saving one moves the product's stock by its quantity; deleting puts it back
+// (applyStockChanges, as invoices and debit notes do). Both use the record the
+// server keeps (it works out stockApplied), so what is put back is exactly
+// what was moved; a delete of one no longer on file fails and moves nothing.
+export const getAllStockAdjustments = async () => apiFetch(`${API}/stock-adjustments`);
+export const saveStockAdjustment = async (adj) => {
+  const res = await apiFetch(`${API}/stock-adjustments`, { method: 'POST', body: JSON.stringify(adj) });
+  const saved = res.record || { ...adj, id: res.id };
+  await applyStockChanges(saved.stockApplied);
+  return saved;
+};
+export const deleteStockAdjustment = async (adj) => {
+  const res = await apiFetch(`${API}/stock-adjustments/${encodeURIComponent(adj.id)}`, { method: 'DELETE' });
+  const moved = res?.record?.stockApplied || {};
+  await applyStockChanges(Object.fromEntries(Object.entries(moved).map(([id, q]) => [id, -q])));
+};
+
+// ---- v1.10.85 (#168) Debit notes (purchase returns) ----
+export const getAllDebitNotes = async () => apiFetch(`${API}/debit-notes`);
+export const saveDebitNote = async (note) => {
+  const res = await apiFetch(`${API}/debit-notes`, { method: 'POST', body: JSON.stringify(note) });
+  return res.id ? { ...note, id: res.id } : note;
+};
+export const deleteDebitNote = async (id) => apiFetch(`${API}/debit-notes/${encodeURIComponent(id)}`, { method: 'DELETE' });
+// The next debit note number for a business, DN/26-27/0001 (peek: shown, not used up).
+export const getNextDnNumber = async ({ peek = false, businessKey = '', date = '' } = {}) => {
+  const key = encodeURIComponent(dnCounterKey(businessKey));
+  const next = peek
+    ? nextCounterValue((await apiFetch(`${API}/meta/${key}`)).value)
+    : (await apiFetch(`${API}/meta/${key}/increment`, { method: 'POST', body: JSON.stringify({}) })).value;
+  return formatDnNumber(next, date);
+};
+
 // ---- Recurring Invoices ----
 export const getAllRecurring = async () => {
   return apiFetch(`${API}/recurring`);
@@ -424,7 +575,7 @@ export const saveRecurring = async (item) => {
   return item;
 };
 
-// "Generate Now": the local data adapter makes the invoice with the same code as the daily
+// "Generate Now": the server makes the invoice with the same code as the daily
 // auto-fire, so both give identical invoices. Resolves to { invoiceNumber }.
 export const generateRecurringNow = async (id) => {
   return apiFetch(`${API}/recurring/${encodeURIComponent(id)}/generate`, { method: 'POST', body: JSON.stringify({}) });
@@ -440,10 +591,23 @@ export const getAllCashEntries = () => apiFetch(`${API}/cash-book`);
 export const saveCashEntry = async (entry) => (await apiFetch(`${API}/cash-book`, { method: 'POST', body: JSON.stringify(entry) })).entry;
 export const deleteCashEntry = (id) => apiFetch(`${API}/cash-book/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
+// ---- v1.10.85 (#175) Bank matching: imported statements and their matches ----
+export const getAllBankStatements = () => apiFetch(`${API}/bank-statements`);
+export const saveBankStatement = async (statement) => {
+  const res = await apiFetch(`${API}/bank-statements`, { method: 'POST', body: JSON.stringify(statement) });
+  return res.id ? { ...statement, id: res.id } : statement;
+};
+export const deleteBankStatement = (id) => apiFetch(`${API}/bank-statements/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
 // ---- Receipts / Payment Vouchers ----
 export const getAllReceipts = async () => {
   return apiFetch(`${API}/receipts`);
 };
+
+// v1.10.86 (#202) - reserve the next receipt number of the RCP series, as
+// "New receipt" on the Receipts page does: the business's own numbering when
+// it has one. `owner` is that business (a profile: gstin, businessName).
+export const reserveReceiptNo = (owner) => getNextInvoiceNumber('RCP', { businessKey: businessKeyOf(owner) });
 
 export const saveReceipt = async (receipt) => {
   const res = await apiFetch(`${API}/receipts`, { method: 'POST', body: JSON.stringify(receipt) });
@@ -463,23 +627,99 @@ export const trashSavedPdf = (bill) => apiFetch(`${API}/trash-pdf`, {
   method: 'POST', body: JSON.stringify(savedPdfNameFor(bill)),
 });
 
+// v1.10.84 - an invoice to Trash (kept 30 days; Settings -> Data & Backups ->
+// Trash bin restores it). Its stock goes back first, as when an invoice is
+// cancelled; the trashed copy records what was put back, so restoring it takes
+// exactly that out again. Used by the Invoices list and the Clients page.
+// Returns { stockWarning } when the stock could not be put back.
+export const trashBill = async (bill) => {
+  const returned = bill?.data ? appliedStock(bill) : {};
+  const moves = Object.keys(returned).length > 0;
+  if (moves) await saveBill({ ...bill, data: { ...bill.data, stockApplied: {}, stockReturnedOnDelete: returned } }, { overwrite: true });
+  try { await deleteBill(bill.id); } catch (err) { if (moves) await saveBill(bill, { overwrite: true }).catch(() => {}); throw err; }
+  let stockWarning = false;
+  if (moves) await applyStockChanges(stockDelta(returned, {})).catch(() => { stockWarning = true; });
+  // v1.10.85 - challans this invoice took over from a sales order count again.
+  await syncTakenChallans(bill, true).catch(() => { stockWarning = true; });
+  trashSavedPdf(bill).catch(() => {});
+  return { stockWarning };
+};
+
+// v1.10.85 - an invoice made from a sales order that took over the order's
+// challans is cancelled or deleted (gone: true): the challans are released and
+// count again; it comes back (gone: false): they are taken in again. See
+// releaseChallansPlan in utils/salesOrders.js. Returns how many changed.
+export const syncTakenChallans = async (invoice, gone) => {
+  if (!salesOrderOf(invoice) || (!gone && (invoice.status || '') === 'cancelled')) return 0;
+  const bills = await getAllBills();
+  const { patches, changes } = gone ? releaseChallansPlan(invoice, bills) : reabsorbChallansPlan(invoice, bills);
+  for (const p of patches) await saveBill(p, { overwrite: true });
+  await applyStockChanges(changes);
+  return patches.length;
+};
+
+// v1.10.84 - an invoice back from the Trash (the Trash tab on the Invoices
+// screen, and Settings -> Data & Backups -> Trash bin). Back in the books, so
+// the stock its delete put back is taken out again - only what that delete
+// recorded (stockReturnedOnDelete): invoices deleted before it was recorded
+// never had their stock put back. `bill` is the Trash list's entry.
+export const restoreBillFromTrash = async (bill) => {
+  await restoreTrashedBill(bill.id);
+  const { _trashedAt: _when, ...kept } = bill;
+  const back = kept.data?.stockReturnedOnDelete;
+  if (back && Object.keys(back).length) {
+    const { stockReturnedOnDelete: _gone, ...data } = kept.data;
+    await saveBill({ ...kept, data: { ...data, stockApplied: back } }, { overwrite: true });
+    await applyStockChanges(stockDelta({}, back)).catch(() => {});
+  }
+  await syncTakenChallans(kept, false).catch(() => {});
+};
+
 export const deleteReceipt = async (id) => {
   return apiFetch(`${API}/receipts/${encodeURIComponent(id)}`, { method: 'DELETE' });
 };
 
 // ---- Business Profiles (multi-business) ----
-export const getAllProfiles = async () => {
-  return apiFetch(`${API}/profiles`);
-};
+// v1.10.85 (#125) - without the companies hidden behind a PIN (unless opened
+// in this window); the company switcher needs them all (WithHidden).
+export const getAllProfilesWithHidden = () => apiFetch(`${API}/profiles`);
+export const getAllProfiles = async () => visibleProfiles(await getAllProfilesWithHidden());
 
 export const saveBusinessProfile = async (profile) => {
-  const res = await apiFetch(`${API}/profiles`, { method: 'POST', body: JSON.stringify(profile) });
+  const res = await apiFetch(`${API}/profiles`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...hiddenKeyHeader(profile.id) }, body: JSON.stringify(profile) });
   if (res.id) profile.id = res.id;
+  if (openedHidden.has(profile.id)) openedHidden.set(profile.id, { ...openedHidden.get(profile.id), profile: { ...profile, hidden: true } });
   return profile;
 };
 
+// v1.10.85 (#125) - companies hidden behind their own PIN. The list from the
+// server marks them `hidden`; they are left out of every company list until
+// their PIN is typed in this window, and hidden again on a switch to another
+// company or a restart (opened ids live only in memory).
+// Opened in this window: id -> { profile, key }. The server lists a hidden
+// company as a bare entry; opening it with its PIN gives its details and a
+// key that saving or deleting it needs (X-Hidden-Key).
+const openedHidden = new Map();
+export const visibleProfiles = (list) => (list || [])
+  .map((p) => (p.hidden && openedHidden.has(p.id) ? { ...openedHidden.get(p.id).profile, isActive: p.isActive } : p))
+  .filter((p) => !p.hidden || openedHidden.has(p.id));
+export const hasHiddenProfiles = (list) => (list || []).some((p) => p.hidden && !openedHidden.has(p.id));
+export const isOpenedHidden = (id) => openedHidden.has(id);
+export const openHiddenCompanies = async (pin) => {
+  const res = await apiFetch(`${API}/profiles/unlock`, { method: 'POST', body: JSON.stringify({ pin }) });
+  (res.profiles || []).forEach(({ key, ...profile }) => openedHidden.set(profile.id, { profile, key }));
+  return res.ids || [];
+};
+export const keepOpened = (profile, key) => { if (profile?.id && key) openedHidden.set(profile.id, { profile, key }); };
+export const hideCompaniesAgain = (keepId) => {
+  for (const id of [...openedHidden.keys()]) if (id !== keepId) openedHidden.delete(id);
+};
+const hiddenKeyHeader = (id) => (openedHidden.has(id) ? { 'X-Hidden-Key': openedHidden.get(id).key } : {});
+export const setCompanyHidePin = (id, pin, currentPin) => apiFetch(`${API}/profiles/${encodeURIComponent(id)}/hide-pin`,
+  { method: 'POST', body: JSON.stringify({ pin, currentPin }) });
+
 export const deleteBusinessProfile = async (id) => {
-  return apiFetch(`${API}/profiles/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  return apiFetch(`${API}/profiles/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json', ...hiddenKeyHeader(id) } });
 };
 
 // ---- Export / Import ----
@@ -494,7 +734,9 @@ const EXPORTABLE_LOCALSTORAGE_KEYS = [
   'gst_enabledModules',              // map of disabled feature toggles
   'gst_businessType',                // v1.10.83 — business type picked in Settings / first run
   'gst_offlineMode',                 // v1.10.83 — Offline mode: no automatic internet use
-  'gst_menuOrder',                   // v1.10.83 — sidebar order
+  'gst_menuOrder',                   // v1.10.83 — sidebar order (v1.10.86: with groups)
+  'gst_menuClosed',                  // v1.10.86 — sidebar groups that are closed
+  'gst_menuHidden',                  // v1.10.86 — items taken out of the menu (Customise menu)
   'gst_filing_status',               // GSTR-1/3B "Filed" pill states per period key
   'gst_printSettings',               // v1.8.4 — thermal printer defaults (font, weight, all-caps, etc.)
   'gst_itrCalcInputs',               // v1.7.0 — regime calculator inputs
@@ -569,15 +811,20 @@ const getAppVersion = async () => {
 // v1.10.44 and registers no protocol, so on every install made since then the
 // button did nothing at all - no error, no window, nothing. The Control Panel
 // already ran the update properly through the server; these now do the same.
+// v1.10.86 - a progress window shows each step (updateNotice.js
+// Static GitHub Pages edition: releases are published as website files by the
+// maintainer. A browser cannot run desktop installers or restart a server.
 export const runUpdateNow = async () => {
-  // Static browser deployments cannot replace their own hosted files. Open the
-  // release page; the site owner deploys new builds and the PWA picks them up.
-  try {
-    window.open('https://github.com/IamRamgarhia/Free-GST-Billing-Software/releases/latest', '_blank', 'noopener,noreferrer');
-    return { ok: true, external: true };
-  } catch (error) {
-    return { ok: false, error: error?.message || 'Could not open GitHub Releases.' };
-  }
+  const url = 'https://github.com/IamRamgarhia/Free-GST-Billing-Software/releases/latest';
+  let opened = false;
+  try { opened = !!window.open(url, '_blank', 'noopener,noreferrer'); } catch { /* popup may be blocked */ }
+  return {
+    ok: opened,
+    hint: true,
+    error: opened
+      ? 'Check the latest release. After the website is updated, refresh this page to load it.'
+      : 'Open the project Releases page to check for an update, then refresh after the site owner publishes it.',
+  };
 };
 
 export const exportAllData = async (selection) => {
@@ -593,14 +840,18 @@ export const exportAllData = async (selection) => {
   if (sel.products)       data.products = all.products;
   // v1.10.83 (#115) - production entries travel with products: stock is the result of both.
   if (sel.products && all.productions) data.productions = all.productions;
+  if (sel.products && all.stockAdjustments) data.stockAdjustments = all.stockAdjustments; // v1.10.85 - so do stock adjustments
   if (sel.expenses)       data.expenses = all.expenses;
   if (sel.expenses)       data.cashBook = all.cashBook; // v1.10.83 - the cash book travels with expenses
+  if (sel.expenses)       data.bankStatements = all.bankStatements; // v1.10.85 (#175) - so do bank statements
   if (sel.recurring)      data.recurring = all.recurring;
   if (sel.receipts)       data.receipts = all.receipts;
   if (sel.purchases)      data.purchases = all.purchases;
   if (sel.purchases)      data.purchaseOrders = all.purchaseOrders; // v1.10.83 (#112) - travel with purchase bills
+  if (sel.purchases)      data.debitNotes = all.debitNotes; // v1.10.85 (#168) - so do purchase returns
   if (sel.meta)           data.meta = all.meta; // includes regionMode, enabledModules, etc. on server
   if (sel.localStorage)   data.localStorage = collectLocalStorage();
+  if (sel.meta && all.editHistory) data.editHistory = all.editHistory;
 
   return JSON.stringify(data, null, 2);
 };
@@ -626,6 +877,10 @@ export const inspectBackup = (jsonString) => {
       purchases: Array.isArray(data.purchases) ? data.purchases.length : 0,
       recurring: Array.isArray(data.recurring) ? data.recurring.length : 0,
       receipts: Array.isArray(data.receipts) ? data.receipts.length : 0,
+      debitNotes: Array.isArray(data.debitNotes) ? data.debitNotes.length : 0,
+      stockAdjustments: Array.isArray(data.stockAdjustments) ? data.stockAdjustments.length : 0,
+      bankStatements: Array.isArray(data.bankStatements) ? data.bankStatements.length : 0,
+      editHistory: Array.isArray(data.editHistory) ? data.editHistory.length : 0,
       meta: data.meta ? Object.keys(data.meta).length : 0,
       localStorage: data.localStorage ? Object.keys(data.localStorage).length : 0,
     },
@@ -648,13 +903,17 @@ export const importData = async (jsonString, selection) => {
   if (sel.termsTemplates && data.termsTemplates) payload.termsTemplates = data.termsTemplates;
   if (sel.products && data.products)             payload.products = data.products;
   if (sel.products && data.productions)          payload.productions = data.productions;
+  if (sel.products && data.stockAdjustments)     payload.stockAdjustments = data.stockAdjustments;
   if (sel.expenses && data.expenses)             payload.expenses = data.expenses;
   if (sel.expenses && data.cashBook)             payload.cashBook = data.cashBook;
+  if (sel.expenses && data.bankStatements)       payload.bankStatements = data.bankStatements;
   if (sel.recurring && data.recurring)           payload.recurring = data.recurring;
   if (sel.receipts && data.receipts)             payload.receipts = data.receipts;
   if (sel.purchases && data.purchases)           payload.purchases = data.purchases;
   if (sel.purchases && data.purchaseOrders)      payload.purchaseOrders = data.purchaseOrders;
+  if (sel.purchases && data.debitNotes)          payload.debitNotes = data.debitNotes;
   if (sel.meta && data.meta)                     payload.meta = data.meta;
+  if (sel.meta && data.editHistory)              payload.editHistory = data.editHistory;
 
   const result = await apiFetch(`${API}/import`, { method: 'POST', body: JSON.stringify(payload) });
 

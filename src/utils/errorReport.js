@@ -8,7 +8,6 @@
 // business or a person may survive into it.
 
 export const ISSUE_NEW_URL = 'https://github.com/IamRamgarhia/Free-GST-Billing-Software/issues/new';
-export const TROUBLESHOOTING_URL = 'https://dicecodes.com/free-gst-software-documentation/troubleshooting.html';
 export const MAX_ISSUE_URL = 7500;
 export const MAX_LOG_ENTRIES = 50;
 
@@ -35,7 +34,7 @@ export function redact(text) {
   return s;
 }
 
-// First few lines of a stack are where it broke; the rest is UI runtime internals
+// First few lines of a stack are where it broke; the rest is framework internals
 // that only make the report URL too long.
 export function shortStack(stack, lines = 8) {
   return String(stack || '').split('\n').map((l) => l.trim()).filter(Boolean).slice(0, lines).join('\n');
@@ -68,34 +67,31 @@ export function systemOption(ua = '') {
 export const isChunkLoadError = (msg) =>
   /dynamically imported module|Loading chunk|Failed to fetch dynamically|Importing a module script failed/i.test(String(msg || ''));
 
-// Known problems -> a section of the Troubleshooting page. docs-site/build.mjs
-// fails the docs build if any `id` here is not a section on that page.
-// First match wins, so the chunk-load case sits above "Failed to fetch".
+// Known problems and short in-app fixes. First match wins.
 export const KNOWN_PROBLEMS = [
   { id: 'app-out-of-date', test: /dynamically imported module|Loading chunk|Importing a module script failed/i,
     fix: 'The browser kept an old copy of the app after an update. Press Ctrl+F5 to reload it.' },
   { id: 'cannot-connect', test: /failed to fetch|networkerror|load failed|network request failed|ECONNREFUSED|ERR_CONNECTION_REFUSED|app not running/i,
-    fix: "The app's engine is not running. Open GST Billing from its shortcut." },
+    fix: 'The browser could not load a required resource. Check your internet connection, then refresh the page.' },
   { id: 'payload-too-large', test: /request body too large|payload too large|entity too large|-> 413\b|status 413/i,
     fix: 'What you saved is too big, usually a large logo or signature image. Use a smaller image.' },
   { id: 'disk-full', test: /ENOSPC|no space left|disk is full/i,
-    fix: 'The disk is full. Clear some space (empty the Recycle Bin), then try again.' },
+    fix: 'The device is low on storage. Make some space available, then try again.' },
   { id: 'no-permission', test: /EACCES|EPERM|permission denied|operation not permitted|not allowed to write/i,
-    fix: 'The app is not allowed to write to its folder. Move the app folder to Documents, or allow it in your antivirus.' },
+    fix: 'The browser denied access to local storage. Allow site data for this website in your browser settings, then reload.' },
   { id: 'damaged-file', test: /damaged file/i,
     fix: 'One saved file is damaged and was skipped. Restore it from a backup.' },
-  { id: 'port-in-use', test: /EADDRINUSE|address already in use|port \d+ is busy/i,
-    fix: 'Another program uses the app\'s port. The app picks an available one; open the app again from its icon.' },
-  { id: 'old-node', test: /node\.js[^\n]*too old|unsupported engine|npm ERR!|ERR_REQUIRE_ESM|requires node/i,
-    fix: 'This computer has an old Node.js. Open App again, or install Node.js LTS from nodejs.org.' },
+  { id: 'browser-storage', test: /indexeddb|quotaexceeded|storage.*blocked|could not open local browser storage/i,
+    fix: 'Browser storage is unavailable or full. Allow site data for this website and export a backup regularly.' },
+
   { id: 'pin-forgotten', test: /wrong pin|incorrect pin|forgot[^\n]*pin|too many[^\n]*attempts/i,
-    fix: 'PIN lock problem. The guide explains how to reset a forgotten PIN.' },
+    fix: 'Use the Forgot PIN option on the lock screen to remove the browser PIN while keeping the saved business records.' },
 ];
 
 export function matchKnownProblem(text) {
   const s = String(text || '');
   const hit = KNOWN_PROBLEMS.find((k) => k.test.test(s));
-  return hit ? { id: hit.id, fix: hit.fix, url: `${TROUBLESHOOTING_URL}#${hit.id}` } : null;
+  return hit ? { id: hit.id, fix: hit.fix } : null;
 }
 
 // A logged entry's status counts too: a 413 says "too large" even when the
