@@ -928,7 +928,7 @@ export default function ClientsView({ onEdit, onDuplicate, onNew, onPrint, onNew
         h(ClientModal, { show: showForm, onClose: closeForm, onSave: handleModalSave, client: modalClient, isEditing: !!editingClientId, defaultCountry: profileCountry, businessKey: businessKeyOf(profileForStatement) }),
         pdfPreview && h(PdfPreviewModal, { ...pdfPreview, onClose: () => setPdfPreview(null) }),
         viewBill?.data && (h(PrintPreviewModal, { isOpen: true, onClose: () => setViewBill(null), onPrint: onPrint ? () => onPrint(viewBill) : undefined, cancelled: isCancelledBill(viewBill), einvoice: viewBill.einvoice, profile: viewBill.data.profile, client: viewBill.data.client || {}, details: viewBill.data.details || {}, items: viewBill.data.items || [], totals: viewBill.data.totals || {}, invoiceType: viewBill.invoiceType || viewBill.data.invoiceType || 'tax-invoice', customTerms: viewBill.data.customTerms, customNotes: viewBill.data.customNotes, extraSections: viewBill.data.extraSections || [], invoiceOptions: viewBill.data.invoiceOptions || {} })),
-        h("div", { className: "glass-panel p-4 mb-6 client-search-bar" },
+        h("div", { className: "clients-table-toolbar" },
             h("div", { className: "search-box", style: { maxWidth: '400px' } },
                 h(Search, { size: 16, className: "search-icon" }),
                 h("input", { type: "text", placeholder: "Search clients...", value: search, onChange: e => setSearch(e.target.value), className: "search-input" }),
@@ -941,7 +941,7 @@ export default function ClientsView({ onEdit, onDuplicate, onNew, onPrint, onNew
             h("div", { className: "empty-state" },
                 h(Users, { size: 48 }),
                 h("p", null, "No clients found."),
-                h("button", { className: "btn btn-secondary", onClick: () => openAddClient(), style: { marginTop: '0.5rem' } },
+                h("button", { className: "btn btn-secondary empty-state-action", onClick: () => openAddClient(), style: { marginTop: '0.5rem' } },
                     h(Plus, { size: 16 }),
                     " Add Your First Client")))) : (h("div", { className: "client-list" }, sortedClients.map(clientName => {
             const stats = getClientStats(clientName);

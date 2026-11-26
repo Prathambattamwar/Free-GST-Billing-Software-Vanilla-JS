@@ -459,7 +459,7 @@ export function computeInvoiceTotals(opts) {
   // v1.10.85 (#190) - unless "Before GST" is chosen (see spreadBillDiscount).
   const invDiscValue = finiteNonNeg(invoiceOptions.invoiceDiscountValue);
   const invDiscType = invoiceOptions.invoiceDiscountType === 'percent' ? 'percent' : 'fixed';
-  // v1.10.31 — GST-C4: cess is also subject to RCM under §8(2) of the GST
+  // v1.10.31 — GST-C4: cess is also subject to RCM under Section 8(2) of the GST
   // Compensation Cess Act. Buyer remits it, so the seller must not collect
   // it on-invoice. Previously left in the total → buyer paid supplier's cess
   // AND remitted own → double payment.
@@ -1397,7 +1397,7 @@ export const getUpcomingFilings = (today = new Date()) => {
     // to point at the NEXT year's deadline from April, so the one actually
     // due that July never appeared.
     push('ITR filing (non-audit) — due', new Date(y, 6, 31));
-    push('ITR filing (audit / §44AB) — due', new Date(y, 9, 31));
+    push('ITR filing (audit / Section 44AB) — due', new Date(y, 9, 31));
   }
 
   return out.sort((a, b) => a.daysAway - b.daysAway);

@@ -60,7 +60,7 @@ export default function TableExport({ title, subtitle = '', headers, rows, filen
         w.focus();
         w.print();
     };
-    return (h("span", { style: { display: 'inline-flex', gap: '0.4rem', flexWrap: 'wrap' } },
+    return (h("span", { className: "table-export-actions", role: "group", "aria-label": `${title} export options` },
         h("button", { type: "button", className: "btn btn-secondary", onClick: print, title: "Print, or Save as PDF" },
             h(Printer, { size: 15 }),
             " Print / PDF"),

@@ -54,8 +54,8 @@ import { toast } from './Toast.js';
 // Import tab, for instance, without going through a global store.
 const TABS = [
     { key: 'calculator', label: 'Regime Calculator', icon: Calculator, help: 'Compare Old vs New (Section 115BAC) — auto-picks the cheaper regime', doc: 'income-tax#regime-calculator' },
-    { key: 'presumptive', label: 'Presumptive (§44AD/ADA)', icon: Briefcase, help: 'Skip full books — declare 6/8% (business) or 50% (professional) of turnover', doc: 'income-tax#presumptive' },
-    { key: 'advance', label: 'Advance Tax', icon: Clock, help: 'Four installment schedule with §234B/C interest calculation', doc: 'income-tax#advance-tax' },
+    { key: 'presumptive', label: 'Presumptive (Section 44AD/ADA)', icon: Briefcase, help: 'Skip full books — declare 6/8% (business) or 50% (professional) of turnover', doc: 'income-tax#presumptive' },
+    { key: 'advance', label: 'Advance Tax', icon: Clock, help: 'Four installment schedule with Section 234B/C interest calculation', doc: 'income-tax#advance-tax' },
     { key: 'bank', label: 'Bank Statement Import', icon: Upload, help: 'Upload SBI / HDFC / ICICI / Axis / Kotak / PNB / Yes Bank CSV — auto-categorises', doc: 'income-tax#bank-import' },
     { key: 'summary', label: 'ITR Summary', icon: FileText, help: 'Consolidated view + ITR-4 Filing Summary PDF', doc: 'income-tax#itr-summary' },
 ];
@@ -303,7 +303,7 @@ export default function IncomeTax() {
                     ...prev,
                     businessIncome: (prev.businessIncome || 0) + (totals.business_in || 0),
                     otherSources: (prev.otherSources || 0) + (totals.interest || 0),
-                    // house-property income is rent - 30% standard deduction (§24a) - loan interest
+                    // house-property income is rent - 30% standard deduction (Section 24a) - loan interest
                     housePropertyIncome: Math.max(0, ((prev.housePropertyIncome || 0) + (totals.rent_received || 0) * 0.7)),
                     deductions: {
                         ...prev.deductions,
@@ -318,7 +318,7 @@ export default function IncomeTax() {
         tab === 'summary' && (h(SummaryTab, { bills: bills, expenses: expenses, purchases: purchases, profile: profile, comparison: comparison, inputs: inputs, presumptive: presumptive, advanceSchedule: advanceSchedule, fy: fy, ay: ay }))));
 }
 // ============================================================================
-// Presumptive Income sub-tab (§44AD / §44ADA / §44AE)
+// Presumptive Income sub-tab (Section 44AD / Section 44ADA / Section 44AE)
 // ============================================================================
 function PresumptiveTab({ presumptiveInputs, setPresumptiveInputs, presumptive, onPushToCalculator }) {
     const set = (patch) => setPresumptiveInputs(prev => ({ ...prev, ...patch }));
@@ -328,9 +328,9 @@ function PresumptiveTab({ presumptiveInputs, setPresumptiveInputs, presumptive, 
                 "Section",
                 h(HelpButton, { title: "Section: 44AD, 44ADA or 44AE", doc: "income-tax#presumptive-sections", size: 16 })),
             h("div", { style: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.5rem', marginBottom: '1rem' } }, [
-                { key: '44AD', label: '§44AD', hint: 'Trading / Retail / Manufacturing' },
-                { key: '44ADA', label: '§44ADA', hint: 'Professionals (CA, doctor, lawyer, consultant)' },
-                { key: '44AE', label: '§44AE', hint: 'Transporters (goods carriage owners)' },
+                { key: '44AD', label: 'Section 44AD', hint: 'Trading / Retail / Manufacturing' },
+                { key: '44ADA', label: 'Section 44ADA', hint: 'Professionals (CA, doctor, lawyer, consultant)' },
+                { key: '44AE', label: 'Section 44AE', hint: 'Transporters (goods carriage owners)' },
             ].map(opt => (h("button", { key: opt.key, className: `btn ${presumptiveInputs.section === opt.key ? 'btn-primary' : 'btn-secondary'}`, style: { fontSize: '0.8rem', padding: '0.5rem', flexDirection: 'column', alignItems: 'stretch' }, onClick: () => set({ section: opt.key }) },
                 h("strong", null, opt.label),
                 h("span", { style: { fontSize: '0.68rem', opacity: 0.75, marginTop: 4 } }, opt.hint))))),
@@ -521,7 +521,7 @@ function RegimeCalculatorTab({ inputs, setInputs, comparison, onReset }) {
                 "Deductions (Old Regime only)",
                 h(HelpButton, { title: "Deductions (Old Regime only)", doc: "income-tax#deductions", size: 16 })),
             h("p", { style: { fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: 0, marginBottom: '0.5rem' } }, "Under New Regime (default from FY 2023-24), only Section 80CCD(2) \u2014 employer NPS contribution \u2014 is allowed. These deductions ONLY reduce your Old-Regime tax."),
-            Object.entries(DEDUCTION_CAPS).map(([section, cap]) => (h(NumberInput, { key: section, label: `§${section}`, hint: `Cap: ${effectiveCapLabel(section, cap)} · ${SECTION_DESCRIPTIONS[section] || ''}`, value: inputs.deductions?.[section] || 0, onChange: v => setDed(section, v) }))),
+            Object.entries(DEDUCTION_CAPS).map(([section, cap]) => (h(NumberInput, { key: section, label: `Section ${section}`, hint: `Cap: ${effectiveCapLabel(section, cap)} · ${SECTION_DESCRIPTIONS[section] || ''}`, value: inputs.deductions?.[section] || 0, onChange: v => setDed(section, v) }))),
             h(NumberInput, { label: "\u00A780CCD(2) \u2014 employer NPS", hint: "Allowed under BOTH regimes, up to 10% of salary (14% for government employees).", value: inputs.deductions?.['80CCD2'] || 0, onChange: v => setDed('80CCD2', v) })),
         h("div", null,
             h("div", { className: "glass-panel p-4", style: { marginBottom: '1rem' } },

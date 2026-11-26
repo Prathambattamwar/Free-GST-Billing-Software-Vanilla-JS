@@ -313,7 +313,7 @@ export default function RecurringInvoices() {
             templates.length === 0 ? (h("div", { className: "empty-state" },
                 h(RefreshCw, { size: 48 }),
                 h("p", null, "No recurring invoices set up yet."),
-                h("button", { className: "btn btn-primary", onClick: openAdd },
+                h("button", { className: "btn btn-secondary empty-state-action", onClick: openAdd },
                     h(Plus, { size: 18 }),
                     " Create Template"))) : (h("div", { className: "table-scroll" },
                 h("table", { className: "data-table", style: { minWidth: '700px' } },

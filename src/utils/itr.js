@@ -178,8 +178,8 @@ export function get87AConfig(regime, fy = CURRENT_FY) {
 
 /**
  * v1.10.31 — Capital gains rates changed on 23-Jul-2024 (Finance No.2 Act 2024).
- * §111A STCG on listed equity: 15% → 20%
- * §112A LTCG on listed equity: 10% → 12.5%, exemption ₹1L → ₹1.25L
+ * Section 111A STCG on listed equity: 15% → 20%
+ * Section 112A LTCG on listed equity: 10% → 12.5%, exemption ₹1L → ₹1.25L
  *
  * For FY 2024-25, gains realised on/after 23-Jul-2024 use new rates. UI
  * asks the user to enter the split; if the user just says "₹X LTCG for
@@ -465,7 +465,7 @@ export function computeAllowedDeductions(userDeductions = {}, regime = 'old', ct
  * @param {object} inputs
  * @param {number} inputs.salary       — gross salary (Form 16 box 1)
  * @param {number} inputs.businessIncome — business / professional income (P&L bottom line)
- * @param {number} inputs.housePropertyIncome — rent minus 30% standard deduction minus §24(b) home-loan interest
+ * @param {number} inputs.housePropertyIncome — rent minus 30% standard deduction minus Section 24(b) home-loan interest
  * @param {number} inputs.capitalGains — realised gains (STCG/LTCG treated at their own rates below)
  * @param {number} inputs.otherSources — bank interest, dividends, etc.
  * @param {number} inputs.stcgAtSpecialRate — STCG on listed equity (20% flat)
@@ -901,7 +901,7 @@ function round2(n) { return Math.round(n * 100) / 100; }
 // percentage of turnover / gross receipts as income. Available to individuals,
 // HUFs, partnership firms (not LLPs); ITR-4 (Sugam) is the return form.
 // Once opted in, must continue for 5 assessment years — opting out early
-// disqualifies §44AD for the next 5 years.
+// disqualifies Section 44AD for the next 5 years.
 // ============================================================================
 
 /**
@@ -932,7 +932,7 @@ export function compute44AD({ digitalReceipts = 0, cashReceipts = 0, declaredInc
   const threshold = cashPct <= 0.05 ? 30_000_000 : 20_000_000;
   const isEligible = turnover <= threshold;
   if (!isEligible) {
-    notes.push(`Turnover of ${formatINR(turnover)} exceeds the §44AD limit of ${formatINR(threshold)}. You must maintain regular books and file ITR-3 with a Tax Audit Report (§44AB).`);
+    notes.push(`Turnover of ${formatINR(turnover)} exceeds the Section 44AD limit of ${formatINR(threshold)}. You must maintain regular books and file ITR-3 with a Tax Audit Report (Section 44AB).`);
   }
   // v1.10.74 - the cash share only matters once turnover is above ₹2Cr.
   if (cashPct > 0.05 && turnover > 20_000_000 && turnover <= 30_000_000) {
@@ -978,7 +978,7 @@ export function compute44ADA({ digitalReceipts = 0, cashReceipts = 0, declaredIn
   const threshold = cashPct <= 0.05 ? 7_500_000 : 5_000_000;
   const isEligible = turnover <= threshold;
   if (!isEligible) {
-    notes.push(`Gross receipts of ${formatINR(turnover)} exceed the §44ADA limit of ${formatINR(threshold)}. Full books + ITR-3 + audit (§44AB) apply.`);
+    notes.push(`Gross receipts of ${formatINR(turnover)} exceed the Section 44ADA limit of ${formatINR(threshold)}. Full books + ITR-3 + audit (Section 44AB) apply.`);
   }
 
   const deemed = round2(turnover * 0.50);
@@ -1028,14 +1028,14 @@ export function compute44AE({ heavyVehicleMonths = 0, heavyVehicleTonnage = 0, l
   const notes = [];
   // A single vehicle owned for a full FY contributes 12 vehicle-months.
   // So (hMonths + lMonths) / 12 approximates the peak vehicle count. If
-  // that's > 10, the assessee is outside §44AE eligibility. This is a
+  // that's > 10, the assessee is outside Section 44AE eligibility. This is a
   // proxy — the statute checks vehicle count "at any time in the year",
   // not the annual average — so we surface it as a warning rather than
   // hard-disqualification.
   const impliedFleet = (hMonths + lMonths) / 12;
   const isEligible = impliedFleet <= 10.0001;
   if (!isEligible) {
-    notes.push(`Implied fleet size ≈ ${impliedFleet.toFixed(1)} vehicles exceeds the §44AE cap of 10 goods carriages. Assessee must maintain regular books and file ITR-3 with a §44AB audit report.`);
+    notes.push(`Implied fleet size ≈ ${impliedFleet.toFixed(1)} vehicles exceeds the Section 44AE cap of 10 goods carriages. Assessee must maintain regular books and file ITR-3 with a Section 44AB audit report.`);
   }
   if (Number(declaredIncome) && Number(declaredIncome) < deemed) {
     notes.push(`Declared income (${formatINR(declaredIncome)}) is less than the presumptive minimum (${formatINR(deemed)}). Assessee must maintain full books and file ITR-3.`);
@@ -1057,7 +1057,7 @@ export function compute44AE({ heavyVehicleMonths = 0, heavyVehicleTonnage = 0, l
 // ----------------------------------------------------------------------------
 // Every assessee with tax liability ≥ ₹10,000 (after TDS) must pay advance
 // tax in four installments. Missing them triggers interest under 234B/234C.
-// Presumptive-taxation opters (§44AD/§44ADA) can pay 100% in one shot by 15 Mar.
+// Presumptive-taxation opters (Section 44AD/Section 44ADA) can pay 100% in one shot by 15 Mar.
 // ============================================================================
 
 /**
@@ -1094,7 +1094,7 @@ export const ADVANCE_TAX_SCHEDULE = getAdvanceTaxSchedule(CURRENT_FY);
 
 /**
  * Compute the advance-tax schedule.
- * @param {number} totalTax — total tax liability for the FY (after §87A rebate)
+ * @param {number} totalTax — total tax liability for the FY (after Section 87A rebate)
  * @param {number} tdsAlreadyDeducted — TDS credit already claimed
  * @param {Array<{date:string, amount:number}>} paid — installments already paid
  * @param {'regular'|'presumptive'} mode — presumptive allows single 15-Mar payment
@@ -1131,7 +1131,7 @@ export function computeAdvanceTaxSchedule(totalTax, tdsAlreadyDeducted = 0, paid
       };
     });
   const totalPaid = paid.reduce((s, p) => s + (Number(p.amount) || 0), 0);
-  // Advance tax is what is paid by 31 March; §234B looks only at that.
+  // Advance tax is what is paid by 31 March; Section 234B looks only at that.
   const yearEnd = `${Number(String(fy).split('-')[0]) + 1}-03-31`;
   const paidByYearEnd = paid.filter(p => p.date && p.date <= yearEnd).reduce((s, p) => s + (Number(p.amount) || 0), 0);
   return {
@@ -1315,7 +1315,7 @@ export function buildITR4FieldMap(inputs, tax, presumptive, deductions, pan = ''
   rows.push(panText
     ? { section: 'Part A — General', field: 'PAN', value: panText }
     : { section: 'Part A — General', field: 'PAN', value: '', note: 'Fill from your profile' });
-  rows.push({ section: 'Part A — General', field: 'Filing Status', value: 'Filed under §139(1) — before due date' });
+  rows.push({ section: 'Part A — General', field: 'Filing Status', value: 'Filed under Section 139(1) — before due date' });
   rows.push({ section: 'Part A — General', field: 'Aadhaar', value: '', note: 'Must be linked' });
 
   // Nature of business
@@ -1337,28 +1337,28 @@ export function buildITR4FieldMap(inputs, tax, presumptive, deductions, pan = ''
   if (std) rows.push({ section: 'B — Income', field: '  Less: Standard Deduction', value: -std });
   rows.push({ section: 'B — Income', field: '  Net Salary', value: Math.max(0, salary - std) });
   rows.push({ section: 'B — Income', field: 'B2. House Property (net)', value: Number(inputs.housePropertyIncome) || 0 });
-  rows.push({ section: 'B — Income', field: 'B3. Business / Profession', value: presumptive?.presumptiveIncome ?? (Number(inputs.businessIncome) || 0), note: presumptive ? `Presumptive @ §${presumptive.section}` : 'From books' });
+  rows.push({ section: 'B — Income', field: 'B3. Business / Profession', value: presumptive?.presumptiveIncome ?? (Number(inputs.businessIncome) || 0), note: presumptive ? `Presumptive @ Section ${presumptive.section}` : 'From books' });
   rows.push({ section: 'B — Income', field: 'B4. Other Sources', value: Number(inputs.otherSources) || 0 });
   rows.push({ section: 'B — Income', field: 'B5. Gross Total Income', value: tax.grossTotalIncome, bold: true });
 
   // Part C — Deductions
   if (tax.regime === 'old') {
-    rows.push({ section: 'C — Deductions (Chapter VI-A)', field: '§80C', value: Math.min(150_000, Number(deductions?.['80C']) || 0) });
-    rows.push({ section: 'C — Deductions (Chapter VI-A)', field: '§80CCD(1B) — NPS', value: Math.min(50_000, Number(deductions?.['80CCD1B']) || 0) });
+    rows.push({ section: 'C — Deductions (Chapter VI-A)', field: 'Section 80C', value: Math.min(150_000, Number(deductions?.['80C']) || 0) });
+    rows.push({ section: 'C — Deductions (Chapter VI-A)', field: 'Section 80CCD(1B) — NPS', value: Math.min(50_000, Number(deductions?.['80CCD1B']) || 0) });
     // Same age-dependent limit the tax figure used (was a flat ₹1 lakh, so the
     // PDF line could disagree with the total below it).
     const ageCtx = { selfSenior: Number(inputs?.age) >= 60, parentsSenior: !!inputs?.parentsSenior };
     const cap80D = effectiveDeductionCap('80D', ageCtx);
-    rows.push({ section: 'C — Deductions (Chapter VI-A)', field: '§80D — Health Insurance', value: Math.min(cap80D, Number(deductions?.['80D']) || 0) });
+    rows.push({ section: 'C — Deductions (Chapter VI-A)', field: 'Section 80D — Health Insurance', value: Math.min(cap80D, Number(deductions?.['80D']) || 0) });
     // v1.10.74 - 60+ claim 80TTB instead of 80TTA (same rule as the tax figure).
     rows.push(ageCtx.selfSenior
-      ? { section: 'C — Deductions (Chapter VI-A)', field: '§80TTB — Deposit Interest (60+)', value: Math.min(effectiveDeductionCap('80TTB', ageCtx), Number(deductions?.['80TTB']) || 0) }
-      : { section: 'C — Deductions (Chapter VI-A)', field: '§80TTA — Savings Interest', value: Math.min(effectiveDeductionCap('80TTA', ageCtx), Number(deductions?.['80TTA']) || 0) });
-    rows.push({ section: 'C — Deductions (Chapter VI-A)', field: '§80E — Education Loan Interest', value: Number(deductions?.['80E']) || 0 });
-    rows.push({ section: 'C — Deductions (Chapter VI-A)', field: '§80G — Donations', value: Number(deductions?.['80G']) || 0 });
+      ? { section: 'C — Deductions (Chapter VI-A)', field: 'Section 80TTB — Deposit Interest (60+)', value: Math.min(effectiveDeductionCap('80TTB', ageCtx), Number(deductions?.['80TTB']) || 0) }
+      : { section: 'C — Deductions (Chapter VI-A)', field: 'Section 80TTA — Savings Interest', value: Math.min(effectiveDeductionCap('80TTA', ageCtx), Number(deductions?.['80TTA']) || 0) });
+    rows.push({ section: 'C — Deductions (Chapter VI-A)', field: 'Section 80E — Education Loan Interest', value: Number(deductions?.['80E']) || 0 });
+    rows.push({ section: 'C — Deductions (Chapter VI-A)', field: 'Section 80G — Donations', value: Number(deductions?.['80G']) || 0 });
     rows.push({ section: 'C — Deductions (Chapter VI-A)', field: '  Total Chapter VI-A', value: tax.allowedDeductions, bold: true });
   } else {
-    rows.push({ section: 'C — Deductions (Chapter VI-A)', field: '§80CCD(2) — Employer NPS', value: tax.allowedDeductions, note: 'Only deduction allowed under new regime' });
+    rows.push({ section: 'C — Deductions (Chapter VI-A)', field: 'Section 80CCD(2) — Employer NPS', value: tax.allowedDeductions, note: 'Only deduction allowed under new regime' });
   }
 
   // Part D — Tax computation
@@ -1366,7 +1366,7 @@ export function buildITR4FieldMap(inputs, tax, presumptive, deductions, pan = ''
   rows.push({ section: 'D — Tax Computation', field: 'D2. Tax on Total Income (slab)', value: tax.slabTax });
   if (tax.stcgTax) rows.push({ section: 'D — Tax Computation', field: '   + STCG (20%)', value: tax.stcgTax });
   if (tax.ltcgTax) rows.push({ section: 'D — Tax Computation', field: '   + LTCG (12.5%)', value: tax.ltcgTax });
-  if (tax.rebate87A) rows.push({ section: 'D — Tax Computation', field: '   − §87A Rebate', value: -tax.rebate87A });
+  if (tax.rebate87A) rows.push({ section: 'D — Tax Computation', field: '   − Section 87A Rebate', value: -tax.rebate87A });
   if (tax.surcharge) rows.push({ section: 'D — Tax Computation', field: '   + Surcharge', value: tax.surcharge });
   rows.push({ section: 'D — Tax Computation', field: '   + Health & Ed Cess (4%)', value: tax.cess });
   rows.push({ section: 'D — Tax Computation', field: 'D3. TOTAL TAX PAYABLE', value: tax.totalTax, bold: true, big: true });

@@ -4200,7 +4200,11 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                 data: { profile, client, details, items: billItems, totals, invoiceType, customTerms, invoiceOptions, taxInclusive },
             }, profile: profile, bills: allBillsForCredit, saved: showEinvoice.saved, onSaveIrn: saveEinvoice, onClose: () => setShowEinvoice(false) })),
         h("div", { className: "generator-toolbar", ref: toolbarRef },
-            h("div", { className: "flex gap-2 items-center" },
+            h("div", { className: "generator-toolbar-start" },
+                h("h1", { className: "generator-page-heading" }, invoiceType === 'delivery-challan'
+                    ? (editingBill ? 'Edit Delivery Challan' : 'New Delivery Challan')
+                    : (editingBill ? 'Edit Invoice' : 'New Invoice')),
+                h("div", { className: "generator-toolbar-left" },
                 h("button", { className: "btn btn-secondary", onClick: handleBack },
                     h(ArrowLeft, { size: 18 }),
                     " Back"),
@@ -4242,7 +4246,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                             } })),
                         label));
                 })(),
-                h(HelpButton, { title: "Saving as you go", doc: "invoices#autosave", size: 16 })),
+                h(HelpButton, { title: "Saving as you go", doc: "invoices#autosave", size: 16 }))),
             h("div", { className: "invoice-total-bar", "data-testid": "invoice-total-bar", role: "group", "aria-label": "Invoice totals" },
                 h("span", { className: "itb-cell" },
                     h("strong", null, itemCount),
@@ -4307,8 +4311,8 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                         : 'Open browser print dialog (skip the PDF download)' },
                     h(Printer, { size: 18 }),
                     " Print"),
-                h("button", { className: "btn btn-secondary", onClick: shareWhatsApp, disabled: saving, style: { background: '#25d366', color: '#fff', borderColor: '#25d366' } },
-                    h(MessageCircle, { size: 18 }),
+                h("button", { className: "btn btn-secondary invoice-whatsapp-action", onClick: shareWhatsApp, disabled: saving, title: "Share invoice on WhatsApp" },
+                    h(MessageCircle, { size: 15, style: { color: '#16a34a' } }),
                     " WhatsApp"),
                 ewayOn && (invoiceType === 'tax-invoice' || invoiceType === 'delivery-challan') && (h("button", { className: "btn btn-secondary", onClick: exportEWayBill, disabled: saving, title: "Download E-Way Bill JSON for NIC portal upload" },
                     h(Truck, { size: 18 }),
