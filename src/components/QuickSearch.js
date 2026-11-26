@@ -205,21 +205,29 @@ export default function QuickSearch({ onClose, navItems, topIds, updateInfo, onN
                     "Nothing matches \"",
                     query,
                     "\". Try fewer words.")),
-                groups.map(([title, items]) => (h("div", { key: title, role: "group", "aria-label": title },
-                    h("div", { className: "qs-group" }, title),
-                    items.map((a) => {
-                        n += 1;
-                        const i = n;
-                        const on = i === idx;
-                        return (h("div", { key: `${title}-${a.label}`, className: `qs-row${on ? ' qs-row-on' : ''}`, "data-qs-on": on ? '1' : '0', onMouseEnter: () => setIdx(i) },
-                            h("button", { type: "button", className: "qs-main", onClick: () => run(a) },
-                                a.how && h(Info, { size: 15, className: "qs-icon" }),
-                                h("span", { className: "qs-text" },
-                                    h("span", { className: "qs-label" }, a.label),
-                                    a.sub && h("span", { className: "qs-sub" }, a.sub)),
-                                a.hint && h("span", { className: "qs-hint" }, a.hint)),
-);
-                    }))))),
+                groups.map(([title, items]) =>
+                    h("div", { key: title, role: "group", "aria-label": title },
+                        h("div", { className: "qs-group" }, title),
+                        items.map((a) => {
+                            n += 1;
+                            const i = n;
+                            const on = i === idx;
+                            return h("div", {
+                                key: `${title}-${a.label}`,
+                                className: `qs-row${on ? ' qs-row-on' : ''}`,
+                                "data-qs-on": on ? '1' : '0',
+                                onMouseEnter: () => setIdx(i),
+                            },
+                                h("button", { type: "button", className: "qs-main", onClick: () => run(a) },
+                                    a.how && h(Info, { size: 15, className: "qs-icon" }),
+                                    h("span", { className: "qs-text" },
+                                        h("span", { className: "qs-label" }, a.label),
+                                        a.sub && h("span", { className: "qs-sub" }, a.sub)),
+                                    a.hint && h("span", { className: "qs-hint" }, a.hint))
+                            );
+                        })
+                    )
+                )),
             h("div", { className: "qs-foot" },
                 h("span", null,
                     h(Command, { size: 11, style: { verticalAlign: 'middle', marginRight: 4 } }),

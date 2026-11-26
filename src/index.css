@@ -2792,17 +2792,13 @@ a:focus-visible {
 
 .inv-total-row span:last-child { font-weight: 500; color: #1e293b; }
 
-/* v1.10.38 — TOTAL DUE row gains a proper visual anchor. Prior look
-   was just a top-border + slightly larger amount — subtotal / IGST /
-   TOTAL sat as three equal-weight rows and the eye had no cue where
-   to land. Now: a subtle accent-tinted background bar wraps the row,
-   the label upsizes to 1rem, the amount to 1.4rem. Modern style stays
-   as-is (already had a solid accent pill). */
+/* Total Due: clean, flat treatment with a straight top rule.
+   Keep the visual hierarchy through typography and accent color only. */
 .inv-total-final {
   margin-top: 0.5rem;
   padding: 0.65rem 0.85rem;
-  border-radius: 8px;
-  background: rgba(var(--pdf-accent-rgb, 30, 64, 175), 0.08);
+  border-radius: 0;
+  background: transparent;
   border-top: 2px solid var(--pdf-accent, #1e293b);
 }
 
@@ -2821,12 +2817,13 @@ a:focus-visible {
 }
 
 .inv-total-modern {
-  border-top: none;
-  background: unset;  /* modern style provides its own solid accent pill */
-  padding: 0.6rem 0.75rem;
+  border-top: 2px solid var(--pdf-accent, #1e293b);
+  border-radius: 0;
+  background: transparent;
+  padding: 0.65rem 0.85rem;
 }
-.inv-total-modern span:first-child,
-.inv-total-modern span:last-child { color: #fff; }
+.inv-total-modern span:first-child { color: #0f172a; }
+.inv-total-modern span:last-child { color: var(--pdf-accent, #1e40af); }
 
 /* Footer */
 /* v1.10.28 — footer padding + block spacing tightened. Bank details +
