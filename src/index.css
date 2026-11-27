@@ -3484,6 +3484,8 @@ kbd {
 
 .search-box {
   position: relative;
+  display: flex;
+  align-items: center;
   flex: 1;
   min-width: 200px;
 }
@@ -3495,11 +3497,12 @@ kbd {
   transform: translateY(-50%);
   color: var(--text-muted);
   pointer-events: none;
+  z-index: 1;
 }
 
 .search-input {
   width: 100%;
-  padding: 0.5rem 0.75rem 0.5rem 2.25rem;
+  padding: 0.5rem 2.25rem 0.5rem 2.25rem;
   border: 1.5px solid var(--border);
   border-radius: 8px;
   font-size: 0.85rem;
@@ -3507,6 +3510,34 @@ kbd {
   background: white;
   color: var(--text);
   transition: all 0.15s;
+}
+
+.search-box > .icon-btn,
+.search-box .search-clear {
+  position: absolute;
+  right: 0.35rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 26px;
+  height: 26px;
+  min-width: 26px !important;
+  min-height: 26px !important;
+  padding: 0;
+  background: transparent;
+  color: var(--text-muted);
+  z-index: 1;
+}
+
+.search-box > .icon-btn:hover,
+.search-box .search-clear:hover {
+  background: var(--bg-tertiary);
+  color: var(--text);
+  transform: translateY(-50%);
+}
+
+.search-box > .icon-btn:active,
+.search-box .search-clear:active {
+  transform: translateY(-50%);
 }
 
 .search-input:focus {

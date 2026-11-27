@@ -1,16 +1,14 @@
 import { h, Fragment } from '../vanilla/dom.js';
-import React, { useState, useEffect, useMemo, useRef, useCallback, useLayoutEffect } from '../vanilla/dom.js';
+import BrowserDOM, { useState, useEffect, useMemo } from '../vanilla/dom.js';
 import QRCode from 'qrcode';
 import SignatureImages from './SignatureImages.js';
 import DOMPurify from 'dompurify';
-import { sectionPrint, numberToWords, printedSubtotal, formatCurrency, INVOICE_TYPES, getCountryConfig, CURRENCY_NAMES, formatExchangeRateLine, getAccountById, getPaperSize, resolveLineDiscount, htmlHasText, splitNumberedTerms, invoiceOptionOn, DEFAULT_DECLARATION, filledOrderDetails, formatShortDate, isModuleEnabled, getStateCode, COUNTRIES } from '../utils.js';
+import { numberToWords, printedSubtotal, formatCurrency, INVOICE_TYPES, getCountryConfig, CURRENCY_NAMES, formatExchangeRateLine, getAccountById, getPaperSize, resolveLineDiscount, htmlHasText, splitNumberedTerms, invoiceOptionOn, DEFAULT_DECLARATION, filledOrderDetails, formatShortDate, isModuleEnabled, getStateCode, COUNTRIES } from '../utils.js';
 import { getEnabledModules } from '../store.js';
 import { getPrintSettings, getLabel, formatCurrencyEx, formatDate } from '../utils/printSettings.js';
 import InvoiceGridLayout, { HsnSummaryTable } from './InvoiceGridLayout.js';
 import { exportDeclaration } from '../utils/lut.js';
 import { purposeCodeText } from '../utils/purposeCodes.js';
-import { sizeLabel, sizePieces, lineSqft, sizeHasDims, rftLabel } from '../utils/glass.js';
-import { fitItemTable } from '../utils/invoiceFit.js';
 // v1.10.36 — Optional `previewOnly` prop suppresses the internal
 // `id="invoice-preview"`. The parent's on-screen preview keeps the id
 // (needed by the @media print CSS rules in index.css:1258 for the
@@ -18,23 +16,12 @@ import { fitItemTable } from '../utils/invoiceFit.js';
 // instance renders with previewOnly=true so it doesn't create a
 // duplicate id on the page — HTML-invalid + could confuse getElementById
 // lookups.
-const InvoicePreview = React.forwardRef(({ profile: profileProp, client, details, items, totals, invoiceType = 'tax-invoice', customTerms, customNotes, extraSections = [], options = {}, previewOnly = false, cancelled = false, einvoice = null }, ref) => {
+const InvoicePreview = BrowserDOM.forwardRef(({ profile: profileProp, client, details, items, totals, invoiceType = 'tax-invoice', customTerms, customNotes, extraSections = [], options = {}, previewOnly = false, cancelled = false, einvoice = null }, ref) => {
     // v1.10.76 - the business profile can still be loading on the first render
     // (a page refresh while editing an invoice), and reading a bank field from
     // null blanked the whole app. Empty until it arrives.
     const profile = profileProp || {};
-    // v1.10.86 (#188) - the item table steps down to a tighter size when its
-    // columns need more room than the sheet has (see utils/invoiceFit.js).
-    const sheetRef = useRef(null);
-    const setSheetRef = useCallback((el) => {
-        sheetRef.current = el;
-        if (typeof ref === 'function')
-            ref(el);
-        else if (ref)
-            ref.current = el;
-    }, [ref]);
-    useLayoutEffect(() => { fitItemTable(sheetRef.current); });
-    // Interstate detection must match InvoiceGenerator.jsx — it honours
+    // Interstate detection must match InvoiceGenerator.js — it honours
     // details.placeOfSupply (POS override) and client.isSEZ (SEZ supplies
     // are always interstate regardless of physical state). Without this
     // the totals block could show IGST while the item table showed
@@ -78,25 +65,10 @@ const InvoicePreview = React.forwardRef(({ profile: profileProp, client, details
     // before; users opt INTO hiding fields via Customize.
     const opt = (key, fallback = true) => options[key] !== undefined ? options[key] : fallback;
     const showGST = opt('showGST', typeConfig.showGST);
-    // v1.10.84 (#152) - hides only the per-line tax columns; GST is still
-    // charged and shown in the totals. showGST is what turns GST off.
-    const showTaxCols = showGST && opt('showTaxColumns');
-    const rateBeforeTax = opt('rateBeforeTax', false); // #164, see lineCalc
-    // v1.10.84 (#140) - size lines (glass, mirror) add Size and SQFT columns; the
-    // Qty column then shows their pieces. NA lines (#143) print "-".
-    const hasSize = (items || []).some((i) => i.size);
-    const printedQty = (item) => (item.size ? sizePieces(item)
-        : item.rft ? rftLabel(item) // v1.10.85 - "19.5 sqft" / "27 rft"
-            : item.unit === 'NA' ? '-'
-                : `${item.quantity}${showItemUnit && item.unit ? ` ${item.unit}` : ''}`);
     const showState = opt('showState');
     const showGSTIN = opt('showGSTIN');
     const showPlaceOfSupply = opt('showPlaceOfSupply', showGST);
     const showHSN = opt('showHSN');
-    // v1.10.86 - (#189, #192) MRP column, off unless chosen. Information only:
-    // the rate, tax and totals never use it.
-    const showMRP = opt('showMRP', false);
-    const mrpText = (item) => (Number(item.mrp) > 0 ? fmt(Number(item.mrp)) : '-');
     const showDiscount = opt('showDiscount');
     const showBankDetails = opt('showBankDetails');
     // v1.10.83 - Settings → Features → UPI QR code off hides it on every invoice.
@@ -134,8 +106,7 @@ const InvoicePreview = React.forwardRef(({ profile: profileProp, client, details
     const reverseChargeText = options.reverseCharge ? 'Yes' : 'No';
     // v1.10.83 - Rule 46 endorsement on an export / SEZ invoice: under LUT
     // (no IGST, with the LUT's ARN) or on payment of IGST. '' otherwise.
-    // v1.10.84 - Customize → "Export / LUT declaration" can hide it (on unless turned off).
-    const exportDecl = opt('showExportDeclaration') ? exportDeclaration({ profile, client, details, totals, options, showGST }) : null;
+    const exportDecl = exportDeclaration({ profile, client, details, totals, options, showGST });
     const currencySymbol = options.currency || 'INR';
     // v1.10.83 - a services invoice carries SAC codes only.
     const hsnHeader = (options.invoiceMode || 'goods') === 'services' ? 'SAC' : 'HSN/SAC';
@@ -166,11 +137,6 @@ const InvoicePreview = React.forwardRef(({ profile: profileProp, client, details
     // measurable hot spot. Now: one lookup + downstream aliases keep
     // JSX shape untouched.
     const _ps = getPrintSettings();
-    // Room (px; 794 px = 210 mm) to leave above the e-invoice block so the
-    // PDF's copy label (drawn 4-10 mm from the top) does not cover its QR code.
-    const copyLabelGap = _ps.multiCopyEnabled && Number(_ps.multiCopyCount) > 1
-        ? Math.max(0, Math.round((12 - (Number(_ps.marginTop) || 0)) * 3.78 / Math.max(0.5, Number(_ps.pdfFontScale) || 1)))
-        : 0;
     // Print Settings -> Formatting (number grouping, decimals, symbol position,
     // date format) was saved but never used on the invoice. The defaults keep
     // the formatting the invoice always had.
@@ -291,14 +257,7 @@ const InvoicePreview = React.forwardRef(({ profile: profileProp, client, details
         : pdfStyleRaw;
     const pdfStyleVariant = pdfStyleRaw; // full value for CSS class targeting
     // Check if any item has discount
-    // v1.10.85 (#190) - or a part of a whole-bill discount taken before GST, so
-    // Qty x Rate - Disc. = Amount on every line.
-    const hasAnyDiscount = showDiscount && items.some(item => (item.discount || 0) > 0 || (item.billDiscShare || 0) > 0);
-    // v1.10.85 (#190) - the before-GST bill discount is inside totalDiscount;
-    // printed on its own line, the line discounts on theirs.
-    const tradeDisc = Number(totals?.billDiscountBeforeGst) || 0;
-    const lineDisc = Math.round(((Number(totals?.totalDiscount) || 0) - tradeDisc) * 100) / 100;
-    const tradeDiscLabel = `Trade discount (before GST)${totals?.invoiceDiscountType === 'percent' && totals?.invoiceDiscountValue > 0 ? ` (${totals.invoiceDiscountValue}%)` : ''}`;
+    const hasAnyDiscount = showDiscount && items.some(item => (item.discount || 0) > 0);
     // v1.10.73 - one per-line calculation for every design, the item table and
     // the HSN/SAC summary, so they can never disagree with each other.
     // v1.10.29 - resolveLineDiscount respects discountType + discountBase, as
@@ -309,16 +268,11 @@ const InvoicePreview = React.forwardRef(({ profile: profileProp, client, details
         const grossAfterDiscount = Math.max(0, (Number(item.quantity) || 0) * (Number(item.rate) || 0) - discount);
         const rate = Number(item.taxPercent) || 0;
         const taxable = inclusive ? grossAfterDiscount / (1 + rate / 100) : grossAfterDiscount;
-        const typedRate = Number(item.rate) || 0;
         // Zero-rated under a LUT: no tax, so the line prints 0% and no tax.
         if (totals.lutZeroRated)
-            return { discount, taxable: grossAfterDiscount, tax: 0, rate: 0, shownRate: typedRate, shownDiscount: discount };
+            return { discount, taxable: grossAfterDiscount, tax: 0, rate: 0 };
         const tax = !showGST ? 0 : (inclusive ? grossAfterDiscount - taxable : taxable * rate / 100);
-        // v1.10.84 (#164) - "Print rates before GST": with prices that include
-        // tax, the Rate (and Disc.) columns print the amount before GST, so
-        // Qty x Rate - Disc. = Amount. Printing only: the totals are unchanged.
-        const exTax = inclusive && rateBeforeTax ? 1 + rate / 100 : 1;
-        return { discount, taxable, tax, rate, shownRate: typedRate / exTax, shownDiscount: discount / exTax };
+        return { discount, taxable, tax, rate };
     };
     // HSN/SAC-wise tax summary (Tally's table under the items). A line counts
     // if it has an HSN/SAC or carries tax; untaxed reimbursements without a
@@ -739,28 +693,19 @@ const InvoicePreview = React.forwardRef(({ profile: profileProp, client, details
                         const qty = Number(item.quantity) || 0;
                         const rate = Number(item.rate) || 0;
                         // v1.10.83 - no "+18%" on an export under LUT: no tax is charged.
-                        const tax = showTaxCols && item.taxPercent > 0 && !totals?.lutZeroRated ? ` +${item.taxPercent}%` : '';
+                        const tax = showGST && item.taxPercent > 0 && !totals?.lutZeroRated ? ` +${item.taxPercent}%` : '';
                         const hsnBit = showHSN && item.hsn && !isVeryNarrow ? '  |  HSN ' + item.hsn : '';
-                        // v1.10.86 - (#189) on a receipt the MRP goes on the item's own line.
-                        const mrpBit = showMRP && Number(item.mrp) > 0 ? `  |  MRP ${currencySymbol}${Number(item.mrp).toFixed(2)}` : '';
                         // v1.10.83 - the receipt follows Customize → Unit too.
                         const unitBit = opt('showItemUnit') && item.unit ? ' ' + item.unit : '';
-                        // #143 - unit NA has no quantity; the receipt shows the rate only.
-                        // #140 - a size line: "25 x 30 x 2 = 12.5 sqft" (a manual one has no rate).
-                        const qtyBit = item.size
-                            ? `${sizeHasDims(item.size) ? `${sizeLabel(item.size)} x ${sizePieces(item)} = ` : ''}${lineSqft(item)} sqft`
-                            : item.rft ? rftLabel(item)
-                                : item.unit === 'NA' ? '' : `${qty}${unitBit}`;
-                        const showLineRate = showRate && !item.size?.manual;
                         return (h("div", { key: idx, style: { marginBottom: 5, fontSize: '0.95em' } },
                             h("div", { style: { fontWeight: strongWeight, wordBreak: 'break-word' } }, (idx + 1) + '. ' + cap(item.name || item.description || 'Item')),
                             h("div", { style: {
                                     display: 'grid', gridTemplateColumns: gridCols, gap: '4px',
                                     fontSize: '0.92em', paddingLeft: thermalCompact ? 0 : 8, fontWeight: baseWeight,
                                 } },
-                                h("span", { style: { wordBreak: 'break-word' } }, cap(showLineRate
-                                    ? `${qtyBit ? `${qtyBit} × ` : ''}${currencySymbol}${rate.toFixed(2)}${tax}${hsnBit}${mrpBit}`
-                                    : `${qtyBit}${hsnBit}${mrpBit}`.trim())),
+                                h("span", { style: { wordBreak: 'break-word' } }, cap(showRate
+                                    ? `${qty}${unitBit} × ${currencySymbol}${rate.toFixed(2)}${tax}${hsnBit}`
+                                    : `${qty}${unitBit}${hsnBit}`)),
                                 h("span", { style: { textAlign: 'right', fontWeight: strongWeight } },
                                     currencySymbol,
                                     amount.toFixed(2)))));
@@ -775,16 +720,11 @@ const InvoicePreview = React.forwardRef(({ profile: profileProp, client, details
                     h("div", { style: rowStyle },
                         h("span", null, cap('Subtotal')),
                         h("span", { style: { textAlign: 'right' } }, amt(printedSubtotal(totals)))),
-                    lineDisc > 0 && (h("div", { style: rowStyle },
+                    Number(totals?.totalDiscount) > 0 && (h("div", { style: rowStyle },
                         h("span", null, cap('Discount')),
                         h("span", { style: { textAlign: 'right' } },
                             "-",
-                            amt(lineDisc)))),
-                    tradeDisc > 0 && (h("div", { style: rowStyle },
-                        h("span", null, cap(tradeDiscLabel)),
-                        h("span", { style: { textAlign: 'right' } },
-                            "-",
-                            amt(tradeDisc)))),
+                            amt(totals.totalDiscount)))),
                     showGST && Number(totals?.cgst) > 0 && (h("div", { style: rowStyle },
                         h("span", null, cap('CGST')),
                         h("span", { style: { textAlign: 'right' } }, amt(totals.cgst)))),
@@ -1002,7 +942,7 @@ const InvoicePreview = React.forwardRef(({ profile: profileProp, client, details
         words: (n) => (currencySymbol === 'INR' ? `INR ${numberToWords(n)}` : amountInWords(n)),
         shortDate: formatShortDate,
         isServices: (options.invoiceMode || 'goods') === 'services',
-        docLabel: ({ quotation: 'Quotation', proforma: 'Proforma', 'credit-note': 'Credit Note', 'delivery-challan': 'Challan', 'sales-order': 'Sales Order' })[invoiceType] || 'Invoice',
+        docLabel: ({ quotation: 'Quotation', proforma: 'Proforma', 'credit-note': 'Credit Note', 'delivery-challan': 'Challan' })[invoiceType] || 'Invoice',
         placeOfSupply: placeOfSupplyText, clientAbroad, clientCountry, clientTaxIdLabel, paymentLink, purposeCode,
         shipTo: shipToParty,
         sig: gridSig,
@@ -1015,10 +955,10 @@ const InvoicePreview = React.forwardRef(({ profile: profileProp, client, details
             businessPhone: showBusinessPhone, businessEmail: showBusinessEmail, gstin: showGSTIN, state: showState,
             clientAddress: showClientAddress, clientPhone: showClientPhone, clientEmail: showClientEmail,
             placeOfSupply: showPlaceOfSupply, invoiceNumber: showInvoiceNumber, invoiceDate: showInvoiceDate, dueDate: showDueDate,
-            hsn: showHSN, itemQty: showItemQty, itemUnit: showItemUnit, rate: showRateColumn, mrp: showMRP,
+            hsn: showHSN, itemQty: showItemQty, itemUnit: showItemUnit, rate: showRateColumn,
         },
     } : null;
-    return (h("div", { className: `invoice-preview-container ${paperCfg.cssClass} template-${pdfStyleVariant}`, "data-user-colors": _ps_final.userColorsEnabled ? '1' : '0', "data-row-density": _ps_final.rowDensity || 'normal', "data-header-compact": _ps_final.headerCompact ? '1' : '0', ref: setSheetRef, ...(previewOnly ? {} : { id: 'invoice-preview' }), style: finalContainerStyle },
+    return (h("div", { className: `invoice-preview-container ${paperCfg.cssClass} template-${pdfStyleVariant}`, "data-user-colors": _ps_final.userColorsEnabled ? '1' : '0', "data-row-density": _ps_final.rowDensity || 'normal', "data-header-compact": _ps_final.headerCompact ? '1' : '0', ref: ref, ...(previewOnly ? {} : { id: 'invoice-preview' }), style: finalContainerStyle },
         cancelled && (h("div", { "aria-hidden": "true", style: {
                 position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -1031,7 +971,7 @@ const InvoicePreview = React.forwardRef(({ profile: profileProp, client, details
                     border: '6px solid rgba(220, 38, 38, 0.22)', borderRadius: 14,
                     padding: '0.3rem 1.6rem',
                 } }, "CANCELLED"))),
-        einv && (h("div", { "data-pdf-page-boundary": "", style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', padding: '0.6rem 1.25rem', ...(copyLabelGap ? { paddingTop: copyLabelGap } : {}), borderBottom: '1px solid #cbd5e1', fontSize: '0.72rem', color: '#0f172a', lineHeight: 1.6 } },
+        einv && (h("div", { "data-pdf-page-boundary": "", style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', padding: '0.6rem 1.25rem', borderBottom: '1px solid #cbd5e1', fontSize: '0.72rem', color: '#0f172a', lineHeight: 1.6 } },
             h("div", { style: { minWidth: 0 } },
                 h("div", { style: { fontWeight: 700, letterSpacing: '0.04em', color: '#334155' } }, "E-INVOICE"),
                 h("div", null,
@@ -1066,15 +1006,12 @@ const InvoicePreview = React.forwardRef(({ profile: profileProp, client, details
                     ": "),
                 h("strong", null, f.value)))))),
             h("table", { className: "inv-table", style: { tableLayout: 'auto', ...(pdfStyle === 'modern' ? { margin: '0 2rem', width: 'calc(100% - 4rem)' } : pdfStyle === 'minimal' ? { margin: '0 2rem', width: 'calc(100% - 4rem)', borderTop: 'none' } : {}) } },
-                h("thead", null, showTaxCols ? (isIndia && isInterstate ? (h(Fragment, null,
+                h("thead", null, showGST ? (isIndia && isInterstate ? (h(Fragment, null,
                     h("tr", null,
                         h("th", { className: "inv-th", rowSpan: "2" }, "#"),
                         h("th", { className: "inv-th", rowSpan: "2" }, "Description"),
                         showHSN && h("th", { className: "inv-th inv-th-center", rowSpan: "2" }, hsnHeader),
-                        hasSize && h("th", { className: "inv-th inv-th-center", rowSpan: "2" }, "Size"),
                         showItemQty && h("th", { className: "inv-th inv-th-center", rowSpan: "2" }, "Qty"),
-                        hasSize && h("th", { className: "inv-th inv-th-center", rowSpan: "2" }, "SQFT"),
-                        showMRP && h("th", { className: "inv-th inv-th-right", rowSpan: "2" }, "MRP"),
                         showRateColumn && h("th", { className: "inv-th inv-th-right", rowSpan: "2" }, "Rate"),
                         hasAnyDiscount && h("th", { className: "inv-th inv-th-right", rowSpan: "2" }, "Disc."),
                         h("th", { className: "inv-th inv-th-center", colSpan: "2", style: { borderBottom: '1px solid #cbd5e1' } }, "IGST"),
@@ -1086,10 +1023,7 @@ const InvoicePreview = React.forwardRef(({ profile: profileProp, client, details
                         h("th", { className: "inv-th", rowSpan: "2" }, "#"),
                         h("th", { className: "inv-th", rowSpan: "2" }, "Description"),
                         showHSN && h("th", { className: "inv-th inv-th-center", rowSpan: "2" }, hsnHeader),
-                        hasSize && h("th", { className: "inv-th inv-th-center", rowSpan: "2" }, "Size"),
                         showItemQty && h("th", { className: "inv-th inv-th-center", rowSpan: "2" }, "Qty"),
-                        hasSize && h("th", { className: "inv-th inv-th-center", rowSpan: "2" }, "SQFT"),
-                        showMRP && h("th", { className: "inv-th inv-th-right", rowSpan: "2" }, "MRP"),
                         showRateColumn && h("th", { className: "inv-th inv-th-right", rowSpan: "2" }, "Rate"),
                         hasAnyDiscount && h("th", { className: "inv-th inv-th-right", rowSpan: "2" }, "Disc."),
                         h("th", { className: "inv-th inv-th-center", colSpan: "2", style: { borderBottom: '1px solid #cbd5e1' } }, "CGST"),
@@ -1106,10 +1040,7 @@ const InvoicePreview = React.forwardRef(({ profile: profileProp, client, details
                         h("th", { className: "inv-th", rowSpan: "2" }, "#"),
                         h("th", { className: "inv-th", rowSpan: "2" }, "Description"),
                         showHSN && h("th", { className: "inv-th inv-th-center", rowSpan: "2" }, hsnHeader),
-                        hasSize && h("th", { className: "inv-th inv-th-center", rowSpan: "2" }, "Size"),
                         showItemQty && h("th", { className: "inv-th inv-th-center", rowSpan: "2" }, "Qty"),
-                        hasSize && h("th", { className: "inv-th inv-th-center", rowSpan: "2" }, "SQFT"),
-                        showMRP && h("th", { className: "inv-th inv-th-right", rowSpan: "2" }, "MRP"),
                         showRateColumn && h("th", { className: "inv-th inv-th-right", rowSpan: "2" }, "Rate"),
                         hasAnyDiscount && h("th", { className: "inv-th inv-th-right", rowSpan: "2" }, "Disc."),
                         h("th", { className: "inv-th inv-th-center", colSpan: "2", style: { borderBottom: '1px solid #cbd5e1' } }, taxLabel),
@@ -1120,16 +1051,13 @@ const InvoicePreview = React.forwardRef(({ profile: profileProp, client, details
                     h("th", { className: "inv-th" }, "#"),
                     h("th", { className: "inv-th" }, "Description"),
                     showHSN && h("th", { className: "inv-th inv-th-center" }, hsnHeader),
-                    hasSize && h("th", { className: "inv-th inv-th-center" }, "Size"),
                     showItemQty && h("th", { className: "inv-th inv-th-center" }, "Qty"),
-                    hasSize && h("th", { className: "inv-th inv-th-center" }, "SQFT"),
-                    showMRP && h("th", { className: "inv-th inv-th-right" }, "MRP"),
                     showRateColumn && h("th", { className: "inv-th inv-th-right" }, "Rate"),
                     hasAnyDiscount && h("th", { className: "inv-th inv-th-right" }, "Disc."),
                     h("th", { className: "inv-th inv-th-right" }, "Amount")))),
                 h("tbody", null, items.map((item, index) => {
                     // Shared with the grid designs and the HSN summary (lineCalc).
-                    const { discount, taxable: afterDiscount, tax: taxAmount, rate: taxRate, shownRate, shownDiscount } = lineCalc(item);
+                    const { discount, taxable: afterDiscount, tax: taxAmount, rate: taxRate } = lineCalc(item);
                     const halfRate = taxRate / 2;
                     const halfTax = taxAmount / 2;
                     return (h("tr", { key: item.id, className: index % 2 === 0 ? 'inv-tr-even' : '' },
@@ -1138,13 +1066,12 @@ const InvoicePreview = React.forwardRef(({ profile: profileProp, client, details
                             item.name || '-',
                             item.description && (h("div", { style: { fontSize: '0.78em', color: '#475569', marginTop: 2, whiteSpace: 'pre-wrap' } }, item.description))),
                         showHSN && h("td", { className: "inv-td inv-td-center inv-td-muted" }, item.hsn || '-'),
-                        hasSize && h("td", { className: "inv-td inv-td-center" }, sizeLabel(item.size)),
-                        showItemQty && h("td", { className: "inv-td inv-td-center" }, printedQty(item)),
-                        hasSize && h("td", { className: "inv-td inv-td-center" }, item.size ? lineSqft(item).toFixed(2) : ''),
-                        showMRP && h("td", { className: "inv-td inv-td-right" }, mrpText(item)),
-                        showRateColumn && h("td", { className: "inv-td inv-td-right" }, item.size?.manual ? '-' : fmt(shownRate)),
-                        hasAnyDiscount && h("td", { className: "inv-td inv-td-right" }, discount > 0 ? fmt(shownDiscount) : '-'),
-                        showTaxCols && (isIndia && isInterstate ? (h(Fragment, null,
+                        showItemQty && h("td", { className: "inv-td inv-td-center" },
+                            item.quantity,
+                            showItemUnit && item.unit ? ` ${item.unit}` : ''),
+                        showRateColumn && h("td", { className: "inv-td inv-td-right" }, fmt(item.rate)),
+                        hasAnyDiscount && h("td", { className: "inv-td inv-td-right" }, discount > 0 ? fmt(discount) : '-'),
+                        showGST && (isIndia && isInterstate ? (h(Fragment, null,
                             h("td", { className: "inv-td inv-td-center" },
                                 taxRate,
                                 "%"),
@@ -1185,16 +1112,11 @@ const InvoicePreview = React.forwardRef(({ profile: profileProp, client, details
                     showSubtotal && (h("div", { className: "inv-total-row" },
                         h("span", null, getLabel(_ps_labels, 'subtotal')),
                         h("span", null, fmt(printedSubtotal(totals))))),
-                    lineDisc > 0 && (h("div", { className: "inv-total-row", style: { color: '#dc2626' } },
+                    totals.totalDiscount > 0 && (h("div", { className: "inv-total-row", style: { color: '#dc2626' } },
                         h("span", null, "Discount"),
                         h("span", null,
                             "- ",
-                            fmt(lineDisc)))),
-                    tradeDisc > 0 && (h("div", { className: "inv-total-row", style: { color: '#dc2626' } },
-                        h("span", null, tradeDiscLabel),
-                        h("span", null,
-                            "- ",
-                            fmt(tradeDisc)))),
+                            fmt(totals.totalDiscount)))),
                     showGST && (isIndia && isInterstate ? (h("div", { className: "inv-total-row" },
                         h("span", null, "IGST"),
                         h("span", null, fmt(totals.igst)))) : isIndia ? (h(Fragment, null,
@@ -1212,7 +1134,7 @@ const InvoicePreview = React.forwardRef(({ profile: profileProp, client, details
                     totals.tcsAmount > 0 && (h("div", { className: "inv-total-row" },
                         h("span", null,
                             "TCS",
-                            sectionPrint(options.tcsSection, options.tcsRate)),
+                            options.tcsSection ? ` (${options.tcsSection} @ ${options.tcsRate}%)` : ''),
                         h("span", null, fmt(totals.tcsAmount)))),
                     totals.invoiceDiscountAmount > 0 && (h("div", { className: "inv-total-row", style: { color: '#dc2626' } },
                         h("span", null,
@@ -1228,16 +1150,16 @@ const InvoicePreview = React.forwardRef(({ profile: profileProp, client, details
                         h("span", null,
                             totals.roundOff > 0 ? '+' : '',
                             fmt(totals.roundOff)))),
-                    pdfStyle === 'modern' ? (h("div", { className: "inv-total-row inv-total-final inv-total-modern" },
-                        h("span", null, invoiceType === 'credit-note' ? 'Credit Amount' : totalDueLabel),
-                        h("span", null, fmt(totals.total)))) : (h("div", { className: "inv-total-row inv-total-final" },
+                    pdfStyle === 'modern' ? (h("div", { className: "inv-total-row inv-total-final inv-total-modern", style: { background: accent, color: '#fff', borderRadius: '6px', padding: '0.6rem 0.75rem', marginTop: '0.25rem' } },
+                        h("span", { style: { color: '#fff' } }, invoiceType === 'credit-note' ? 'Credit Amount' : totalDueLabel),
+                        h("span", { style: { color: '#fff' } }, fmt(totals.total)))) : (h("div", { className: "inv-total-row inv-total-final" },
                         h("span", null, invoiceType === 'credit-note' ? 'Credit Amount' : totalDueLabel),
                         h("span", { style: { color: accent } }, fmt(totals.total)))),
                     totals.tdsAmount > 0 && (h(Fragment, null,
                         h("div", { className: "inv-total-row", style: { color: '#64748b', fontSize: '0.75rem', marginTop: '0.25rem', borderTop: '1px dashed #e2e8f0', paddingTop: '0.4rem' } },
                             h("span", null,
                                 "Less: TDS",
-                                sectionPrint(options.tdsSection, options.tdsRate)),
+                                options.tdsSection ? ` (${options.tdsSection} @ ${options.tdsRate}%)` : ''),
                             h("span", null,
                                 "\u2212 ",
                                 fmt(totals.tdsAmount))),
@@ -1263,22 +1185,44 @@ const InvoicePreview = React.forwardRef(({ profile: profileProp, client, details
                         showAccountLabel && account?.label && (h("p", { style: { margin: '0 0 0.25rem', fontSize: '0.75rem', color: '#64748b', fontStyle: 'italic' } },
                             "Pay via: ",
                             h("strong", { style: { color: '#334155' } }, account.label))),
-                        h("div", { className: "inv-footer-details inv-bank-grid" }, [
-                            (account?.accountHolderName || profile?.businessName) && ['A/C Name', account?.accountHolderName || profile.businessName],
-                            ['Bank', account?.bankName || profile.bankName],
-                            ['A/C No', h(Fragment, null,
-                                    account?.accountNumber || profile.accountNumber,
-                                    account?.accountType && (h("span", { style: { marginLeft: '0.4rem', fontSize: '0.85em', color: '#64748b' } },
-                                        "\u00B7 ",
-                                        ({ savings: 'Savings', current: 'Current', cc: 'Cash Credit', od: 'Overdraft', nre: 'NRE', nro: 'NRO' })[account.accountType] || account.accountType)))],
-                            (account?.ifsc || profile.ifsc) && [sellerCC.bankLabel || 'IFSC', account?.ifsc || profile.ifsc],
-                            (account?.swift || profile.swift) && ['SWIFT/BIC', account?.swift || profile.swift],
-                            account?.iban && ['IBAN', account.iban],
-                            purposeCode && ['Purpose code', purposeCodeText(purposeCode)],
-                            profile.pan && isIndia && ['PAN', profile.pan],
-                        ].filter(Boolean).map(([label, value]) => (h(React.Fragment, { key: label },
-                            h("span", { className: "inv-detail-label" }, label),
-                            h("p", null, value))))))),
+                        h("div", { className: "inv-footer-details" },
+                            (account?.accountHolderName || profile?.businessName) && (h("p", null,
+                                h("span", { className: "inv-detail-label" }, "A/C Name:"),
+                                " ",
+                                account?.accountHolderName || profile.businessName)),
+                            h("p", null,
+                                h("span", { className: "inv-detail-label" }, "Bank:"),
+                                " ",
+                                account?.bankName || profile.bankName),
+                            h("p", null,
+                                h("span", { className: "inv-detail-label" }, "A/C No:"),
+                                " ",
+                                account?.accountNumber || profile.accountNumber,
+                                account?.accountType && (h("span", { style: { marginLeft: '0.4rem', fontSize: '0.85em', color: '#64748b' } },
+                                    "\u00B7 ",
+                                    ({ savings: 'Savings', current: 'Current', cc: 'Cash Credit', od: 'Overdraft', nre: 'NRE', nro: 'NRO' })[account.accountType] || account.accountType))),
+                            (account?.ifsc || profile.ifsc) && h("p", null,
+                                h("span", { className: "inv-detail-label" },
+                                    sellerCC.bankLabel || 'IFSC',
+                                    ":"),
+                                " ",
+                                account?.ifsc || profile.ifsc),
+                            (account?.swift || profile.swift) && h("p", null,
+                                h("span", { className: "inv-detail-label" }, "SWIFT/BIC:"),
+                                " ",
+                                account?.swift || profile.swift),
+                            account?.iban && h("p", null,
+                                h("span", { className: "inv-detail-label" }, "IBAN:"),
+                                " ",
+                                account.iban),
+                            purposeCode && h("p", null,
+                                h("span", { className: "inv-detail-label" }, "Purpose code:"),
+                                " ",
+                                purposeCodeText(purposeCode)),
+                            profile.pan && isIndia && h("p", null,
+                                h("span", { className: "inv-detail-label" }, "PAN:"),
+                                " ",
+                                profile.pan)))),
                     paymentLink && (h("div", { className: "inv-footer-block" },
                         h("h4", { className: "inv-section-label" }, "PAY ONLINE"),
                         h("p", { className: "inv-terms", style: { wordBreak: 'break-all' } }, paymentLink))),

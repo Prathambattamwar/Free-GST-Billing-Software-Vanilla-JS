@@ -1,4 +1,3 @@
-import { h, Fragment } from '../vanilla/dom.js';
 // Settings → Invoice Number Format (moved out of SettingsView in v1.10.79).
 //
 // v1.10.79 (#95) - with more than one business, a business can number with
@@ -6,10 +5,10 @@ import { h, Fragment } from '../vanilla/dom.js';
 // are stored under their number, so an own series must print a prefix no other
 // series uses (ownPrefixProblem). The rules live in src/utils.js and are the
 // same ones the editor and the server's recurring invoices use.
-import { forwardRef, useEffect, useImperativeHandle, useState } from '../vanilla/dom.js';
+import { forwardRef, useEffect, useImperativeHandle, useState, h, Fragment } from '../vanilla/dom.js';
 import { Hash, Save } from '../vanilla/icons.js';
 import { getInvoiceNumberSettings, saveInvoiceNumberSettings, getNumberSeriesMap, saveNumberSeriesMap } from '../store.js';
-import { getFinancialYearLabel, nextCounterValue, MAX_START_NUMBER, DEFAULT_NUMBER_SETTINGS, formatDocNumber, counterKeyFor, ownPrefixProblem, prefixClashWarning, numberFormatProblem, } from '../utils.js';
+import { getFinancialYearLabel, nextCounterValue, MAX_START_NUMBER, DEFAULT_NUMBER_SETTINGS, formatDocNumber, counterKeyFor, ownPrefixProblem, numberFormatProblem, } from '../utils.js';
 import { getPrintSettings } from '../utils/printSettings.js';
 import { toast } from './Toast.js';
 import { confirmAction } from './ConfirmModal.js';
@@ -38,7 +37,7 @@ const InvoiceNumberSettings = forwardRef(function InvoiceNumberSettings({ busine
         setScope(own ? 'own' : 'shared');
         setDraft(own ? { ...DEFAULT_NUMBER_SETTINGS, ...map[businessKey] } : s);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line vanilla-runtime/exhaustive-deps
     useEffect(() => { load().catch(() => { }); }, [businessKey]);
     // The last tax invoice number of the series being edited, for the preview
     // and the "are you sure" before jumping forward.
@@ -100,10 +99,6 @@ const InvoiceNumberSettings = forwardRef(function InvoiceNumberSettings({ busine
                 toast(problem, 'warning');
                 return false;
             }
-            // v1.10.85 - an old SO / DN prefix still saves, with a word of warning.
-            const clash = prefixClashWarning(settings.brandPrefix);
-            if (clash)
-                toast(clash, 'warning', 12000);
         }
         else {
             // The shared prefix may not be one a business numbers with on its own.

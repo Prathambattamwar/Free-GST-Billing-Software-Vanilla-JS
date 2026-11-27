@@ -1,103 +1,102 @@
-import { h, Fragment } from '../vanilla/dom.js';
-import { useState, useEffect, useRef, useCallback, useMemo, memo } from '../vanilla/dom.js';
+import { useState, useEffect, useRef, useCallback, useMemo, memo, h, Fragment } from '../vanilla/dom.js';
 import { Maximize2, ArrowLeft, Plus, Trash2, Download, UserPlus, Pencil, Settings, ChevronUp, ChevronDown, MessageCircle, Check, Loader, Truck, Printer, Eye, EyeOff, QrCode } from '../vanilla/icons.js';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
-import { saveBill, saveProduct, deleteBill, applyStockChanges, getNextInvoiceNumber, typedNumberInSeries, raiseInvoiceCounter, getTermsTemplates, getAllClients, saveClient, getProfile, getAllProducts, getInvoiceDisplayOptions, saveInvoiceDisplayOptions, getAllProfiles, getRegionMode, saveRecurring, getAllRecurring, getAllBills, getEnabledModules, getBusinessType, activePriceLevels, saveReceipt, deleteReceipt, reserveReceiptNo } from '../store.js';
-import { trackedStock, clientPaperPrefs, clientPaperOptions, INVOICE_TYPES, isModuleEnabled, businessKeyOf, GST_DOC_NUMBER, COUNTRIES, deliveryChargeLine, stockEffect, appliedStock, stockDelta, generateEWayBillJSON, formatCurrency, getCountryConfig, getStatesForCountry, getAllUnits, addCustomUnit, removeCustomUnit, getCountriesForRegion, TDS_SECTIONS, TCS_SECTIONS, REMOVED_TCS_SECTIONS, TDS_SECTIONS_2025, TCS_SECTIONS_2025, tdsSectionsFor, tcsSectionsFor, movedSection, sectionOptionLabel, TERMS_PRESETS, getActiveAccounts, getDefaultAccount, getAccountById, getDefaultUnitForMode, filterUnitsByMode, PAPER_SIZES, getPaperSize, computeInvoiceTotals, clientYearToDate, htmlHasText, ORDER_DETAIL_FIELDS, customFieldsOf, invoiceOptionOn, DEFAULT_DECLARATION, decodeGstin, safePageBoundaries, localToday, toLocalIsoDate, parseLocalDate, paymentStatusFor, getStateCode, SALES_INVOICE_TYPES, spreadBillDiscount, amountDue, withReceivedNow, receivedNowPayment } from '../utils.js';
-import { receiptForPayment, withNextReceiptNo } from '../utils/bankMatch.js';
-import { PAID_MODES, lastPaidMode, rememberPaidMode } from './askPaidMode.js';
+import { saveBill, deleteBill, applyStockChanges, getNextInvoiceNumber, getTermsTemplates, getAllClients, saveClient, getProfile, getAllProducts, getInvoiceDisplayOptions, saveInvoiceDisplayOptions, getAllProfiles, getRegionMode, saveRecurring, getAllRecurring, getAllBills, getEnabledModules, getBusinessType } from '../store.js';
+import { INVOICE_TYPES, isModuleEnabled, businessKeyOf, GST_DOC_NUMBER, COUNTRIES, printedSubtotal, deliveryChargeLine, stockEffect, appliedStock, stockDelta, generateEWayBillJSON, formatCurrency, getCountryConfig, getStatesForCountry, getAllUnits, addCustomUnit, removeCustomUnit, getCountriesForRegion, TDS_SECTIONS, TCS_SECTIONS, REMOVED_TCS_SECTIONS, TERMS_PRESETS, getActiveAccounts, getDefaultAccount, getAccountById, getDefaultUnitForMode, filterUnitsByMode, PAPER_SIZES, getPaperSize, computeInvoiceTotals, clientYearToDate, htmlHasText, ORDER_DETAIL_FIELDS, invoiceOptionOn, DEFAULT_DECLARATION, decodeGstin, safePageBoundaries, localToday, toLocalIsoDate, parseLocalDate, paymentStatusFor, getStateCode, amountDue, salesSign, SALES_INVOICE_TYPES } from '../utils.js';
 import { getPrintSettings, savePrintSettings } from '../utils/printSettings.js';
-import { fitItemTable, pdfScalePlan } from '../utils/invoiceFit.js';
-import { sendPdfOnWhatsApp, invoiceShareMessage } from '../utils/share.js';
+import { openWhatsAppShare } from '../utils/share.js';
 import { confirmAction, promptAction } from './ConfirmModal.js';
 import { useCostCentres } from './useCostCentres.js';
 import { CostCentreSelect } from './CostCentrePicker.js';
 import { centreFields } from '../utils/costCentres.js';
 import { isExportOrSez, lutCoversDate, normaliseLutArn, fyOf } from '../utils/lut.js';
-import { PURPOSE_CODE_OPTIONS } from '../utils/purposeCodes.js';
-import { baseCurrencyOf, currencyForClient, isForeignClient, currencyCountryMismatch } from '../utils/fx.js';
-import { costOfGoodsSold } from '../utils/products.js';
+import { PURPOSE_CODES } from '../utils/purposeCodes.js';
+import { baseCurrencyOf, currencyForClient, isForeignClient } from '../utils/fx.js';
 import InvoiceCurrency from './InvoiceCurrency.js';
 import PrintPreviewModal from './PrintPreviewModal.js';
 import DOMPurify from 'dompurify';
 import InvoicePreview from './InvoicePreview.js';
-import ScanBarcodeBox from './ScanBarcodeBox.js';
-import { addScannedLine, findByBarcode } from '../utils/barcode.js';
-import { hasAltUnit, lineInUnit } from '../utils/stock.js';
-import { lineFactor } from '../utils.js';
 import { suggestGstRate, autoFillRate, rateText } from '../utils/hsnRates.js';
 import HelpButton from './HelpButton.js';
-import ComboInput from './ComboInput.js';
 import { getClientCredit, planCreditApplication } from '../utils/clientCredit.js';
 import ClientModal from './ClientModal.js';
 import { EInvoiceEditorModal } from './EInvoiceModal.js';
 import { toast } from './Toast.js';
-import { phoneDigits, findClientByPhone, newPhoneClient } from '../utils/phoneClients.js';
-import { changeSize, itemWithUnit, sizeSqft, sizeHasDims, SIZE_STEPS, withRftLines, rftSources, perimeterRft } from '../utils/glass.js';
-import { orderSummary, salesOrderOf, SO_STATUS_LABELS } from '../utils/salesOrders.js';
-// v1.10.85 - price levels and the credit-limit warning.
-import { priceForLevel } from '../utils/priceLevels.js';
-import { findSavedClient, paidTowards, clientKey } from '../utils/clientLedger.js';
-import { START_KEY, lastInvoiceType, rememberInvoiceType, startTypeFor, startDueDate, startTaxRate, startPaidMode, startOptionsPatch, htmlLineCount, htmlFirstWords } from '../utils/invoiceStart.js';
-import CreditLimitWarning from './CreditLimitWarning.js';
-import { useInvoiceCards, InvoiceCard } from './InvoiceCards.js';
 // Rich text editor component that works with contentEditable properly
 function RichEditor({ value, onChange, placeholder, toolbar = false }) {
     const ref = useRef(null);
     const isInitialized = useRef(false);
+    const isFocused = useRef(false);
+    const onChangeRef = useRef(onChange);
+    onChangeRef.current = onChange;
+
     useEffect(() => {
         if (ref.current && !isInitialized.current) {
             ref.current.innerHTML = DOMPurify.sanitize(value || '');
             isInitialized.current = true;
         }
     }, []);
-    // Update if value changes externally (e.g. draft restore, editing bill)
+    // Update if value changes externally (e.g. draft restore, editing bill, preset/template load)
     useEffect(() => {
-        if (ref.current && isInitialized.current && ref.current.innerHTML !== value) {
-            ref.current.innerHTML = DOMPurify.sanitize(value || '');
+        if (!ref.current || !isInitialized.current || isFocused.current)
+            return;
+        const nextHtml = DOMPurify.sanitize(value || '');
+        if (ref.current.innerHTML !== nextHtml) {
+            ref.current.innerHTML = nextHtml;
         }
     }, [value]);
     const handleInput = useCallback(() => {
         if (ref.current) {
-            onChange(ref.current.innerHTML);
+            onChangeRef.current(ref.current.innerHTML);
         }
-    }, [onChange]);
-    // Toolbar formatting via document.execCommand. The existing innerHTML setters above
-    // already wrap user content with DOMPurify.sanitize(), and the toolbar only emits
-    // standard formatting tags that the same sanitizer keeps.
+    }, []);
+    // Toolbar formatting via document.execCommand. Prevent mousedown default so
+    // clicking toolbar buttons keeps focus and the current text selection intact.
+    const keepSelection = (e) => e.preventDefault();
     const applyFormat = (cmd, val) => {
         if (ref.current)
             ref.current.focus();
         document.execCommand(cmd, false, val);
         if (ref.current)
-            onChange(ref.current.innerHTML);
+            onChangeRef.current(ref.current.innerHTML);
     };
     const btnStyle = { padding: '0.2rem 0.5rem', fontSize: '0.78rem', borderRadius: '4px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', cursor: 'pointer', minWidth: '28px' };
     return (h(Fragment, null,
         toolbar && (h("div", { style: { display: 'flex', gap: '0.25rem', flexWrap: 'wrap', marginBottom: '0.4rem' } },
-            h("button", { type: "button", onClick: () => applyFormat('bold'), title: "Bold (Ctrl+B)", style: { ...btnStyle, fontWeight: 700 } }, "B"),
-            h("button", { type: "button", onClick: () => applyFormat('italic'), title: "Italic (Ctrl+I)", style: { ...btnStyle, fontStyle: 'italic' } }, "I"),
-            h("button", { type: "button", onClick: () => applyFormat('underline'), title: "Underline (Ctrl+U)", style: { ...btnStyle, textDecoration: 'underline' } }, "U"),
+            h("button", { type: "button", onMouseDown: keepSelection, onClick: () => applyFormat('bold'), title: "Bold (Ctrl+B)", style: { ...btnStyle, fontWeight: 700 } }, "B"),
+            h("button", { type: "button", onMouseDown: keepSelection, onClick: () => applyFormat('italic'), title: "Italic (Ctrl+I)", style: { ...btnStyle, fontStyle: 'italic' } }, "I"),
+            h("button", { type: "button", onMouseDown: keepSelection, onClick: () => applyFormat('underline'), title: "Underline (Ctrl+U)", style: { ...btnStyle, textDecoration: 'underline' } }, "U"),
             h("span", { style: { width: 1, background: 'var(--border-color)', margin: '0 0.2rem' } }),
-            h("button", { type: "button", onClick: () => applyFormat('insertUnorderedList'), title: "Bullet list", style: btnStyle }, "\u2022\u00A0List"),
-            h("button", { type: "button", onClick: () => applyFormat('insertOrderedList'), title: "Numbered list", style: btnStyle }, "1.\u00A0List"),
+            h("button", { type: "button", onMouseDown: keepSelection, onClick: () => applyFormat('insertUnorderedList'), title: "Bullet list", style: btnStyle }, "\u2022\u00A0List"),
+            h("button", { type: "button", onMouseDown: keepSelection, onClick: () => applyFormat('insertOrderedList'), title: "Numbered list", style: btnStyle }, "1.\u00A0List"),
             h("span", { style: { width: 1, background: 'var(--border-color)', margin: '0 0.2rem' } }),
-            h("button", { type: "button", onClick: () => applyFormat('formatBlock', '<h4>'), title: "Heading", style: { ...btnStyle, fontWeight: 700, fontSize: '0.85rem' } }, "H"),
-            h("button", { type: "button", onClick: () => applyFormat('formatBlock', '<p>'), title: "Paragraph", style: btnStyle }, "\u00B6"),
-            h("button", { type: "button", onClick: async () => {
+            h("button", { type: "button", onMouseDown: keepSelection, onClick: () => applyFormat('formatBlock', '<h4>'), title: "Heading", style: { ...btnStyle, fontWeight: 700, fontSize: '0.85rem' } }, "H"),
+            h("button", { type: "button", onMouseDown: keepSelection, onClick: () => applyFormat('formatBlock', '<p>'), title: "Paragraph", style: btnStyle }, "\u00B6"),
+            h("button", {
+                type: "button", onMouseDown: keepSelection, onClick: async () => {
+                    const sel = window.getSelection();
+                    const savedRange = sel && sel.rangeCount > 0 ? sel.getRangeAt(0).cloneRange() : null;
                     const url = await promptAction({
                         title: 'Insert link',
                         message: 'Paste the URL to link to. Selected text will become the link.',
                         placeholder: 'https://example.com',
                         confirmLabel: 'Insert',
                     });
-                    if (url)
+                    if (url) {
+                        if (ref.current)
+                            ref.current.focus();
+                        if (savedRange && sel) {
+                            sel.removeAllRanges();
+                            sel.addRange(savedRange);
+                        }
                         applyFormat('createLink', url);
-                }, title: "Insert link", style: btnStyle }, "\uD83D\uDD17"),
+                    }
+                }, title: "Insert link", style: btnStyle
+            }, "\uD83D\uDD17"),
             h("span", { style: { width: 1, background: 'var(--border-color)', margin: '0 0.2rem' } }),
-            h("button", { type: "button", onClick: () => applyFormat('removeFormat'), title: "Clear formatting", style: btnStyle }, "\u2715"))),
-        h("div", { ref: ref, contentEditable: true, suppressContentEditableWarning: true, className: "form-input rich-editor", onInput: handleInput, style: { minHeight: '100px', whiteSpace: 'pre-wrap' }, "data-placeholder": placeholder })));
+            h("button", { type: "button", onMouseDown: keepSelection, onClick: () => applyFormat('removeFormat'), title: "Clear formatting", style: btnStyle }, "\u2715"))),
+        h("div", { ref: ref, contentEditable: true, suppressContentEditableWarning: true, className: "form-input rich-editor", onInput: handleInput, style: { minHeight: '100px', whiteSpace: 'pre-wrap' }, onFocus: () => { isFocused.current = true; }, onBlur: () => { isFocused.current = false; handleInput(); }, "data-placeholder": placeholder })));
 }
 // Load draft from sessionStorage
 function loadDraft() {
@@ -108,32 +107,6 @@ function loadDraft() {
     catch {
         return null;
     }
-}
-// v1.10.84 - "Print" beside each part of the form that prints, so it can be
-// left off this invoice where it is typed. It is the same switch as in
-// Customize (invoiceOptions[optKey]); unset means printed.
-function PrintToggle({ optKey, options, setOptions, disabled, label = 'Print' }) {
-    const on = options?.[optKey] !== false;
-    return (h("label", { className: "print-toggle", title: on ? 'Printed on this invoice. Untick to leave it off.' : 'Not printed on this invoice. Tick to print it.' },
-        h("input", { type: "checkbox", checked: on, disabled: disabled, onChange: (e) => setOptions((prev) => ({ ...prev, [optKey]: e.target.checked })) }),
-        label));
-}
-// v1.10.86 (#147, #189) - a part of the form that opens on click and, while
-// closed, says in a few words what is in it ("Terms: Standard (5 lines)"), so
-// New Invoice is shorter without hiding anything. Pass open / onToggle to
-// open it from elsewhere; otherwise it starts as defaultOpen says.
-function FoldSection({ title, help, summary, defaultOpen = false, open, onToggle, children, testId }) {
-    const [ownOpen, setOwnOpen] = useState(!!defaultOpen);
-    const isOpen = open ?? ownOpen;
-    return (h("details", { className: "fold-section", open: isOpen, "data-testid": testId, onToggle: (e) => { const now = e.currentTarget.open; if (now !== isOpen) {
-            setOwnOpen(now);
-            onToggle?.(now);
-        } } },
-        h("summary", null,
-            h("span", { className: "fold-title" }, title),
-            help,
-            summary && h("span", { className: "fold-summary" }, summary)),
-        h("div", { className: "fold-body" }, children)));
 }
 const DEFAULT_OPTIONS = {
     showGST: true,
@@ -199,10 +172,6 @@ const DEFAULT_OPTIONS = {
     // its own line above the grand total when > 0.
     invoiceDiscountValue: 0,
     invoiceDiscountType: 'fixed', // 'fixed' | 'percent'
-    // v1.10.85 (#190) - true: taken BEFORE GST (a trade discount, spread over
-    // the lines so GST is worked out on the reduced value). Off by default, so
-    // every older bill computes exactly as before.
-    invoiceDiscountBeforeGst: false,
     // v1.10.24 — Client-credit auto-apply. When true, opening a new invoice
     // for a client with an existing overpayment auto-applies the credit up
     // to the invoice total. When false (default), the user sees a banner
@@ -235,7 +204,6 @@ const OPTION_GROUP_HELP = {
     'Header & branding': 'invoice-options#show-header',
     'Client / Bill-to': 'invoice-options#show-client',
     'Invoice meta': 'invoice-options#show-meta',
-    'Tax': 'invoice-options#show-items',
     'Items table': 'invoice-options#show-items',
     'Totals': 'invoice-options#show-totals',
     'Compliance flags (India)': 'invoices#reverse-charge',
@@ -249,7 +217,7 @@ const PDF_STYLES = [
     { id: 'tally', label: 'Tally style', desc: 'The Tally layout: order and dispatch boxes, HSN tax summary, declaration' },
 ];
 // v1.10.7 — audit H14. Extracted from the inline `items.map(...)` block
-// in InvoiceGenerator. Wrapped in React.memo so only the row whose
+// in InvoiceGenerator. Kept as a focused row component so only the row whose
 // `item` reference changed re-renders on any keystroke.
 //
 // Contract:
@@ -264,7 +232,7 @@ const PDF_STYLES = [
 //  • All handlers are useCallback in the parent so their identity
 //    stays stable across renders.
 //  • `suggestions` — the ROW's list of product suggestions. Passed in
-//    as a plain array so React.memo can compare it shallowly.
+//    as a plain array so shallow comparisons remain predictable.
 //
 // Perf win: typing "Widget" (6 chars) in row 1 of an invoice with 20
 // items used to trigger 20 × 6 = 120 row re-renders. Now: 6 (just row 1).
@@ -275,19 +243,6 @@ const currencySymbolFor = (code) => COUNTRIES.find(c => c.currency === (code || 
 // dropdown, with keyboard navigation. Extracted so LineItem stays lean
 // and the local `activeIdx` state doesn't cause other row fields to
 // re-render on every arrow-key press.
-// #167 - the boxes of a line item in order, for Enter to move along.
-function rowFields(row) {
-    return [...(row?.querySelectorAll('input, select, textarea') || [])].filter((el) => !el.disabled
-        && el.type !== 'checkbox' && el.type !== 'hidden' && el.offsetParent !== null
-        && !el.closest('.line-item-description-row'));
-}
-function focusField(el) {
-    if (!el)
-        return;
-    el.focus();
-    if (typeof el.select === 'function' && el.tagName !== 'SELECT')
-        el.select();
-}
 function SuggestingInput({ item, suggestions, onFieldChange, onSelectProduct, onSetProductSearch, currency }) {
     const [activeIdx, setActiveIdx] = useState(-1);
     // v1.10.83 - the name box grows with the text (and can be dragged taller), so
@@ -303,38 +258,12 @@ function SuggestingInput({ item, suggestions, onFieldChange, onSelectProduct, on
     // Reset the highlighted suggestion when the query changes so ArrowDown
     // starts from the top rather than continuing a stale index.
     useEffect(() => { setActiveIdx(-1); }, [item.name, suggestions.length]);
-    // #182 - the highlighted suggestion stays in view while arrowing down a long list.
-    const listRef = useRef(null);
-    useEffect(() => {
-        if (activeIdx >= 0)
-            listRef.current?.children[activeIdx]?.scrollIntoView({ block: 'nearest' });
-    }, [activeIdx]);
     const commit = (idx) => {
         const pick = suggestions[idx] ?? suggestions[0];
-        if (!pick)
-            return;
-        onSelectProduct(item.id, pick);
-        // #167 - a picked product fills HSN, rate and GST: the cursor goes on to
-        // the box after HSN (Qty, or Length on a size line) once the row has drawn.
-        const row = boxRef.current?.closest('.line-item-row');
-        requestAnimationFrame(() => {
-            const fields = rowFields(row);
-            const hsnAt = fields.findIndex((el) => el.classList.contains('line-item-hsn'));
-            focusField(fields[(hsnAt >= 0 ? hsnAt : fields.indexOf(boxRef.current)) + 1]);
-        });
+        if (pick)
+            onSelectProduct(item.id, pick);
     };
     const handleKey = (e) => {
-        // v1.10.85 (#137) - a barcode typed (or scanned) into the Item box, then
-        // Enter: its product is picked, as if its suggestion were clicked.
-        // The barcode match is always first (see getProductSuggestions, which
-        // leaves it out with Barcodes off or when a product has that exact name).
-        if (e.key === 'Enter' && !e.shiftKey && activeIdx < 0 && suggestions[0]
-            && findByBarcode([suggestions[0]], item.name) && isModuleEnabled('barcodes', getEnabledModules())) {
-            e.preventDefault();
-            e.stopPropagation();
-            commit(0);
-            return;
-        }
         // A name is one line: Enter never breaks it (the row's Enter-adds-a-row still runs).
         if (e.key === 'Enter' && !e.shiftKey && activeIdx < 0)
             e.preventDefault();
@@ -364,146 +293,40 @@ function SuggestingInput({ item, suggestions, onFieldChange, onSelectProduct, on
     };
     return (h(Fragment, null,
         h("textarea", { ref: boxRef, rows: 1, className: "form-input line-item-name", value: item.name, placeholder: "Item", onChange: (e) => onFieldChange(item.id, 'name', e.target.value.replace(/\s*\n\s*/g, ' ')), onBlur: () => setTimeout(() => onSetProductSearch({ itemId: null, query: '' }), 200), onKeyDown: handleKey, autoComplete: "off" }),
-        suggestions.length > 0 && (h("div", { className: "product-suggestions", role: "listbox", ref: listRef }, suggestions.map((p, i) => (h("div", { key: p.id, className: "product-suggestion-item", role: "option", "aria-selected": i === activeIdx, onMouseEnter: () => setActiveIdx(i), onMouseDown: () => onSelectProduct(item.id, p), style: i === activeIdx ? { background: 'var(--primary-light, rgba(30,64,175,0.12))' } : undefined },
+        suggestions.length > 0 && (h("div", { className: "product-suggestions", role: "listbox" }, suggestions.map((p, i) => (h("div", { key: p.id, className: "product-suggestion-item", role: "option", "aria-selected": i === activeIdx, onMouseEnter: () => setActiveIdx(i), onMouseDown: () => onSelectProduct(item.id, p), style: i === activeIdx ? { background: 'var(--primary-light, rgba(30,64,175,0.12))' } : undefined },
             h("span", { className: "product-suggestion-name" }, p.name),
             h("span", { className: "product-suggestion-meta" },
-                [
-                    p.hsn && `HSN: ${p.hsn}`,
-                    p.rate && formatCurrency(p.rate, currency || 'INR'),
-                    Number(p.mrp) > 0 && `MRP ${formatCurrency(p.mrp, currency || 'INR')}`,
-                ].filter(Boolean).join(' · '),
-                trackedStock(p) !== null && (trackedStock(p) > 0
-                    ? ` · Stock ${trackedStock(p)}`
-                    : h("span", { style: { color: 'var(--danger)', fontWeight: 600 } }, " \u00B7 Out of stock"))))))))));
+                p.hsn && `HSN: ${p.hsn}`,
+                p.hsn && p.rate ? ' · ' : '',
+                p.rate ? formatCurrency(p.rate, currency || 'INR') : ''))))))));
 }
-// #126 - fields the user names (an optician's R SPH / L SPH, a patient name),
-// printed with the order details when filled. The names are kept for the next
-// invoice, so they are typed once.
-const CUSTOM_LABELS_KEY = 'fgsb_customFieldLabels';
-const savedCustomLabels = () => {
-    try {
-        const v = JSON.parse(localStorage.getItem(CUSTOM_LABELS_KEY) || '[]');
-        return Array.isArray(v) ? v.filter((x) => typeof x === 'string' && x.trim()) : [];
-    }
-    catch {
-        return [];
-    }
-};
-function CustomFields({ details, setDetails }) {
-    const rows = Array.isArray(details.customFields)
-        ? details.customFields
-        : savedCustomLabels().map((label) => ({ label, value: '' }));
-    const save = (next) => {
-        setDetails({ ...details, customFields: next });
-        try {
-            localStorage.setItem(CUSTOM_LABELS_KEY, JSON.stringify(next.map((f) => String(f.label || '').trim()).filter(Boolean)));
-        }
-        catch { /* sandboxed */ }
-    };
-    const edit = (i, key, value) => save(rows.map((f, j) => (j === i ? { ...f, [key]: value } : f)));
-    return (h("div", { style: { marginTop: '0.6rem' } },
-        h("div", { className: "form-label", style: { fontSize: '0.78rem' } },
-            "Your own fields ",
-            h("span", { style: { color: 'var(--text-muted)', fontWeight: 400 } }, "(printed with these details when filled; the names stay for your next invoice)")),
-        rows.map((f, i) => (h("div", { key: i, style: { display: 'flex', gap: 6, marginBottom: 6 } },
-            h("input", { className: "form-input", style: { flex: 1 }, placeholder: "Field name, e.g. R SPH", value: f.label, onChange: (e) => edit(i, 'label', e.target.value) }),
-            h("input", { className: "form-input", style: { flex: 1.4 }, placeholder: "Value", value: f.value, onChange: (e) => edit(i, 'value', e.target.value) }),
-            h("button", { type: "button", className: "icon-btn", title: "Remove this field", onClick: () => save(rows.filter((_, j) => j !== i)) },
-                h(Trash2, { size: 14 }))))),
-        h("button", { type: "button", className: "btn btn-secondary", style: { fontSize: '0.78rem', padding: '0.3rem 0.6rem' }, onClick: () => save([...rows, { label: '', value: '' }]) },
-            h(Plus, { size: 14 }),
-            " Add a field")));
-}
-// #140 - a Sq.ft line: Length x Width in inches, pieces, round-up step; the
-// square feet are the line's quantity. "Type amount" bills a fixed amount.
-function SizeFields({ item, onSizeChange, clampNonNeg }) {
-    const s = item.size;
-    const box = (key, label) => (h("div", { className: "line-item-field", style: { flex: 0.6, minWidth: 64 } },
-        h("label", { className: "form-label" }, label),
-        h("input", { type: "number", min: "0", step: "any", className: "form-input", value: s[key], onFocus: (e) => e.target.select(), onChange: (e) => onSizeChange(item.id, { [key]: clampNonNeg(e.target.value) }) })));
-    return (h(Fragment, null,
-        box('l', 'Length (in)'),
-        box('w', 'Width (in)'),
-        box('pcs', 'Pcs'),
-        h("div", { className: "line-item-field", style: { flex: 0.7, minWidth: 80 } },
-            h("label", { className: "form-label" }, "Round up"),
-            h("select", { className: "form-input", value: Number(s.step) || 0, onChange: (e) => onSizeChange(item.id, { step: Number(e.target.value) }) }, SIZE_STEPS.map((n) => h("option", { key: n, value: n }, n ? `${n} inch` : 'No')))),
-        h("div", { className: "line-item-field", style: { flex: 0.7, minWidth: 84 } },
-            h("label", { className: "form-label" }, "Sq.ft"),
-            sizeHasDims(s) ? (h("input", { type: "text", className: "form-input", value: sizeSqft(s), disabled: true, title: "Rounded length x width / 144 x pieces" })) : (h("input", { type: "number", min: "0", step: "any", className: "form-input", value: s.sqft ?? '', title: "No size typed: type the square feet, or fill Length and Width", onFocus: (e) => e.target.select(), onChange: (e) => onSizeChange(item.id, { sqft: clampNonNeg(e.target.value) }) })),
-            h("label", { style: { display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.7rem', marginTop: 2, cursor: 'pointer' } },
-                h("input", { type: "checkbox", checked: !!s.manual, onChange: (e) => onSizeChange(item.id, { manual: e.target.checked }) }),
-                "Type amount"))));
-}
-// v1.10.85 (#140) - an RFT line (polish, channel): its quantity is the sq.ft
-// or the edges (running feet) of all glass lines, the ticked ones, or typed.
-function RftFields({ item, sizeLines, onRftChange, clampNonNeg }) {
-    const r = item.rft;
-    const set = (patch) => onRftChange(item.id, patch);
-    const ids = new Set(r.ids || []);
-    return (h("div", { className: "line-item-field", style: { flex: 2.4, minWidth: 220 } },
-        h("label", { className: "form-label" }, "Running feet from"),
-        h("div", { style: { display: 'flex', gap: 4, flexWrap: 'wrap' } },
-            h("select", { className: "form-input", style: { flex: 1, minWidth: 110 }, value: r.basis, "aria-label": "Measure", onChange: (e) => set({ basis: e.target.value }) },
-                h("option", { value: "sqft" }, "Sq.ft of glass"),
-                h("option", { value: "perimeter" }, "Edges (running ft)")),
-            h("select", { className: "form-input", style: { flex: 1, minWidth: 100 }, value: r.from, "aria-label": "Which lines", onChange: (e) => set({ from: e.target.value }) },
-                h("option", { value: "all" }, "All glass lines"),
-                h("option", { value: "selected" }, "Lines I tick"),
-                h("option", { value: "custom" }, "Type it")),
-            r.from === 'custom' ? (h("input", { type: "number", min: "0", step: "any", className: "form-input", style: { width: 80 }, value: r.custom ?? '', "aria-label": "Quantity", onFocus: (e) => e.target.select(), onChange: (e) => set({ custom: clampNonNeg(e.target.value) }) })) : (h("input", { type: "text", className: "form-input", style: { width: 80 }, value: item.quantity, disabled: true, "aria-label": "Quantity", title: r.basis === 'perimeter' ? '2 x (rounded length + width) / 12 x pieces' : 'Sq.ft of the glass lines' }))),
-        r.from === 'selected' && (h("div", { style: { display: 'flex', gap: '2px 10px', flexWrap: 'wrap', fontSize: '0.72rem', marginTop: 3 } },
-            sizeLines.length === 0 && h("span", { style: { color: 'var(--text-muted)' } }, "No Sq.ft lines on this invoice yet"),
-            sizeLines.map((s) => (h("label", { key: s.id, style: { display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer' } },
-                h("input", { type: "checkbox", checked: ids.has(s.id), onChange: (e) => set({ ids: e.target.checked ? [...ids, s.id] : [...ids].filter((x) => x !== s.id) }) }),
-                s.label)))))));
-}
-const LineItem = memo(function LineItem({ item, invoiceOptions, showGST, taxLabel, units, countryTaxRates, filterUnitsByMode, invoiceMode, currency, profileCountry, suggestions, onFieldChange, onSelectProduct, onSetProductSearch, onAddCustomUnit, onRemoveCustomUnit, onRemove, clampNonNeg, isLastRow, onAddRow, isOnlyRow, onSizeChange, sizeLines, onRftChange, notInProducts, onSaveAsProduct, lineAmount, lineTax, }) {
+const LineItem = memo(function LineItem({ item, invoiceOptions, showGST, taxLabel, units, countryTaxRates, filterUnitsByMode, invoiceMode, currency, profileCountry, suggestions, onFieldChange, onSelectProduct, onSetProductSearch, onAddCustomUnit, onRemoveCustomUnit, onRemove, clampNonNeg, isLastRow, onAddRow, isOnlyRow, }) {
     // v1.10.37 — Keyboard shortcut: Enter on any input inside the LAST
     // row adds a new row. Muscle-memory for POS users — reported: "if
     // user hits Enter on last item field the natural expectation is a
     // new blank row". Excludes Shift+Enter (soft newline in text
     // fields) and only fires on isLastRow to avoid Enter-mashing on
     // middle rows creating trailing empty rows.
-    // v1.10.84 (#167) - Enter moves along the row like a billing program: Item
-    // -> HSN -> Qty -> Unit -> Rate. Enter in Rate (or a box after it) finishes
-    // the row: the next row's Item box, or a new row on the last one (#151).
     const handleRowKeyDown = (e) => {
-        if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey)
+        if (e.key !== 'Enter' || e.shiftKey || !isLastRow)
             return;
-        if (e.target.closest('.line-item-description-row'))
-            return; // a description can have new lines
-        const fields = rowFields(e.currentTarget);
-        const at = fields.indexOf(e.target);
-        if (at < 0)
-            return;
-        const rateAt = fields.findIndex((el) => el.classList.contains('line-item-rate'));
-        e.preventDefault();
-        if (rateAt < 0 || at < rateAt) {
-            focusField(fields[at + 1]);
-            return;
-        }
-        if (!isLastRow) {
-            focusField(e.currentTarget.nextElementSibling?.querySelector('.line-item-name'));
-            return;
-        }
-        // Only a row with something in it adds a new one, so an accidental Enter
-        // on a blank row doesn't spawn another blank row.
+        // Only fire when the input has SOME meaningful content in the
+        // row, so an accidental Enter on a completely blank row doesn't
+        // spawn a new blank row.
         const hasContent = (item.name && item.name.trim()) || Number(item.rate) > 0 || Number(item.quantity) > 0;
-        if (hasContent)
-            onAddRow?.();
+        if (!hasContent)
+            return;
+        e.preventDefault();
+        onAddRow?.();
     };
     return (h("div", { className: "line-item-row", "data-item-id": item.id, onKeyDown: handleRowKeyDown },
-        h("div", { className: "line-item-field line-item-name-field" },
+        h("div", { className: "line-item-field", style: { flex: 2.5, minWidth: 220, position: 'relative' } },
             h("label", { className: "form-label" }, "Item"),
-            h(SuggestingInput, { item: item, suggestions: suggestions, onFieldChange: onFieldChange, onSelectProduct: onSelectProduct, onSetProductSearch: onSetProductSearch, currency: currency }),
-            notInProducts && suggestions.length === 0 && (h("div", { className: "not-in-products", style: { fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: 2 } },
-                "Not in your Products.",
-                ' ',
-                h("button", { type: "button", className: "link-btn", style: { fontSize: '0.72rem', padding: 0, border: 0, background: 'none', color: 'var(--primary)', cursor: 'pointer', textDecoration: 'underline' }, onClick: () => onSaveAsProduct(item) }, "Save it to Products")))),
+            h(SuggestingInput, { item: item, suggestions: suggestions, onFieldChange: onFieldChange, onSelectProduct: onSelectProduct, onSetProductSearch: onSetProductSearch, currency: currency })),
         invoiceOptions.showHSN && (h("div", { className: "line-item-field", style: { flex: 1, position: 'relative' } },
             h("label", { className: "form-label" }, invoiceMode === 'services' ? 'SAC' : 'HSN/SAC'),
-            h("input", { type: "text", className: "form-input line-item-hsn", value: item.hsn, onChange: (e) => {
+            h("input", {
+                type: "text", className: "form-input", value: item.hsn, onChange: (e) => {
                     const val = e.target.value;
                     onFieldChange(item.id, 'hsn', val);
                     // v1.10.22 — Suggest GST rate from a curated HSN/SAC table.
@@ -514,7 +337,8 @@ const LineItem = memo(function LineItem({ item, invoiceOptions, showGST, taxLabe
                     if (suggested !== null && (item.taxPercent === undefined || item.taxPercent === 18 || item.taxPercent === 0)) {
                         onFieldChange(item.id, 'taxPercent', suggested);
                     }
-                } }),
+                }
+            }),
             (() => {
                 const s = suggestGstRate(item.hsn);
                 if (!s || !item.hsn || String(item.hsn).length < 4)
@@ -525,12 +349,13 @@ const LineItem = memo(function LineItem({ item, invoiceOptions, showGST, taxLabe
                     " usual rate since 22 Sep 2025 - check yours \u00B7 ",
                     s.label));
             })())),
-        item.size ? (h(SizeFields, { item: item, onSizeChange: onSizeChange, clampNonNeg: clampNonNeg })) : item.rft ? (h(RftFields, { item: item, sizeLines: sizeLines || [], onRftChange: onRftChange, clampNonNeg: clampNonNeg })) : (h("div", { className: "line-item-field", style: { flex: 0.7 } },
+        h("div", { className: "line-item-field", style: { flex: 0.7 } },
             h("label", { className: "form-label" }, "Qty"),
-            item.unit === 'NA' ? (h("input", { type: "text", className: "form-input", value: "-", disabled: true, title: "Unit NA: no quantity - the amount is the rate" })) : (h("input", { type: "number", min: "0", step: "any", className: "form-input", value: item.quantity, onFocus: (e) => e.target.select(), onChange: (e) => onFieldChange(item.id, 'quantity', clampNonNeg(e.target.value)) })))),
+            h("input", { type: "number", min: "0", step: "any", className: "form-input", value: item.quantity, onFocus: (e) => e.target.select(), onChange: (e) => onFieldChange(item.id, 'quantity', clampNonNeg(e.target.value)) })),
         (invoiceMode !== 'services' || invoiceOptionOn(invoiceOptions, 'showItemUnit')) && h("div", { className: "line-item-field", style: { flex: 0.9 } },
             h("label", { className: "form-label" }, "Unit"),
-            h("select", { className: "form-input", value: item.unit || getDefaultUnitForMode(invoiceMode), onChange: (e) => {
+            h("select", {
+                className: "form-input", value: item.unit || getDefaultUnitForMode(invoiceMode), onChange: (e) => {
                     if (e.target.value === '__custom__') {
                         onAddCustomUnit(item.id);
                         return;
@@ -541,7 +366,8 @@ const LineItem = memo(function LineItem({ item, invoiceOptions, showGST, taxLabe
                         return;
                     }
                     onFieldChange(item.id, 'unit', e.target.value);
-                } },
+                }
+            },
                 (() => {
                     const visible = filterUnitsByMode(units, invoiceMode);
                     const showCurrentExtra = item.unit && !visible.some(u => u.label === item.unit);
@@ -556,17 +382,11 @@ const LineItem = memo(function LineItem({ item, invoiceOptions, showGST, taxLabe
                     "\u2212 Remove \"",
                     u.label,
                     "\""))))),
-        invoiceOptionOn(invoiceOptions, 'showMRP') && (h("div", { className: "line-item-field", style: { flex: 0.9 } },
-            h("label", { className: "form-label" }, "MRP"),
-            h("input", { type: "number", min: "0", step: "any", className: "form-input line-item-mrp", value: item.mrp ?? '', title: "Printed price on the pack. For information only: the rate and totals do not use it.", onFocus: (e) => e.target.select(), onChange: (e) => onFieldChange(item.id, 'mrp', clampNonNeg(e.target.value)) }))),
         h("div", { className: "line-item-field", style: { flex: 1.2 } },
             h("label", { className: "form-label" },
-                item.size?.manual ? 'Amount' : item.size ? 'Rate / sq.ft' : 'Rate',
+                "Rate",
                 currency && currency !== 'INR' ? ` (${currencySymbolFor(currency)})` : ''),
-            item.size?.manual ? (
-            // #140 - Type amount: the amount is kept on the size; the rate per
-            // sq.ft follows from it (so GSTR-1 and stock still see the area).
-            h("input", { type: "number", min: "0", step: "any", className: "form-input line-item-rate", value: item.size.amount ?? '', onFocus: (e) => e.target.select(), onChange: (e) => onSizeChange(item.id, { amount: clampNonNeg(e.target.value) }) })) : (h("input", { type: "number", min: "0", step: "any", className: "form-input line-item-rate", value: item.rate, onFocus: (e) => e.target.select(), onChange: (e) => onFieldChange(item.id, 'rate', clampNonNeg(e.target.value)) }))),
+            h("input", { type: "number", min: "0", step: "any", className: "form-input", value: item.rate, onFocus: (e) => e.target.select(), onChange: (e) => onFieldChange(item.id, 'rate', clampNonNeg(e.target.value)) })),
         invoiceOptions.showDiscount && (h("div", { className: "line-item-field", style: invoiceMode === 'services' ? { flex: 1.2, minWidth: 130 } : { flex: 1.8, minWidth: 200 } },
             h("label", { className: "form-label" }, "Discount"),
             h("div", { style: { display: 'flex', gap: 4, flexWrap: 'wrap' } },
@@ -582,7 +402,8 @@ const LineItem = memo(function LineItem({ item, invoiceOptions, showGST, taxLabe
             h("label", { className: "form-label" },
                 taxLabel,
                 " %"),
-            h("select", { className: "form-input", value: countryTaxRates.includes(Number(item.taxPercent)) ? String(item.taxPercent) : '__custom__', onChange: async (e) => {
+            h("select", {
+                className: "form-input", value: countryTaxRates.includes(Number(item.taxPercent)) ? String(item.taxPercent) : '__custom__', onChange: async (e) => {
                     if (e.target.value === '__custom__') {
                         const raw = await promptAction({
                             title: `Custom ${taxLabel} rate`,
@@ -604,7 +425,8 @@ const LineItem = memo(function LineItem({ item, invoiceOptions, showGST, taxLabe
                     else {
                         onFieldChange(item.id, 'taxPercent', parseFloat(e.target.value) || 0);
                     }
-                } },
+                }
+            },
                 countryTaxRates.map(r => (h("option", { key: r, value: String(r) },
                     r,
                     "%"))),
@@ -612,15 +434,10 @@ const LineItem = memo(function LineItem({ item, invoiceOptions, showGST, taxLabe
         showGST && invoiceOptions.showCess && (profileCountry || 'India') === 'India' && (h("div", { className: "line-item-field", style: { flex: 0.8 } },
             h("label", { className: "form-label", title: "GST Compensation Cess (tobacco / auto / coal etc.)" }, "Cess %"),
             h("input", { type: "number", min: "0", max: "500", step: "any", className: "form-input", value: item.cessPercent || 0, onChange: (e) => onFieldChange(item.id, 'cessPercent', clampNonNeg(e.target.value)) }))),
-        h("div", { className: `line-item-foot${item.description || item._descOpen ? ' line-item-foot-desc' : ''}` },
-            h("div", { className: "line-item-description-row" }, item.description || item._descOpen ? (h("textarea", { className: "form-input", rows: 2, placeholder: "Description (optional, shown under this line in the PDF)", value: item.description || '', onChange: (e) => onFieldChange(item.id, 'description', e.target.value), style: { fontSize: '0.82rem', resize: 'vertical', minHeight: 40 } })) : (h("button", { type: "button", className: "btn btn-secondary", onClick: () => onFieldChange(item.id, '_descOpen', true), style: { fontSize: '0.72rem', padding: '0.2rem 0.5rem', color: 'var(--text-muted)' }, title: "Add a description that will show under this line in the PDF" }, "+ Add description"))),
-            h("div", { className: "line-item-end" },
-                h("span", { className: "line-item-amount", "data-testid": "line-amount", title: lineTax > 0 ? `${formatCurrency(lineAmount - lineTax, currency || 'INR')} + ${taxLabel} ${formatCurrency(lineTax, currency || 'INR')}` : 'Qty x Rate, less the discount' },
-                    lineTax > 0 ? `With ${taxLabel}` : 'Amount',
-                    " ",
-                    h("strong", null, formatCurrency(lineAmount || 0, currency || 'INR'))),
-                h("button", { type: "button", className: "icon-btn icon-btn-red", onClick: () => onRemove(item.id), "aria-label": "Remove this line", disabled: isOnlyRow, title: isOnlyRow ? 'An invoice needs at least one line' : 'Remove' },
-                    h(Trash2, { size: 16 }))))));
+        h("div", { className: "line-item-field line-item-delete" },
+            h("button", { className: "icon-btn icon-btn-red", onClick: () => onRemove(item.id), disabled: isOnlyRow, title: isOnlyRow ? 'An invoice needs at least one line' : 'Remove' },
+                h(Trash2, { size: 16 }))),
+        h("div", { className: "line-item-description-row", style: { flexBasis: '100%', marginTop: 4 } }, item.description || item._descOpen ? (h("textarea", { className: "form-input", rows: 2, placeholder: "Description (optional, shown under this line in the PDF)", value: item.description || '', onChange: (e) => onFieldChange(item.id, 'description', e.target.value), style: { fontSize: '0.82rem', resize: 'vertical', minHeight: 40 } })) : (h("button", { type: "button", className: "btn btn-secondary", onClick: () => onFieldChange(item.id, '_descOpen', true), style: { fontSize: '0.72rem', padding: '0.2rem 0.5rem', color: 'var(--text-muted)' }, title: "Add a description that will show under this line in the PDF" }, "+ Add description")))));
 });
 // v1.10.77 (#88) - the Tally and Boxed designs pad the item table so a short
 // bill still looks like a full page. When that padding alone pushes the
@@ -628,53 +445,6 @@ const LineItem = memo(function LineItem({ item, invoiceOptions, showGST, taxLabe
 // terms, bank details and signature stay on page 1. Returns a function that
 // puts everything back. Elements: [data-pdf-spacer="stretch"] rows have their
 // cells shortened; [data-pdf-spacer="row"] rows are hidden whole.
-// #140 - size billing (Settings -> Features) and the rounding step last used,
-// so a glass shop picks 3 or 6 inches once.
-const sizeBillingOn = () => isModuleEnabled('sizeBilling', getEnabledModules());
-const SIZE_STEP_KEY = 'fgsb_sizeStep';
-const lastSizeStep = () => {
-    try {
-        return Number(localStorage.getItem(SIZE_STEP_KEY)) || 0;
-    }
-    catch {
-        return 0;
-    }
-};
-const rememberSizeStep = (step) => {
-    try {
-        localStorage.setItem(SIZE_STEP_KEY, String(Number(step) || 0));
-    }
-    catch { /* sandboxed */ }
-};
-// v1.10.86 - Settings -> Appearance -> Text size zooms the app and zooms the
-// invoice sheet back (index.css); this is the sheet's own zoom (1 normally).
-const sheetZoom = (el) => { try {
-    return Number(getComputedStyle(el).zoom) || 1;
-}
-catch {
-    return 1;
-} };
-// #161 - a hidden preview sits off-screen and transparent; in html2canvas's
-// copy of the page it is put back on-screen so the capture is not blank.
-function showHiddenPaneInClone(clonedDoc) {
-    const pane = clonedDoc.querySelector('.preview-pane');
-    if (pane)
-        Object.assign(pane.style, { left: '0px', top: '0px', opacity: '1' });
-}
-// Test hook for tests/smoke.mjs (ERR-024): where the things a PDF page must
-// never cut through sit, in the invoice's own CSS px. Read-only.
-function pdfLayoutHook(root) {
-    const t = root.getBoundingClientRect().top;
-    const rel = (el) => { const r = el.getBoundingClientRect(); return [r.top - t, r.bottom - t]; };
-    const firstRow = root.querySelector('.inv-table tbody tr');
-    const sig = root.querySelector('.inv-signature, [data-pdf-signature]');
-    return {
-        rowHeight: firstRow ? rel(firstRow)[1] - rel(firstRow)[0] : 0,
-        signature: sig ? rel(sig) : null,
-        blocks: [...root.querySelectorAll('.inv-footer-block')].map(rel).filter(([a, b]) => b - a > 2),
-        atoms: [...root.querySelectorAll('.inv-signature, img, [data-pdf-page-boundary]')].map(rel).filter(([a, b]) => b - a > 2),
-    };
-}
 function fitSpacersToOnePage(container, pageWmm, pageHmm, ps) {
     const m = (k) => Math.max(0, Number(ps?.[k]) || 0);
     const availW = Math.max(20, pageWmm - m('marginLeft') - m('marginRight'));
@@ -712,27 +482,11 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
     const [allProfiles, setAllProfiles] = useState([]);
     const [activeProfile, setActiveProfile] = useState(profileProp);
     const profile = activeProfile || profileProp;
-    // v1.10.86 - a brand-new invoice (not a draft, an edit or a copy) starts
-    // from Settings -> "New invoice starts with" (utils/invoiceStart.js). The
-    // browser copy of the defaults is read here; the server copy, a moment
-    // later, in the display-options load below.
-    const [blankNew] = useState(() => !editingBill && !draft);
-    const [localStart] = useState(() => { try {
-        return JSON.parse(localStorage.getItem('freegstbill_invoiceOptions') || '{}')[START_KEY] || {};
-    }
-    catch {
-        return {};
-    } });
-    const [lastTypeAtOpen] = useState(lastInvoiceType);
-    const typePicked = useRef(false); // the user picked a type on this invoice
-    const salesOrdersOn = isModuleEnabled('salesOrders', getEnabledModules());
-    const typeAllowed = (t) => t !== 'sales-order' || salesOrdersOn;
-    const [invoiceType, setInvoiceType] = useState(() => draft?.invoiceType || (blankNew ? startTypeFor(localStart, lastTypeAtOpen, typeAllowed) : 'tax-invoice'));
+    const [invoiceType, setInvoiceType] = useState(draft?.invoiceType || 'tax-invoice');
     // email/phone/isSEZ must be part of initial state — otherwise the SEZ flag
     // set inside ClientModal is silently discarded on save, and reopening the
     // bill can never restore contact fields even if the saved client has them.
-    // v1.10.85 (#147) - with Start with "Cash Sale" on, a new invoice starts with that customer.
-    const [client, setClient] = useState(draft?.client || { name: !editingBill && isModuleEnabled('cashSaleDefault', getEnabledModules()) ? 'Cash Sale' : '', address: '', city: '', pin: '', state: '', gstin: '', country: '', email: '', phone: '', isSEZ: false, isDeemedExport: false });
+    const [client, setClient] = useState(draft?.client || { name: '', address: '', city: '', pin: '', state: '', gstin: '', country: '', email: '', phone: '', isSEZ: false });
     // v1.9.1 — preview zoom (session-only). Reads from printSettings for the
     // initial value so the user's preference carries across bill switches.
     // v1.10.33 — Was READ-ONLY: the initial-load line pulled from
@@ -770,27 +524,6 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
     // over-corrected on every click ("Fit → 44% → Fit → 24% → …").
     // Just read offsetWidth as-is — it's already the natural (unscaled)
     // width of the preview at the current paper size.
-    // v1.10.86 - the preview opens fitted to its pane and stays fitted while
-    // the pane changes size (Fit is lit while it is on); − / + switch it off.
-    // It used to open at the last zoom (100%), cutting off the amounts on the
-    // right at 1366 px while the Fit button looked switched on. The pane's
-    // offsetWidth less a scrollbar's room is used, so a vertical scrollbar
-    // coming and going cannot make it re-fit back and forth.
-    const [previewFit, setPreviewFitState] = useState(() => {
-        try {
-            return localStorage.getItem('fgsb_previewFit') !== '0';
-        }
-        catch {
-            return true;
-        }
-    });
-    const setPreviewFit = (on) => {
-        setPreviewFitState(on);
-        try {
-            localStorage.setItem('fgsb_previewFit', on ? '1' : '0');
-        }
-        catch { /* sandboxed */ }
-    };
     const handleFitToWidth = useCallback(() => {
         if (!previewPaneRef.current) {
             setPreviewZoom(100);
@@ -799,31 +532,16 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         const pane = previewPaneRef.current;
         const scaler = pane.querySelector('.preview-scaler');
         const preview = scaler?.querySelector('.invoice-preview-container');
-        const paneWidth = pane.offsetWidth - 32; // a scrollbar's room + 8px breathing room each side
-        // v1.10.86 - Text size zooms the app and zooms the sheet back: its own
-        // px are 1/zoom of the pane's (sheetZoom).
-        const naturalWidth = (preview?.offsetWidth || 794) * sheetZoom(preview);
-        if (!(paneWidth > 0 && naturalWidth > 0))
-            return; // hidden (phone, or Hide Preview): keep the zoom
+        const paneWidth = pane.clientWidth - 16; // 8px inset breathing room on each side
+        const naturalWidth = preview?.offsetWidth || 794;
+        if (!(paneWidth > 0 && naturalWidth > 0)) {
+            setPreviewZoom(100);
+            return;
+        }
         const ratio = paneWidth / naturalWidth;
-        const nextZoom = Math.max(30, Math.min(200, Math.floor(ratio * 100)));
+        const nextZoom = Math.max(50, Math.min(200, Math.round(ratio * 100)));
         setPreviewZoom(nextZoom);
     }, []);
-    // v1.10.86 - on a phone the bar that stays on screen would take a fifth
-    // of it; once it sticks, its first row (Back, saved state) slides under the
-    // phone header and the buttons and totals stay. The row's height is
-    // measured, so a larger text size still lines up (index.css uses it).
-    const toolbarRef = useRef(null);
-    useEffect(() => {
-        const tb = toolbarRef.current;
-        const actions = tb?.querySelector('.generator-actions');
-        if (!tb || !actions || typeof ResizeObserver === 'undefined')
-            return undefined;
-        const ro = new ResizeObserver(() => tb.style.setProperty('--tb-first-row', `${Math.max(0, actions.offsetTop - 8)}px`));
-        ro.observe(tb);
-        return () => ro.disconnect();
-    }, []);
-    const zoomBy = (step) => { setPreviewFit(false); setPreviewZoom(z => Math.max(30, Math.min(200, z + step))); };
     // v1.10.22 — reported: "sidebar menu toggle option so customer will get
     // a close view for entries because quantity entry u see space is like
     // that we have to see in invoice preview what we are entering". Focus
@@ -849,8 +567,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         // India a new invoice was dated yesterday.
         invoiceDate: localToday(),
         // v1.10.83 - a freelancer's invoice is due in 15 days unless changed.
-        // v1.10.86 - or as Settings -> New invoice starts with -> Due in says.
-        dueDate: startDueDate(localToday(), localStart, getBusinessType()),
+        dueDate: getBusinessType() === 'freelancer' ? toLocalIsoDate(new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate() + 15)) : '',
         placeOfSupply: '',
         originalInvoiceRef: '',
         // v1.10.11 — Ship To fields. Default: same as billing (no extra
@@ -873,16 +590,6 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
     // paired with a `credit-transferred-out` entry on each source bill.
     const [allBillsForCredit, setAllBillsForCredit] = useState([]);
     const [creditToApply, setCreditToApply] = useState(0);
-    // v1.10.85 (#185) - money received while making the invoice (a cash sale):
-    // saved as one payment on the bill, with its receipt, as the Dashboard's
-    // Record Payment does. receivedPay keeps that payment's id (and when it was
-    // first recorded) across saves, so a re-save or an auto-save replaces it
-    // instead of adding another; receivedReceipt is the receipt last written.
-    // v1.10.86 - a new invoice: how it was paid as Settings says, else the last one used.
-    const [receivedNow, setReceivedNow] = useState(() => ({ amount: '', mode: blankNew ? startPaidMode(localStart, lastPaidMode(), PAID_MODES) : lastPaidMode() }));
-    const openedPaidMode = useRef(receivedNow.mode);
-    const receivedPay = useRef(null);
-    const receivedReceipt = useRef('');
     const [units, setUnits] = useState(getAllUnits());
     const [taxInclusive, setTaxInclusive] = useState(draft?.taxInclusive || false);
     // v1.10.4 — totals is now a `useMemo` (was a `useState` fed by
@@ -891,8 +598,8 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
     // extra render pass per character was the biggest perf hit in this
     // component per the audit's finding H15.
     const [saving, setSaving] = useState(false);
-    // v1.10.86 - Save PDF shows a moving bar while the PDF is being made.
-    const [pdfBusy, setPdfBusy] = useState(false);
+    const [whatsAppPdfReady, setWhatsAppPdfReady] = useState(false);
+    const whatsAppPdfShareRef = useRef(null);
     const [termsTemplates, setTermsTemplates] = useState([]);
     const [selectedTermsId, setSelectedTermsId] = useState(draft?.selectedTermsId || '');
     const [customTerms, setCustomTerms] = useState(draft?.customTerms || '');
@@ -905,9 +612,6 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
     // Enter commits, Escape closes. -1 = no highlight yet.
     const [clientPickerIdx, setClientPickerIdx] = useState(-1);
     const [selectedClientId, setSelectedClientId] = useState(null);
-    // v1.10.84 (#129) - the phone box: what is typed, and a new customer's name.
-    const [phoneQuery, setPhoneQuery] = useState('');
-    const [newPhoneName, setNewPhoneName] = useState('');
     const [showClientModal, setShowClientModal] = useState(false);
     const [modalClient, setModalClient] = useState(null);
     const [isEditingClient, setIsEditingClient] = useState(false);
@@ -926,9 +630,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
             delete persisted.paymentAccountSnapshot;
             stripLutOptions(persisted);
             // Persisted options are the user's defaults, draft can override for in-progress work
-            // v1.10.86 - a brand-new invoice: goods / services and GST as it starts.
-            const start = blankNew ? startOptionsPatch(persisted, invoiceType, lastTypeAtOpen) : {};
-            return { ...DEFAULT_OPTIONS, ...persisted, ...start, ...(draft?.invoiceOptions || {}) };
+            return { ...DEFAULT_OPTIONS, ...persisted, ...(draft?.invoiceOptions || {}) };
         }
         catch {
             return draft?.invoiceOptions || { ...DEFAULT_OPTIONS };
@@ -961,29 +663,16 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         const el = printRef.current;
         if (!el || typeof ResizeObserver === 'undefined')
             return undefined;
-        const measure = () => setPreviewNatural((prev) => {
-            const z = sheetZoom(el); // v1.10.86 - in the frame's px (Text size)
-            const w = el.offsetWidth * z;
-            const h = el.offsetHeight * z;
-            return prev.w === w && prev.h === h ? prev : { w, h };
-        });
+        const measure = () => setPreviewNatural((prev) => (prev.w === el.offsetWidth && prev.h === el.offsetHeight
+            ? prev
+            : { w: el.offsetWidth, h: el.offsetHeight }));
         // No explicit first call: observe() delivers an initial callback with
-        // the current size, so the mount measurement comes for free without a
+        // the current size, so the mount measurement comes without an extra
         // synchronous setState in the effect body.
         const ro = new ResizeObserver(measure);
         ro.observe(el);
         return () => ro.disconnect();
     }, [previewCollapsed]);
-    // v1.10.86 - keep the preview fitted: when it opens, when the pane is
-    // resized (window, sidebar, Show Preview) and when the paper size changes.
-    useEffect(() => {
-        const pane = previewPaneRef.current;
-        if (!previewFit || previewCollapsed || !pane || typeof ResizeObserver === 'undefined')
-            return undefined;
-        const ro = new ResizeObserver(() => handleFitToWidth());
-        ro.observe(pane);
-        return () => ro.disconnect();
-    }, [previewFit, previewCollapsed, previewNatural.w, handleFitToWidth]);
     const draftInitialized = useRef(!!draft);
     // v1.10.77 - only a brand-new blank invoice gets the first saved Terms
     // template filled in. It used to happen to every form once the templates
@@ -1002,9 +691,6 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
     const [showEinvoice, setShowEinvoice] = useState(null); // { saved } while open
     const [autoSaveStatus, setAutoSaveStatus] = useState('idle'); // 'idle' | 'saving' | 'saved'
     const autoSaveTimer = useRef(null);
-    // v1.10.85 - the books are closed for this invoice's date (423): auto-save
-    // stops instead of asking again every 2 s; Save still says why.
-    const autoSaveLocked = useRef(false);
     // v1.10.22 — reported: "if user click back without even changing anything
     // it always ask to save and close". Cause: handleBack checked
     // `autoSaveStatus !== 'saved'`, and autoSaveStatus started at 'idle' on
@@ -1039,10 +725,13 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
     // invoice number, otherwise the server 409s).
     // v1.10.79 - a duplicate or conversion has not been saved yet.
     const hasBeenSaved = useRef(!!editingBill && !editingBill._isDuplicate);
+    // v1.10.84 — remembers an explicitly accepted credit-limit override for this exact draft state.
+    // If the client, limit, or amount changes, the fingerprint changes and we ask again.
+    const creditLimitOverrideAccepted = useRef('');
     // The number this bill is stored under on the server (null until the first
     // save of a new bill). When the Invoice Number field no longer matches it,
     // the save is a RENAME: the bill moves to the new number, which must be
-    // free, and the old file goes. It used to be saved as a second invoice with
+    // released, and the old file goes. It used to be saved as a second invoice with
     // overwrite on - replacing any other invoice that had the typed number - and
     // the old one stayed, so the sale was counted twice.
     const savedId = useRef(editingBill && !editingBill._isDuplicate ? editingBill.id : null);
@@ -1072,22 +761,13 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
     const baseCountryRates = sellerCountryConfig.taxRates && sellerCountryConfig.taxRates.length
         ? sellerCountryConfig.taxRates
         : [0, 5, 12, 18, 28, 40];
-    const countryTaxRates = useMemo(() => [...new Set([...baseCountryRates, ...customRates])].sort((a, b) => a - b), 
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [baseCountryRates.join(','), customRates.join(',')]);
+    const countryTaxRates = useMemo(() => [...new Set([...baseCountryRates, ...customRates])].sort((a, b) => a - b),
+        // eslint-disable-next-line vanilla-runtime/exhaustive-deps
+        [baseCountryRates.join(','), customRates.join(',')]);
     // Rate for a new row: 18% where it exists (India's standard rate), else the
     // second-highest rate. Was always second-highest, which turns into 28% once
     // 40% is in the list.
-    // v1.10.86 - or the GST % chosen in Settings -> New invoice starts with.
-    const defaultTaxRate = startTaxRate(invoiceOptions[START_KEY], countryTaxRates);
-    // The first, still empty line of a new invoice takes that rate too (the
-    // Settings copy from the server can arrive a moment after it opened).
-    useEffect(() => {
-        if (!blankNew)
-            return;
-        setItems(prev => (prev.length === 1 && !String(prev[0].name || '').trim() && !Number(prev[0].rate) && prev[0].taxPercent !== defaultTaxRate
-            ? [{ ...prev[0], taxPercent: defaultTaxRate }] : prev));
-    }, [blankNew, defaultTaxRate]);
+    const defaultTaxRate = countryTaxRates.includes(18) ? 18 : (countryTaxRates[countryTaxRates.length - 2] ?? 0);
     const taxLabel = sellerCountryConfig.taxLabel || 'GST';
     // Clamp a numeric input to non-negative (and finite). Used for qty/rate/discount.
     // v1.10.7 — hoisted stable identity so memoized LineItem's props stay
@@ -1133,11 +813,8 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
     }, [invoiceOptions, editingSaved]);
     // Load saved display options from server on mount (overrides localStorage if available)
     useEffect(() => {
-        // The bill's own options win (see above). v1.10.85 - a duplicate or a
-        // conversion too: these defaults arrived a moment after it opened and put
-        // back the last new invoice's currency (a USD bill's copy came up in INR).
-        if (editingBill?.data)
-            return;
+        if (editingSaved)
+            return; // the bill's own options win (see above)
         getInvoiceDisplayOptions().then(serverOpts => {
             if (serverOpts) {
                 // v1.10.20 — Strip cross-invoice bleed-through of paymentAccountSnapshot
@@ -1148,22 +825,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                 // v1.10.77 - a restored draft keeps its own choices (design, columns
                 // ...); the saved defaults only fill what it does not set. They used
                 // to replace the draft's options a moment after a page refresh.
-                // v1.10.86 - a brand-new invoice starts as the server's Settings say
-                // (this browser's copy, read when it opened, may be older: a phone).
-                const serverStart = serverOpts[START_KEY] || {};
-                const startType = blankNew ? startTypeFor(serverStart, lastTypeAtOpen, typeAllowed) : invoiceType;
-                const start = blankNew ? startOptionsPatch(serverOpts, startType, lastTypeAtOpen) : {};
-                const merged = { ...DEFAULT_OPTIONS, ...serverOpts, ...start, ...draftOptions.current };
-                // Each only while still as the invoice opened (the answer can come
-                // after the user started typing on a slow phone).
-                if (blankNew) {
-                    if (startType !== invoiceType && !typePicked.current)
-                        handleTypeChange(startType, { auto: true });
-                    setReceivedNow(prev => (prev.amount || prev.mode !== openedPaidMode.current ? prev : { ...prev, mode: startPaidMode(serverStart, prev.mode, PAID_MODES) }));
-                    const bt = getBusinessType();
-                    setDetails(prev => (prev.dueDate === startDueDate(prev.invoiceDate, localStart, bt)
-                        ? { ...prev, dueDate: startDueDate(prev.invoiceDate, serverStart, bt) } : prev));
-                }
+                const merged = { ...DEFAULT_OPTIONS, ...serverOpts, ...draftOptions.current };
                 setInvoiceOptions(prev => {
                     // Only update if different to avoid unnecessary re-renders
                     const changed = Object.keys(merged).some(k => merged[k] !== prev[k]);
@@ -1178,26 +840,8 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                     return prev;
                 });
             }
-        }).catch(() => { }).finally(() => {
-            // v1.10.86 - "New invoice for this client" (Clients): fill the client in
-            // once the defaults above are in, so their paper size and currency win.
-            let want = null;
-            try {
-                want = JSON.parse(sessionStorage.getItem('gst_newInvoiceFor') || 'null');
-                sessionStorage.removeItem('gst_newInvoiceFor');
-            }
-            catch { /* storage blocked */ }
-            if (!want?.name || !blankNew)
-                return;
-            getAllClients().then((list) => {
-                const cli = (list || []).find((c) => (want.id && c.id === want.id)) || (list || []).find((c) => clientKey(c.name) === clientKey(want.name));
-                if (cli)
-                    selectSavedClient(cli);
-                else
-                    setClient((prev) => ({ ...prev, name: want.name })); // a name billed before but not saved as a client
-            }).catch(() => { });
-        });
-    }, [editingBill]);
+        }).catch(() => { });
+    }, [editingSaved]);
     // v1.10.37 — Debounced sessionStorage draft save. Previously the
     // effect ran on EVERY keystroke, stringifying the entire form (20+
     // fields including rich-text terms and 30-item lines) on each key.
@@ -1207,7 +851,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
     // during a typing burst.
     useEffect(() => {
         const t = setTimeout(() => {
-            const draftData = { invoiceType, client, details, items, customTerms, customNotes, internalNote, extraSections, selectedTermsId, invoiceOptions: { ...invoiceOptions, [START_KEY]: undefined }, taxInclusive }; // v1.10.86 - the setting is not the draft's
+            const draftData = { invoiceType, client, details, items, customTerms, customNotes, internalNote, extraSections, selectedTermsId, invoiceOptions, taxInclusive };
             try {
                 sessionStorage.setItem('gst_invoiceDraft', JSON.stringify(draftData));
             }
@@ -1259,35 +903,6 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         }
         return null;
     }, [client?.name, items, editingBill]);
-    // v1.10.86 - what keeps a new invoice from being saved: its card is opened
-    // (it may be closed) and the box focused. The client name first, then the
-    // first line without a name, quantity or rate. Used by Save / Print / PDF /
-    // WhatsApp and by the "Draft - click to complete" badge.
-    const focusMissing = () => {
-        const focusSoon = (find) => setTimeout(() => {
-            const el = find();
-            if (!el)
-                return;
-            el.focus();
-            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }, 60);
-        if (!client?.name?.trim()) {
-            cards.open('client');
-            focusSoon(() => clientNameRef.current);
-            return;
-        }
-        const line = items.find((it) => !(it.name || '').trim() || !((it.quantity || 0) * (it.rate || 0) > 0)) || items[0];
-        if (!line)
-            return;
-        cards.open('items');
-        focusSoon(() => {
-            const row = document.querySelector(`.line-item-row[data-item-id="${line.id}"]`);
-            return (!(line.name || '').trim() && row?.querySelector('.line-item-name'))
-                || (!(Number(line.quantity) > 0) && row?.querySelector('input[type="number"]'))
-                || row?.querySelector('.line-item-rate') || row?.querySelector('.line-item-name');
-        });
-    };
-    const showProblem = (problem) => { toast(problem, 'warning'); focusMissing(); };
     // Debounced auto-save (2s after last change), gated on meaningful content.
     //
     // v1.8.1 CHANGE: for NEW bills that haven't been explicitly saved yet,
@@ -1323,8 +938,6 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         // number is taken, until the first Save.
         if ((!editingBill || editingBill._isDuplicate) && !hasBeenSaved.current)
             return;
-        if (autoSaveLocked.current)
-            return;
         if (autoSaveTimer.current)
             clearTimeout(autoSaveTimer.current);
         autoSaveTimer.current = setTimeout(async () => {
@@ -1336,15 +949,15 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                 setTimeout(() => setAutoSaveStatus(s => s === 'saved' ? 'idle' : s), 2000);
             }
             catch (err) {
-                if (err?.status === 423)
-                    autoSaveLocked.current = true;
                 console.error('Auto-save failed:', err);
                 setAutoSaveStatus('idle');
             }
         }, 2000);
-        return () => { if (autoSaveTimer.current)
-            clearTimeout(autoSaveTimer.current); };
-    }, [invoiceType, client, details, items, customTerms, customNotes, internalNote, extraSections, invoiceOptions, isMeaningfulInvoice, receivedNow]);
+        return () => {
+            if (autoSaveTimer.current)
+                clearTimeout(autoSaveTimer.current);
+        };
+    }, [invoiceType, client, details, items, customTerms, customNotes, internalNote, extraSections, invoiceOptions, isMeaningfulInvoice]);
     // Save-before-leave guard. P2 #32 rewrites this from the dangerous
     // browser `confirm()` (OK = save, Cancel = stay — users conditioned to
     // "Cancel = discard" hit Cancel expecting to leave) to a proper 3-option
@@ -1409,12 +1022,14 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
     // fired once on mount; if the SPA kept InvoiceGenerator mounted while the
     // user was in Settings, the new profile never showed. Fix: also refetch
     // when the window regains visibility. Belt-and-braces since the
-    // conditional-render path in App.jsx already unmounts+remounts, but this
+    // conditional-render path in App.js already unmounts+remounts, but this
     // covers the case where a stale server response is cached mid-navigation.
     useEffect(() => {
         const refetchProfiles = () => getAllProfiles().then(setAllProfiles).catch(() => { });
-        const onVisible = () => { if (document.visibilityState === 'visible')
-            refetchProfiles(); };
+        const onVisible = () => {
+            if (document.visibilityState === 'visible')
+                refetchProfiles();
+        };
         document.addEventListener('visibilitychange', onVisible);
         window.addEventListener('focus', refetchProfiles);
         return () => {
@@ -1424,8 +1039,10 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
     }, []);
     // Load terms templates and saved clients
     useEffect(() => {
-        getAllProfiles().then(p => { setAllProfiles(p); if (!activeProfile && p.length > 0)
-            setActiveProfile(profileProp); }).catch(() => { });
+        getAllProfiles().then(p => {
+            setAllProfiles(p); if (!activeProfile && p.length > 0)
+                setActiveProfile(profileProp);
+        }).catch(() => { });
         getTermsTemplates().then(templates => {
             setTermsTemplates(templates);
             if (templates.length > 0 && blankNewInvoice.current && !selectedTermsId) {
@@ -1437,7 +1054,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
             setSavedClients(clients);
             // Auto-link if editing a bill with a known client
             if (client.name.trim()) {
-                const match = clients.find(c => clientKey(c.name) === clientKey(client.name));
+                const match = clients.find(c => c.name.toLowerCase() === client.name.trim().toLowerCase());
                 if (match)
                     setSelectedClientId(match.id);
             }
@@ -1493,10 +1110,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                     stripLutOptions(persisted);
                     // showRoundOff: a saved bill that never stored it was not rounded
                     // (OPTIONS_OFF_BY_DEFAULT); the new ON default must not change its total.
-                    // v1.10.85 (review) - a bill saved before the before-GST discount existed
-                    // took its whole-bill discount after GST: never let the last new
-                    // invoice's choice change an issued bill's GST.
-                    mergedOpts = { ...DEFAULT_OPTIONS, ...persisted, showRoundOff: false, invoiceDiscountBeforeGst: false, ...d.invoiceOptions };
+                    mergedOpts = { ...DEFAULT_OPTIONS, ...persisted, showRoundOff: false, ...d.invoiceOptions };
                 }
                 catch {
                     mergedOpts = { ...DEFAULT_OPTIONS, showRoundOff: false, ...d.invoiceOptions };
@@ -1534,16 +1148,8 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                 if (convertType) {
                     setInvoiceType(convertType);
                     const config = INVOICE_TYPES[convertType];
-                    // v1.10.85 (#186) - an invoice with GST switched off (a non-GST
-                    // supply) stays off as a credit note; it used to come back on.
-                    const fromNoGstType = INVOICE_TYPES[d.invoiceType || 'tax-invoice']?.showGST === false;
                     if (config)
-                        setInvoiceOptions(prev => {
-                            // (review) from a no-GST type the new type's default applies only to a
-                            // sales invoice: a bill of supply's credit note stays without GST.
-                            const on = !!config.showGST && (prev.showGST !== false || (fromNoGstType && SALES_INVOICE_TYPES.includes(convertType)));
-                            return { ...prev, showGST: on, showPlaceOfSupply: on };
-                        });
+                        setInvoiceOptions(prev => ({ ...prev, showGST: config.showGST, showPlaceOfSupply: config.showGST }));
                 }
                 // v1.10.10 — read per-type prefix override from print settings.
                 const _psForPrefix = getPrintSettings();
@@ -1555,11 +1161,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                     if (seq !== peekSeq.current)
                         return;
                     peekedNumber.current = num;
-                    // v1.10.85 (#135) - a conversion keeps the sales order it belongs to
-                    // (salesOrderNo, set by utils/salesOrders.js dispatchDraft or copied
-                    // from a challan); a plain Duplicate is a new sale of its own.
-                    const { salesOrderNo: _so, ...ownDetails } = d.details || {};
-                    setDetails({ ...(convertType ? d.details : ownDetails), invoiceNumber: num, invoiceDate: localToday() });
+                    setDetails({ ...d.details, invoiceNumber: num, invoiceDate: localToday() });
                     numberReserved.current = false;
                 });
             }
@@ -1605,13 +1207,13 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         const seq = ++peekSeq.current;
         getNextInvoiceNumber(prefix, { peek: true, explicitPrefix: !!overridePrefix, invoiceType, businessKey: bizKey })
             .then((num) => {
-            if (seq !== peekSeq.current || numberReserved.current)
-                return;
-            setDetails((prev) => (prev.invoiceNumber && prev.invoiceNumber !== peekedNumber.current ? prev : { ...prev, invoiceNumber: num }));
-            peekedNumber.current = num;
-        })
+                if (seq !== peekSeq.current || numberReserved.current)
+                    return;
+                setDetails((prev) => (prev.invoiceNumber && prev.invoiceNumber !== peekedNumber.current ? prev : { ...prev, invoiceNumber: num }));
+                peekedNumber.current = num;
+            })
             .catch(() => { });
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        // eslint-disable-next-line vanilla-runtime/exhaustive-deps
     }, [bizKey]);
     // Seed the payment-account selection on first render. For a freshly-created
     // invoice (no editingBill, no value yet) we prefer the profile's ⭐ default,
@@ -1647,7 +1249,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
             || null;
         if (next)
             setInvoiceOptions(prev => ({ ...prev, selectedAccountId: next }));
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        // eslint-disable-next-line vanilla-runtime/exhaustive-deps
     }, [profile?.id, profile?.businessName, editingBill]);
     // Persist the just-used account to localStorage so the NEXT new invoice on
     // this profile defaults to the same one. Saved on every change rather than
@@ -1681,10 +1283,6 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
     // or internet. The state decides place of supply: get it wrong and the
     // invoice charges CGST + SGST where it owes IGST, or the other way round.
     const [gstinHint, setGstinHint] = useState(null);
-    // v1.10.86 - "More client details" (address, state, GSTIN, ship-to) is folded.
-    const [clientMoreOpen, setClientMoreOpen] = useState(false);
-    // v1.10.86 - the cards of this screen: their order and which are closed (InvoiceCards.jsx).
-    const cards = useInvoiceCards();
     const handleClientGstinBlur = () => {
         const decoded = decodeGstin(client.gstin);
         if (!decoded) {
@@ -1710,19 +1308,10 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
             setGstinHint({ tone: 'ok', message: `Registered in ${decoded.state}.` });
         }
     };
-    // v1.10.85 (#135) - "Invoice the rest" of a sales order takes over its
-    // challans (and their stock): it can only be an invoice.
-    const absorbLocked = (type) => !!editingBill?._absorb?.length && !SALES_INVOICE_TYPES.includes(type);
-    const handleTypeChange = async (type, { auto = false } = {}) => {
-        if (isIssuedInvoice || absorbLocked(type))
+    const handleTypeChange = async (type) => {
+        if (isIssuedInvoice)
             return;
         setInvoiceType(type);
-        // v1.10.86 - the next new invoice starts as the type picked here
-        // (unless Settings names a type).
-        if (!auto) {
-            rememberInvoiceType(type);
-            typePicked.current = true;
-        }
         const config = INVOICE_TYPES[type];
         // v1.10.14 — honour the per-type prefix override when switching invoice type.
         const _psForPrefix = getPrintSettings();
@@ -1742,14 +1331,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
             setInvoiceOptions(prev => ({ ...prev, showGST: false, showPlaceOfSupply: false }));
         }
         else {
-            // v1.10.85 (#186) - GST switched off by hand (a non-GST supply) stays
-            // off on another type, e.g. a credit note; from a bill of supply the
-            // new type's own setting applies.
-            const fromNoGstType = INVOICE_TYPES[invoiceType]?.showGST === false;
-            setInvoiceOptions(prev => {
-                const on = !!config.showGST && (prev.showGST !== false || (fromNoGstType && SALES_INVOICE_TYPES.includes(type)));
-                return { ...prev, showGST: on, showPlaceOfSupply: on };
-            });
+            setInvoiceOptions(prev => ({ ...prev, showGST: config.showGST, showPlaceOfSupply: config.showGST }));
         }
     };
     const toggleOption = (key) => {
@@ -1764,36 +1346,13 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         ...(cur !== baseCurrency ? { lastForeignCurrency: cur } : {}),
     });
     const setCurrency = (cur) => setInvoiceOptions(prev => ({ ...prev, ...currencyPatch(prev, cur) }));
-    // v1.10.85 (#180) - the TDS / TCS sections of the invoice's date: the
-    // Income-tax Act, 2025 from 1 April 2026. A new invoice (or a copy) dated
-    // then moves a 1961 section to its new place; a saved invoice keeps its own.
-    const tdsList = tdsSectionsFor(details.invoiceDate);
-    const tcsList = tcsSectionsFor(details.invoiceDate);
-    const savedInvoice = !!editingBill && !editingBill._isDuplicate && !editingBill._convertToType;
-    useEffect(() => {
-        if (savedInvoice || tdsList !== TDS_SECTIONS_2025)
-            return;
-        setInvoiceOptions((prev) => {
-            // A typed rate (a lower-deduction certificate) is kept (movedSection).
-            const tds = movedSection(prev.tdsSection, prev.tdsRate, 'tds');
-            const tcs = movedSection(prev.tcsSection, prev.tcsRate, 'tcs');
-            const patch = {};
-            if (tds)
-                Object.assign(patch, { tdsSection: tds.section, tdsRate: tds.rate });
-            if (tcs)
-                Object.assign(patch, { tcsSection: tcs.section, tcsRate: tcs.rate });
-            return Object.keys(patch).length ? { ...prev, ...patch } : prev;
-        });
-        // Also after the options load or change (a draft, the saved display options).
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [tdsList, savedInvoice, invoiceOptions.tdsSection, invoiceOptions.tcsSection]);
     const setExchangeRate = (v) => setInvoiceOptions(prev => ({
         ...prev, exchangeRate: v,
         ...(Number(v) > 0 ? { fxRates: { ...(prev.fxRates || {}), [prev.currency]: v } } : {}),
     }));
     // v1.10.4 — useMemo replaces the prior useEffect+setTotals pair. Same
     // math (extracted to pure `computeInvoiceTotals` in v1.10.1), but
-    // computed inline during render so React doesn't double-render on
+    // computed inline during render so the DOM update does not render twice on
     // every keystroke.
     // v1.10.66 (#61) — client.country now decides exports, and client.gstin /
     // profile.gstin stand in for a missing state. All three must be listed:
@@ -1807,46 +1366,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         items, profile, client, details, showGST, taxInclusive,
         // v1.10.83 - TDS recorded with a payment belongs to that issued invoice only.
         invoiceOptions: { ...invoiceOptions, tcsCumulativeThisYear: clientYtd, tdsCumulativeThisYear: clientYtd, tdsRecorded: isIssuedInvoice ? invoiceOptions.tdsRecorded : undefined },
-    }), [isIssuedInvoice, invoiceOptions.tdsRecorded, clientYtd, invoiceOptions.tcsSection, invoiceOptions.tdsSection, items, client.state, client?.country, client?.gstin, client?.isSEZ, profile?.state, profile?.country, profile?.gstin, showGST, taxInclusive, invoiceOptions.showRoundOff, invoiceOptions.showTDS, invoiceOptions.tdsRate, invoiceOptions.tdsCumulativeThisYear, invoiceOptions.showTCS, invoiceOptions.tcsRate, invoiceOptions.tcsCumulativeThisYear, invoiceOptions.reverseCharge, invoiceOptions.invoiceDiscountValue, invoiceOptions.invoiceDiscountType, invoiceOptions.invoiceDiscountBeforeGst, invoiceOptions.isLUT, details?.placeOfSupply]);
-    // v1.10.85 (#190) - the lines as they are saved and printed: each with its
-    // part of a whole-bill discount taken before GST (none after GST).
-    const { invoiceDiscountBeforeGst: discBeforeGst, invoiceDiscountValue: discValue, invoiceDiscountType: discType } = invoiceOptions;
-    // v1.10.85 (#185) - "Received now" is for sales that had no payment when
-    // opened; an invoice already paid (in part) shows what was paid instead.
-    const paidWhenOpened = editingBill && !editingBill._isDuplicate ? (editingBill.payments || []) : [];
-    const paidSoFar = Math.round(paidWhenOpened.reduce((sum, p) => sum + (Number(p.amount) || 0), 0) * 100) / 100;
-    const canReceiveNow = SALES_INVOICE_TYPES.includes(invoiceType) && !readOnlyDoc && paidWhenOpened.length === 0;
-    const receivableNow = Math.max(0, Math.round((amountDue({ totalAmount: totals.total, data: { totals } }) - (editingBill ? 0 : creditToApply)) * 100) / 100);
-    // v1.10.85 (#189, #147) - profit on this bill: value before GST less what the
-    // goods cost (each product's Purchase price, see costOfGoodsSold). Sales in
-    // the business's own currency only (purchase prices are in it). Shown on
-    // screen only; Hide is remembered (the customer may see the screen).
-    const [profitShown, setProfitShownState] = useState(() => { try {
-        return localStorage.getItem('fgsb_billProfitHidden') !== '1';
-    }
-    catch {
-        return true;
-    } });
-    const setProfitShown = (on) => { setProfitShownState(on); try {
-        localStorage.setItem('fgsb_billProfitHidden', on ? '0' : '1');
-    }
-    catch { /* storage blocked */ } };
-    const billProfit = useMemo(() => {
-        if (!SALES_INVOICE_TYPES.includes(invoiceType) || (invoiceOptions.currency || baseCurrency) !== baseCurrency)
-            return null;
-        const lines = (items || []).filter((i) => String(i.name || '').trim() && !i.isCharge);
-        if (!lines.length)
-            return null;
-        const { cost, missing } = costOfGoodsSold([{ invoiceType, data: { items: lines } }], products);
-        if (!(cost > 0))
-            return null; // nothing with a purchase price: no figure to show
-        const revenue = Number(totals.taxableAmount) || 0;
-        const profit = Math.round((revenue - cost) * 100) / 100;
-        return { profit, margin: revenue > 0 ? Math.round((profit / revenue) * 1000) / 10 : null, missing: missing.length };
-    }, [invoiceType, invoiceOptions.currency, baseCurrency, items, products, totals.taxableAmount]);
-    const billItems = useMemo(
-    // (review) only while GST is charged, as in computeInvoiceTotals.
-    () => spreadBillDiscount(items, { invoiceDiscountBeforeGst: !!discBeforeGst && showGST, invoiceDiscountValue: discValue, invoiceDiscountType: discType }, !showGST || taxInclusive), [items, discBeforeGst, discValue, discType, showGST, taxInclusive]);
+    }), [isIssuedInvoice, invoiceOptions.tdsRecorded, clientYtd, invoiceOptions.tcsSection, invoiceOptions.tdsSection, items, client.state, client?.country, client?.gstin, client?.isSEZ, profile?.state, profile?.country, profile?.gstin, showGST, taxInclusive, invoiceOptions.showRoundOff, invoiceOptions.showTDS, invoiceOptions.tdsRate, invoiceOptions.tdsCumulativeThisYear, invoiceOptions.showTCS, invoiceOptions.tcsRate, invoiceOptions.tcsCumulativeThisYear, invoiceOptions.reverseCharge, invoiceOptions.invoiceDiscountValue, invoiceOptions.invoiceDiscountType, invoiceOptions.isLUT, details?.placeOfSupply]);
     // v1.10.83 - exports and SEZ supplies under a LUT (Settings › Company).
     // A new invoice ticks "under LUT" by itself when the business's saved LUT
     // covers the invoice date's financial year, until the user changes the tick
@@ -1923,125 +1443,33 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
     // LineItem below sees stable references and only re-renders the ROW
     // that actually changed. Prior code created new function identities
     // every render → every keystroke re-rendered EVERY line item.
-    // #140 - Length / Width / pieces / rounding / manual amount of a size line.
-    const handleSizeChange = useCallback((id, patch) => {
-        if ('step' in patch)
-            rememberSizeStep(patch.step);
-        setItems(prev => prev.map(item => (item.id === id && item.size
-            ? changeSize(item, patch)
-            : item)));
-    }, []);
-    // #140 - an RFT line's measure, lines or typed value; the quantity follows
-    // from the size lines in the effect below, after any change to them.
-    const handleRftChange = useCallback((id, patch) => {
-        setItems(prev => prev.map(item => (item.id === id && item.rft ? { ...item, rft: { ...item.rft, ...patch } } : item)));
-    }, []);
-    useEffect(() => { setItems(prev => withRftLines(prev)); }, [items]);
-    // The Sq.ft lines an RFT line can tick; only RFT rows get it (memo).
-    const hasRft = items.some((i) => i.rft);
-    const sizeLines = useMemo(() => (hasRft ? rftSources(items).map((i) => ({
-        id: i.id,
-        label: `${i.name || `Line ${items.indexOf(i) + 1}`} (${sizeSqft(i.size)} sq.ft${perimeterRft(i.size) ? `, ${perimeterRft(i.size)} rft` : ''})`,
-    })) : []), [items, hasRft]);
-    // v1.10.85 - the saved client this invoice is for (credit limit, price
-    // level); their level only counts while Price levels is switched on.
-    const savedClientNow = useMemo(() => findSavedClient(savedClients, selectedClientId, client.name), [savedClients, selectedClientId, client.name]);
-    const clientLevel = activePriceLevels().some((l) => l.id === savedClientNow?.priceLevel) ? savedClientNow.priceLevel : '';
     const handleItemChange = useCallback((id, field, value) => {
-        // #143 / #140 - a unit change can make the line NA (no quantity) or a
-        // Sq.ft size line, or turn a size line back (see itemWithUnit).
-        // v1.10.85 (#148) - on a product with a second unit, picking Box bills by
-        // the box (stock counts 12 per box) at the box price; back to Pcs, the piece
-        // price. Any unit change drops the box factor first (lineInUnit).
-        // A new name typed on a box line drops the box factor (it is another item).
-        const change = (item) => {
-            if (field === 'name' && lineFactor(item) !== 1)
-                return { ...lineInUnit(item, null, item.unit), name: value };
-            if (field !== 'unit')
-                return { ...item, [field]: value };
-            const p = item.productId && products.find((x) => x.id === item.productId);
-            // The client's level price, when the product has one for that level.
-            const levelPrice = p && clientLevel ? Number(p.levelPrices?.[clientLevel]) || null : null;
-            return itemWithUnit(lineInUnit(item, p && hasAltUnit(p) ? p : null, value, { levelPrice }), value, { sizeOn: sizeBillingOn(), step: lastSizeStep() });
-        };
-        setItems(prev => prev.map(item => item.id === id ? change(item) : item));
+        setItems(prev => prev.map(item => item.id === id ? { ...item, [field]: value } : item));
         if (field === 'name') {
             setProductSearch({ itemId: id, query: value });
         }
-    }, [products, clientLevel]);
-    // The line a product makes. v1.10.85 (#137) - shared by picking it from the
-    // suggestions and by scanning its barcode, so both fill the same fields.
-    const productLine = (item, product) => ({
-        // #148 - lineInUnit with no product drops a box factor left from before.
-        ...itemWithUnit(lineInUnit(item, null, item.unit), product.unit || item.unit || 'Nos', { sizeOn: sizeBillingOn(), step: lastSizeStep() }),
-        name: product.name,
-        hsn: product.hsn || '',
+    }, []);
+    const selectProduct = useCallback((itemId, product) => {
         // v1.10.29 — Prefer sellingPrice for sales invoices (falls back to
         // legacy `rate` for pre-v1.10.29 products).
-        rate: priceForLevel(product, clientLevel), // v1.10.85 - or the client's level price
-        taxPercent: product.taxPercent ?? defaultTaxRate,
-        // v1.10.84 - nil-rated / exempt / non-GST, for GSTR-1 Table 8.
-        gstTreatment: product.gstTreatment || '',
-        productId: product.id,
-        isCharge: false, // a product picked on the delivery line makes it a product line
-        // v1.10.86 - (#189, #192) the product's MRP comes along (editable on the line).
-        mrp: Number(product.mrp) > 0 ? Number(product.mrp) : '',
-    });
-    const selectProduct = useCallback((itemId, product) => {
-        setItems(prev => prev.map(item => item.id === itemId ? productLine(item, product) : item));
+        const salePrice = product.sellingPrice ?? product.rate ?? 0;
+        setItems(prev => prev.map(item => item.id === itemId ? {
+            ...item,
+            name: product.name,
+            hsn: product.hsn || '',
+            rate: salePrice,
+            unit: product.unit || item.unit || 'Nos',
+            taxPercent: product.taxPercent ?? defaultTaxRate,
+            productId: product.id,
+            isCharge: false, // a product picked on the delivery line makes it a product line
+        } : item));
         setProductSearch({ itemId: null, query: '' });
-    }, [countryTaxRates, clientLevel]);
-    // v1.10.85 (#183) - a line whose name is none of the saved products (only
-    // once there are products, and never the delivery-charges line). A hint, not
-    // a block: one-off items are fine.
-    const productNames = useMemo(() => new Set(products.map((p) => String(p.name || '').trim().toLowerCase())), [products]);
-    const isUnknownItem = (item) => products.length > 0 && !item.isCharge && !item.productId
-        && String(item.name || '').trim().length > 1 && !productNames.has(String(item.name).trim().toLowerCase());
-    // (review) a SAC code (99...) saves a service, not goods; one save at a time
-    // and a fresh look at Products first, so a double click makes no twin. The
-    // line is not linked to it: this invoice moves no stock of a product that
-    // has none entered (products picked from now on are linked as usual).
-    const savingProduct = useRef(false);
-    const saveLineAsProduct = useCallback(async (item) => {
-        if (savingProduct.current)
-            return;
-        savingProduct.current = true;
-        try {
-            const name = String(item.name).trim();
-            const latest = await getAllProducts();
-            if (latest.some((p) => String(p.name || '').trim().toLowerCase() === name.toLowerCase())) {
-                setProducts(latest);
-                toast(`${name} is already in Products`, 'info');
-                return;
-            }
-            const service = /^99/.test(String(item.hsn || '').trim());
-            const saved = await saveProduct({ name, hsn: item.hsn || '', unit: item.unit || 'Nos',
-                sellingPrice: Number(item.rate) || 0, rate: Number(item.rate) || 0, taxPercent: Number(item.taxPercent) || 0, kind: service ? 'service' : 'goods',
-                ...(Number(item.mrp) > 0 ? { mrp: Number(item.mrp) } : {}) }); // v1.10.86 - (#189)
-            setProducts(await getAllProducts());
-            toast(`${saved.name} saved to Products`, 'success');
-        }
-        catch {
-            toast('Could not save it to Products.', 'error');
-        }
-        finally {
-            savingProduct.current = false;
-        }
-    }, []);
+    }, [countryTaxRates]);
     const getProductSuggestions = useCallback((itemId) => {
         if (productSearch.itemId !== itemId || !productSearch.query.trim())
             return [];
         const q = productSearch.query.toLowerCase();
-        // #137 - the product whose barcode this is comes first (Enter picks it):
-        // only with Barcodes on, and not when a product is called exactly that.
-        const exactName = products.some(p => (p.name || '').trim().toLowerCase() === q.trim());
-        const hit = isModuleEnabled('barcodes', getEnabledModules()) && !exactName ? findByBarcode(products, productSearch.query) : null;
-        const list = products.filter(p => p !== hit && (p.name?.toLowerCase().includes(q) || p.hsn?.toLowerCase().includes(q)));
-        // v1.10.85 (#182) - up to 50 in a scrolling list (it was the first 5, so
-        // similar names could not be reached); names starting with what was typed first.
-        const starts = (p) => ((p.name || '').toLowerCase().startsWith(q) ? 0 : 1);
-        list.sort((a, b) => starts(a) - starts(b));
-        return (hit ? [hit, ...list] : list).slice(0, 50);
+        return products.filter(p => p.name?.toLowerCase().includes(q) || p.hsn?.toLowerCase().includes(q)).slice(0, 5);
     }, [productSearch.itemId, productSearch.query, products]);
     // v1.10.77 (#87) - one delivery-charges line per invoice (see deliveryChargeLine).
     const hasDeliveryCharge = items.some((i) => i.isCharge);
@@ -2055,37 +1483,26 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
             return;
         setItems((prev) => [...prev, deliveryChargeLine(prev)]);
     };
-    // An empty line. Default unit depends on whether this invoice is for goods
-    // or services — freelancers and consultants get 'Hrs' by default,
-    // retailers/manufacturers get 'Nos'. The dropdown still shows the user's
-    // last-used unit if they've overridden a previous row.
-    const blankLine = (list) => ({
-        id: Date.now().toString(), name: '', hsn: '', quantity: 1, rate: 0, discount: 0,
-        unit: list.length > 0 && list[list.length - 1].unit ? list[list.length - 1].unit : getDefaultUnitForMode(invoiceOptions.invoiceMode),
-        taxPercent: showGST ? defaultTaxRate : 0,
-        cessPercent: 0,
-    });
-    // v1.10.85 (#137) - the Scan barcode box: the product goes on as a new line
-    // (or the empty one), and the same code again adds 1 to its quantity.
-    const barcodesOn = isModuleEnabled('barcodes', getEnabledModules());
-    const scanBarcode = (code) => {
-        const product = findByBarcode(products, code);
-        if (!product) {
-            toast(`No product has the barcode ${code}`, 'warning');
-            return;
-        }
-        setItems(prev => addScannedLine(prev, product, (line) => productLine(line, product), blankLine));
-    };
     const addItem = () => {
-        const line = blankLine(items);
-        const newId = line.id;
-        setItems(prev => [...prev, line]);
-        // Move keyboard focus to the new row's Item box so users who
+        // Default unit depends on whether this invoice is for goods or services —
+        // freelancers and consultants get 'Hrs' by default, retailers/manufacturers
+        // get 'Nos'. The dropdown still shows the user's last-used unit if they've
+        // overridden a previous row.
+        const defaultUnit = items.length > 0 && items[items.length - 1].unit
+            ? items[items.length - 1].unit
+            : getDefaultUnitForMode(invoiceOptions.invoiceMode);
+        const newId = Date.now().toString();
+        setItems(prev => [...prev, {
+            id: newId, name: '', hsn: '', quantity: 1, unit: defaultUnit, rate: 0, discount: 0,
+            taxPercent: showGST ? defaultTaxRate : 0,
+            cessPercent: 0,
+        }]);
+        // Move keyboard focus to the new row's Description field so users who
         // Tab to the Add Item button and press Enter don't have to grab the
-        // mouse. requestAnimationFrame waits until React has actually rendered
+        // mouse. requestAnimationFrame waits until the DOM update has actually completed
         // the new row in the DOM before we try to find/focus it.
         requestAnimationFrame(() => {
-            const el = document.querySelector(`[data-item-id="${newId}"] .line-item-name`); // #151: the Item box is a textarea since v1.10.83 - "input" found HSN
+            const el = document.querySelector(`[data-item-id="${newId}"] input.form-input`);
             if (el)
                 el.focus();
         });
@@ -2157,7 +1574,6 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
             email: cli.email || '',
             phone: cli.phone || '',
             isSEZ: !!cli.isSEZ,
-            isDeemedExport: !!cli.isDeemedExport,
         });
         setSelectedClientId(cli.id);
         setShowClientSuggestions(false);
@@ -2181,7 +1597,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                 // every invoice on 80mm thermal would land back on A4 the moment
                 // they picked a client). Now falls back to prev.paperSize so
                 // globally-persisted choice sticks until the user changes it.
-                ...clientPaperOptions(cli, prev),
+                paperSize: cli.preferredPaperSize || prev.paperSize || 'a4',
                 // v1.10.48 — Custom paper carries its dimensions in SEPARATE
                 // fields, and prior code restored only `preferredPaperSize`. So a
                 // client saved on 'custom' came back as 'custom' with no width —
@@ -2190,6 +1606,8 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                 // silently turned the invoice into an 80mm receipt. Restore the
                 // dimensions with the size, falling back to the current values
                 // rather than to getPaperSize's thermal default.
+                customPaperWidth: cli.preferredCustomPaperWidth || prev.customPaperWidth || 80,
+                customPaperHeight: cli.preferredCustomPaperHeight || prev.customPaperHeight || 297,
                 // v1.10.83 - the client's saved currency, else theirs if abroad,
                 // else the business's own. It used to keep the previous invoice's
                 // currency, so after a USD invoice an Indian client was billed in USD.
@@ -2208,35 +1626,6 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         setIsEditingClient(false);
         setShowClientModal(true);
         setShowClientSuggestions(false);
-    };
-    // v1.10.84 (#129) - a whole number that matches a saved customer fills
-    // them in at once; one that does not offers a name box to add them.
-    const onPhoneChange = (value) => {
-        setPhoneQuery(value);
-        const found = findClientByPhone(savedClients, value);
-        if (found && found.id !== selectedClientId)
-            selectSavedClient(found);
-    };
-    const phoneIsNew = phoneDigits(phoneQuery).length >= 10 && !findClientByPhone(savedClients, phoneQuery);
-    const addPhoneCustomer = async () => {
-        if (!phoneIsNew)
-            return;
-        const data = newPhoneClient(phoneQuery, newPhoneName, profile, savedClients);
-        try {
-            await saveClient(data);
-            const updated = await getAllClients();
-            setSavedClients(updated);
-            const saved = findClientByPhone(updated, data.phone);
-            if (saved)
-                selectSavedClient(saved);
-            else
-                setClient(prev => ({ ...prev, ...data }));
-            setNewPhoneName('');
-            toast(`Added customer: ${data.name}`, 'success');
-        }
-        catch {
-            toast('Could not save the customer. Is the app still running?', 'error');
-        }
     };
     // Open modal to edit existing saved client
     const openEditClientModal = (cli) => {
@@ -2265,7 +1654,6 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
             email: data.email || '',
             phone: data.phone || '',
             isSEZ: !!data.isSEZ,
-            isDeemedExport: !!data.isDeemedExport,
         });
         // v1.10.83 - a new client abroad gets their currency on a new invoice.
         if (!editingSaved)
@@ -2275,7 +1663,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
             toast(`Client "${data.name}" updated!`, 'success');
         }
         else {
-            const found = updated.find(c => clientKey(c.name) === clientKey(data.name) && !savedClients.some(old => old.id === c.id));
+            const found = updated.find(c => c.name === data.name.trim() && !savedClients.some(old => old.id === c.id));
             if (found)
                 setSelectedClientId(found.id);
             toast(`Client "${data.name}" saved!`, 'success');
@@ -2319,12 +1707,76 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         // (printedCount + lastPrintedAt) at save time without needing to
         // pipe them through the entire bill state.
         let finalInvoiceNumber = details.invoiceNumber;
-        let followTyped = null; // #145: a typed number the series follows after the save
         // v1.10.79 - a duplicate or a conversion is a new document too: it reserves
         // its number like a new invoice. It used to save under the number it only
         // peeked, without moving the counter, so the next conversion got the same
         // number and failed to save.
         const isNewDoc = !editingBill || !!editingBill._isDuplicate;
+        // v1.10.84 — Customer Credit Limit guard.
+        // Only new sales documents are checked on their first save. Quotes,
+        // proformas, challans, credit notes, and edits to an already-saved
+        // invoice must not be blocked by this new-sale exposure check.
+        if (isNewDoc && !hasBeenSaved.current && SALES_INVOICE_TYPES.includes(invoiceType)) {
+            const customerNameKey = String(client?.name || '').trim().toLowerCase();
+            const creditClient = savedClients.find(c => selectedClientId && c.id === selectedClientId)
+                || savedClients.find(c => String(c?.name || '').trim().toLowerCase() === customerNameKey);
+            const creditLimit = Math.max(0, Number(creditClient?.creditLimit) || 0);
+            const invoiceCurrency = invoiceOptions.currency || 'INR';
+            // Credit limits are configured as INR amounts in the Client form.
+            // Do not compare a foreign-currency invoice to an INR limit.
+            if (creditClient && creditLimit > 0 && invoiceCurrency === 'INR' && customerNameKey) {
+                let priorBills = allBillsForCredit;
+                try {
+                    // Read the latest saved ledger at the moment of saving, not
+                    // only the list loaded when the editor first opened.
+                    priorBills = await getAllBills();
+                }
+                catch { /* use the last successfully loaded list */ }
+                const customerBills = (priorBills || []).filter(b =>
+                    String(b?.clientName || '').trim().toLowerCase() === customerNameKey);
+                // Keep this calculation aligned with ClientsView's customer
+                // summary: sales add exposure, credit notes reduce it, TDS is
+                // not receivable, and actual payments reduce the balance.
+                let ledgerTotal = 0;
+                let ledgerTds = 0;
+                let ledgerPaid = 0;
+                for (const prior of customerBills) {
+                    const sign = salesSign(prior);
+                    if (!sign) continue;
+                    const priorTotal = Number(prior.totalAmount) || 0;
+                    ledgerTotal += sign * priorTotal;
+                    if (sign === 1) {
+                        ledgerTds += priorTotal - amountDue(prior);
+                        const paymentTotal = (prior.payments || []).reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0);
+                        if (paymentTotal > 0) ledgerPaid += paymentTotal;
+                        else if (typeof prior.paidAmount === 'number' && prior.paidAmount > 0) ledgerPaid += prior.paidAmount;
+                        else if (prior.status === 'paid') ledgerPaid += priorTotal;
+                    }
+                }
+                const currentOutstanding = Math.max(0, ledgerTotal - ledgerTds - ledgerPaid);
+                const newInvoiceReceivable = amountDue({ totalAmount: totals.total, data: { totals } });
+                const appliedCredit = Math.max(0, Number(creditToApply) || 0);
+                const projectedOutstanding = currentOutstanding + Math.max(0, newInvoiceReceivable - appliedCredit);
+                if (projectedOutstanding > creditLimit + 0.005) {
+                    const excess = projectedOutstanding - creditLimit;
+                    const fingerprint = [customerNameKey, creditLimit.toFixed(2), currentOutstanding.toFixed(2), newInvoiceReceivable.toFixed(2), appliedCredit.toFixed(2)].join('|');
+                    if (creditLimitOverrideAccepted.current !== fingerprint) {
+                        const proceed = await confirmAction({
+                            title: 'Customer credit limit exceeded',
+                            message: `Customer: ${creditClient.name}\nCredit limit: ${formatCurrency(creditLimit, 'INR')}\nCurrent outstanding: ${formatCurrency(currentOutstanding, 'INR')}\nThis invoice adds: ${formatCurrency(Math.max(0, newInvoiceReceivable - appliedCredit), 'INR')}\nProjected outstanding: ${formatCurrency(projectedOutstanding, 'INR')}\nExceeds limit by: ${formatCurrency(excess, 'INR')}\n\nDo you want to save this invoice anyway?`,
+                            confirmLabel: 'Save anyway',
+                            cancelLabel: 'Go back',
+                            tone: 'warning',
+                        });
+                        if (!proceed) {
+                            toast('Invoice not saved. Reduce the invoice amount or update the customer credit limit.', 'info');
+                            return null;
+                        }
+                        creditLimitOverrideAccepted.current = fingerprint;
+                    }
+                }
+            }
+        }
         if (isNewDoc && !numberReserved.current) {
             try {
                 // v1.10.10 — honour user's per-type prefix override.
@@ -2343,14 +1795,6 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                 if (!ownNumber) {
                     finalInvoiceNumber = await getNextInvoiceNumber(prefix, numOpts);
                     setDetails(prev => ({ ...prev, invoiceNumber: finalInvoiceNumber }));
-                }
-                else {
-                    // #145 - the next document carries on after a typed number that fits
-                    // the series and is ahead of it (a lower one leaves the series
-                    // alone). Only noted here: the counter moves once the save worked.
-                    const s = await typedNumberInSeries(typed, prefix, numOpts);
-                    if (s.n && s.n >= s.next)
-                        followTyped = s;
                 }
                 numberReserved.current = true;
             }
@@ -2376,8 +1820,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         const snapAccount = priorMatchesSelection
             ? priorSnapshot
             : getAccountById(profile, invoiceOptions.selectedAccountId);
-        // v1.10.86 - what new invoices start with is a setting, not this bill's.
-        const { tdsRecorded, [START_KEY]: _start, ...optionsOwn } = invoiceOptions;
+        const { tdsRecorded, ...optionsOwn } = invoiceOptions;
         const invoiceOptionsWithSnapshot = { ...optionsOwn, ...(isIssuedInvoice && tdsRecorded ? { tdsRecorded } : {}), paymentAccountSnapshot: snapAccount || null };
         // v1.10.24 — Plan client-credit application. If the user chose to
         // apply any credit on this invoice (via the banner in the Billed To
@@ -2422,10 +1865,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                 return null;
             }
         }
-        // v1.10.85 (#185) - the "Received now" payment saved before is left out
-        // here and added back below as it is now (or not at all, once cleared).
-        const ownNowId = receivedPay.current?.id || null;
-        const seedPayments = withReceivedNow(ownBill ? editingBill.payments : [], ownNowId, null);
+        const seedPayments = ownBill && editingBill.payments ? [...editingBill.payments] : [];
         // Also for a NEW bill once it is saved: its stored copy holds the client
         // credit applied on the first save (and any payment recorded since). A
         // later save started from no payments and wiped them.
@@ -2440,7 +1880,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                         || (Math.abs((Number(p.amount) || 0) - (Number(fp.amount) || 0)) < 0.005
                             && p.date === fp.date
                             && (p.mode || '') === (fp.mode || '')));
-                    if (!dup && !(ownNowId && fp.id === ownNowId))
+                    if (!dup)
                         seedPayments.push(fp);
                 }
             }
@@ -2448,23 +1888,6 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         }
         if (creditPlan?.targetEntry)
             seedPayments.push(creditPlan.targetEntry);
-        // v1.10.85 (#185) - offered only on a sale that had no payments when it
-        // was opened (those are shown, not changed, here). Its date is the
-        // invoice date.
-        const nowBase = canReceiveNow
-            ? receivedNowPayment({ id: ownNowId, amount: receivedNow.amount, mode: receivedNow.mode, date: details.invoiceDate, recordedAt: receivedPay.current?.recordedAt })
-            : null;
-        // v1.10.86 (#202) - its receipt takes the next number of the RCP series,
-        // reserved once (the first save with the amount) and kept on re-saves.
-        const nowPayment = !nowBase ? null
-            : ownNowId ? (receivedPay.current?.receiptNo ? { ...nowBase, receiptNo: receivedPay.current.receiptNo } : nowBase)
-                : await withNextReceiptNo(nowBase, () => reserveReceiptNo(profile));
-        if (nowPayment)
-            seedPayments.push(nowPayment);
-        // Cleared (or no longer a sale): its receipt is removed once the bill
-        // without the payment is saved (review: removed first, a refused save left
-        // the payment on the saved bill with no receipt).
-        const removeNowReceipt = ownNowId && !nowPayment ? ownNowId : '';
         const seedPaidAmount = seedPayments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
         // v1.10.41 — Recompute status from the merged paid amount rather
         // than trusting editingBill.status. If a payment was recorded on
@@ -2493,19 +1916,9 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         const seedStatus = keepCancelled ? 'cancelled' : (computedStatus === 'unpaid' && ownBill && editingBill.status === 'overdue')
             ? 'overdue'
             : computedStatus;
-        // v1.10.86 (#202) - a typed name that is a saved client's (case and
-        // spaces aside) is that client, as if picked from the list: the bill gets
-        // their exact name, so it never starts a second ledger for them.
-        const linkedClient = !selectedClientId ? findSavedClient(savedClients, null, client.name) : null;
-        const billClient = linkedClient && linkedClient.name !== client.name ? { ...client, name: linkedClient.name } : client;
-        if (linkedClient) {
-            setSelectedClientId(linkedClient.id);
-            if (billClient !== client)
-                setClient(billClient);
-        }
         const bill = {
             id: finalInvoiceNumber,
-            clientName: billClient.name,
+            clientName: client.name,
             invoiceNumber: finalInvoiceNumber,
             invoiceDate: details.invoiceDate,
             invoiceType,
@@ -2529,10 +1942,12 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
             ...((serverCopy?.einvoice || einvoice) ? { einvoice: serverCopy?.einvoice || einvoice } : {}),
             // v1.10.83 - the "TDS certificate received" tick from Reports › TDS & TCS.
             ...(ownBill && (serverCopy?.tdsCertificate || editingBill.tdsCertificate) ? { tdsCertificate: true } : {}),
-            data: { profile, client: billClient, details: { ...details, invoiceNumber: finalInvoiceNumber }, items: billItems, totals, invoiceType, customTerms, customNotes, internalNote, extraSections, invoiceOptions: invoiceOptionsWithSnapshot, taxInclusive,
+            data: {
+                profile, client, details: { ...details, invoiceNumber: finalInvoiceNumber }, items, totals, invoiceType, customTerms, customNotes, internalNote, extraSections, invoiceOptions: invoiceOptionsWithSnapshot, taxInclusive,
                 // A converted quotation/proforma/challan's stock moved to its invoice:
                 // its own record stays empty, or a save would take the stock twice.
-                stockApplied: isIssued && (serverCopy?.convertedTo || editingBill.convertedTo) ? {} : stockEffect(items, invoiceType, seedStatus) }
+                stockApplied: isIssued && (serverCopy?.convertedTo || editingBill.convertedTo) ? {} : stockEffect(items, invoiceType, seedStatus)
+            }
         };
         // Editing an existing bill → always overwrite. NEW bill on second-and-
         // later save this session → also overwrite (same invoice number, would
@@ -2542,27 +1957,13 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         // count as "editing", so saving it overwrote whatever invoice already had
         // that number: converting two quotations in a row replaced the first
         // invoice with the second.
-        // A rename never overwrites: the new number must be free.
+        // A rename never overwrites: the new number must be available.
         const shouldOverwrite = !renameFrom && (!isNewDoc || hasBeenSaved.current);
         // The number this bill actually ended up under: the 409 retry below can
         // move it, and the recurring template + callers must use the real one.
         let savedNumber = bill.id;
         try {
             await saveBill(bill, { overwrite: shouldOverwrite });
-            // #145 - saved under the typed number: the series carries on after it.
-            // A big jump (a typo such as 1200 for 0120) is asked first, because the
-            // counter never goes back down.
-            if (followTyped) {
-                const { key, n, next } = followTyped;
-                const ok = n <= next + 50 || await confirmAction({
-                    title: `Carry on numbering after ${bill.id}?`,
-                    message: `That number is ${n - next + 1} ahead of your series. Yes: the next invoice gets number ${n + 1}, and the numbers in between are never used. No: this invoice keeps its number and the series carries on from ${next}.`,
-                    confirmLabel: 'Yes, carry on after it',
-                    cancelLabel: 'No, keep the series',
-                });
-                if (ok)
-                    await raiseInvoiceCounter(key, n).catch(() => { });
-            }
             // v1.10.24 — Follow-up: write the `credit-transferred-out` entries
             // to each source overpaid bill. Sequential so a failure on any one
             // stops the chain (rare — same origin, same server, right after we
@@ -2607,12 +2008,14 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
             if (selectedClientId) {
                 const cli = savedClients.find(c => c.id === selectedClientId);
                 if (cli) {
-                    const { preferredPaperSize: nextPaperSize, preferredCustomPaperWidth: nextCustomW, preferredCustomPaperHeight: nextCustomH } = clientPaperPrefs(invoiceOptions);
+                    const nextPaperSize = invoiceOptions.paperSize || 'a4';
                     const nextCurrency = invoiceOptions.currency || 'INR';
                     // v1.10.48 — Persist the custom dimensions too. Saving only the
                     // paper-size KEY meant 'custom' round-tripped without its width,
                     // and getPaperSize() reads a missing custom width as 80mm, i.e.
                     // thermal. See the restore side in handleSelectClient.
+                    const nextCustomW = invoiceOptions.customPaperWidth || 80;
+                    const nextCustomH = invoiceOptions.customPaperHeight || 297;
                     const changed = cli.preferredPaperSize !== nextPaperSize
                         || cli.preferredCurrency !== nextCurrency
                         || cli.preferredCustomPaperWidth !== nextCustomW
@@ -2702,34 +2105,6 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
             }
         }
         savedId.current = savedNumber;
-        // v1.10.85 (#185) - the bill (with the payment) is saved; now its receipt,
-        // written as the Dashboard writes it (same id as the payment, so the Cash
-        // book pairs them). Only after the bill: a refused save (period lock, 423)
-        // has thrown before this, leaving nothing half-saved.
-        receivedPay.current = nowPayment ? { id: nowPayment.id, recordedAt: nowPayment.recordedAt, receiptNo: nowPayment.receiptNo } : null;
-        if (removeNowReceipt) {
-            try {
-                await deleteReceipt(removeNowReceipt);
-            }
-            catch (err) {
-                if (err?.status !== 404)
-                    toast('The invoice is saved without the payment, but its receipt could not be removed. Delete it on the Receipts page.', 'warning', 8000);
-            }
-            receivedReceipt.current = '';
-        }
-        if (nowPayment) {
-            const receipt = receiptForPayment({ ...bill, id: savedNumber, invoiceNumber: savedNumber }, nowPayment);
-            const sig = JSON.stringify(receipt);
-            if (sig !== receivedReceipt.current) {
-                try {
-                    await saveReceipt(receipt);
-                    receivedReceipt.current = sig;
-                }
-                catch {
-                    toast('The invoice and the payment received are saved, but its receipt could not be saved. Save again to retry.', 'warning', 8000);
-                }
-            }
-        }
         // A rename: the bill now lives under its new number, so the old file goes
         // (to the Trash, from where it can be restored).
         if (renameFrom && renameFrom !== savedNumber) {
@@ -2809,7 +2184,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                     customNotes,
                     extraSections,
                     taxInclusive,
-                    invoiceOptions: { ...invoiceOptions, recurring: null, [START_KEY]: undefined }, // strip the recurring config (and v1.10.86 the new-invoice setting) from clones
+                    invoiceOptions: { ...invoiceOptions, recurring: null }, // strip the recurring config from clones
                 });
             }
             catch (err) {
@@ -2823,28 +2198,15 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         // Written to a fresh copy of the original, not the one cloned when Convert
         // was clicked, so nothing done to it since is undone. Its stock record went
         // to the new invoice (stockStart), so its own is now empty.
-        // v1.10.85 (#135) - except a sales order: it is sent in parts, and follows
-        // the challans and invoices made from it (utils/salesOrders.js) instead.
-        // Its "Invoice the rest" takes in the order's challans not yet invoiced
-        // (_absorb, whose stock it took over through stockStart): those are
-        // marked converted to this invoice, as a converted challan is.
-        const markSources = editingBill?.invoiceType === 'sales-order' ? (editingBill._absorb || []) : [editingBill?.id];
-        if (editingBill?._convertToType && markSources.length && !conversionMarked.current && savedNumber) {
+        if (editingBill?._convertToType && !conversionMarked.current && savedNumber) {
             conversionMarked.current = true;
             try {
-                const all = await getAllBills();
-                for (const id of markSources) {
-                    const source = all.find((b) => b.id === id);
-                    if (source) {
-                        await saveBill({ ...source, convertedTo: savedNumber, ...(source.data ? { data: { ...source.data, stockApplied: {} } } : {}) }, { overwrite: true });
-                    }
+                const source = (await getAllBills()).find((b) => b.id === editingBill.id);
+                if (source) {
+                    await saveBill({ ...source, convertedTo: savedNumber, ...(source.data ? { data: { ...source.data, stockApplied: {} } } : {}) }, { overwrite: true });
                 }
             }
-            catch {
-                // The invoice itself is saved. A challan not marked would count (and
-                // hold its stock) as well: say so instead of leaving it silent.
-                toast(`${savedNumber} is saved, but ${markSources.length === 1 ? 'the source document' : 'its challans'} could not be marked as converted. Check ${markSources.join(', ')} on the Dashboard.`, 'warning', 12000);
-            }
+            catch { /* the invoice itself is saved */ }
         }
         // v1.10.76 (#80) - every save, auto-saves included, moves stock by the
         // difference between what this bill should do now and what it has done
@@ -2900,7 +2262,6 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         }
         finally {
             spacerFit.restore?.();
-            spacerFit.restoreWidth?.();
             if (scalerEl)
                 scalerEl.style.transform = '';
         }
@@ -3067,60 +2428,26 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
             const edges = [0];
             container.querySelectorAll('.inv-table tbody tr, .inv-table thead tr, .inv-header, .inv-parties, ' +
                 '.inv-footer, .inv-footer-block, .inv-signature, .inv-totals, [data-pdf-page-boundary]').forEach(el => edges.push(...span(el)));
-            // v1.10.86 (#188) - the whole <thead> too: its first row's edge ran
-            // through the two-row header cells (Description, HSN, Qty span both rows
-            // under CGST / SGST), and page 1 ended with the column titles cut in half.
-            const keepWhole = [...container.querySelectorAll('.inv-table tbody tr, .inv-table thead, .inv-table thead tr, .inv-header, .inv-parties, ' +
-                    // v1.10.73 - [data-pdf-page-boundary] too: the Boxed grid and Tally
-                    // designs mark every block with it (signature included), and a page
-                    // must end at those blocks' edges, never through one.
-                    '.inv-footer-block, .inv-signature, .inv-totals, [data-pdf-page-boundary], img')].map(span);
-            // ...and never end a page between the column titles and the first item.
-            const head = container.querySelector('.inv-table thead');
-            const firstRow = container.querySelector('.inv-table tbody tr');
-            if (head && firstRow)
-                keepWhole.push([span(head)[0], span(firstRow)[1]]);
+            const keepWhole = [...container.querySelectorAll('.inv-table tbody tr, .inv-table thead tr, .inv-header, .inv-parties, ' +
+                // v1.10.73 - [data-pdf-page-boundary] too: the Boxed grid and Tally
+                // designs mark every block with it (signature included), and a page
+                // must end at those blocks' edges, never through one.
+                '.inv-footer-block, .inv-signature, .inv-totals, [data-pdf-page-boundary], img')].map(span);
             return safePageBoundaries(edges, keepWhole);
         };
         // v1.10.70 - hide the extra pages BEFORE measuring, not after. The
         // separate-terms page sits inside the footer row, so measuring with it
         // still visible laid the footer out differently from the capture.
         extraPages.forEach(el => el.style.display = 'none');
-        // v1.10.86 (#188) - PDF font scale above 100% lays the invoice out on a
-        // narrower sheet that then fills the paper width (larger text). It used to
-        // enlarge the page picture past the paper: 140% cut 20% off each side.
-        const rawScale = Number(printSettings.pdfFontScale);
-        const requestedScale = isFinite(rawScale) && rawScale > 0
-            ? Math.max(0.5, Math.min(1.4, rawScale))
-            : 1.0;
-        const scalePlan = paperCfg.kind === 'thermal'
-            ? { layoutWidthMm: paperCfg.widthMm, placeScale: requestedScale }
-            : pdfScalePlan(paperCfg.widthMm, requestedScale);
-        if (scalePlan.layoutWidthMm !== paperCfg.widthMm) {
-            const el = printRef.current;
-            const prevWidth = el.style.width;
-            el.style.width = `${scalePlan.layoutWidthMm}mm`;
-            fitItemTable(el);
-            spacerFit.restoreWidth = () => { el.style.width = prevWidth; fitItemTable(el); };
-        }
         // v1.10.77 (#88) - trim the Tally / Boxed padding if it alone pushes the
         // invoice onto a second page; put back right after the capture.
         if (paperCfg.kind !== 'thermal')
             spacerFit.restore = fitSpacersToOnePage(printRef.current, pdfWidth, pdfPageHeight, printSettings);
-        // v1.10.86 (#188) - where a page may end is measured on html2canvas's copy
-        // (in onclone below), which is what gets drawn. Measured on the screen
-        // copy, it was a few pixels off by the foot of page 1 (the copy is laid out
-        // 2px wider, without the sheet's border), and in the Boxed design page 1
-        // ended through the first line of the bank details / totals box. These
-        // screen measurements are only the fallback.
-        let domBoundariesPx = collectRowBoundaries(printRef.current);
+        const domBoundariesPx = collectRowBoundaries(printRef.current);
         const domContainerWidth = printRef.current.getBoundingClientRect().width;
-        const captureWidthPx = printRef.current.scrollWidth;
-        let cloneLayoutHook = null;
         const mainCanvas = await html2canvas(printRef.current, {
             ...captureOptions(printRef.current),
-            onclone: async (clonedDoc) => {
-                showHiddenPaneInClone(clonedDoc);
+            onclone: (clonedDoc) => {
                 // v1.10.60 (#51) — embed the stylesheet rather than letting the
                 // clone re-fetch it. Without this, any fetch failure yields a
                 // completely unstyled PDF with no error shown to the user.
@@ -3134,13 +2461,16 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                     }
                 }
                 catch { /* never block the capture over styling */ }
-                clonedDoc.querySelectorAll('*').forEach(n => { n.style.letterSpacing = '0px'; n.style.wordSpacing = '0px'; });
+                clonedDoc.querySelectorAll('*').forEach(n => {
+                    n.style.letterSpacing = '0.01px';
+                    n.style.wordSpacing = '0px';
+                });
                 const inv = clonedDoc.getElementById('invoice-preview');
                 if (inv) {
                     // Match the target paper width so html2canvas captures at the right
                     // aspect ratio. jsPDF will scale to fit the page width; we set the
                     // HTML width to widthMm so glyphs land where CSS put them.
-                    inv.style.width = `${scalePlan.layoutWidthMm}mm`;
+                    inv.style.width = `${paperCfg.widthMm}mm`;
                     inv.style.overflow = 'visible';
                     inv.style.minHeight = 'unset';
                     inv.style.border = 'none';
@@ -3156,22 +2486,11 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                     }
                 }
                 clonedDoc.querySelectorAll('[data-pdf-page]').forEach(el => el.style.display = 'none');
-                if (inv) {
-                    try {
-                        if (clonedDoc.fonts?.ready)
-                            await clonedDoc.fonts.ready;
-                    }
-                    catch { /* non-fatal */ }
-                    domBoundariesPx = collectRowBoundaries(inv);
-                    cloneLayoutHook = pdfLayoutHook(inv);
-                }
             }
         });
         extraPages.forEach(el => el.style.display = '');
         spacerFit.restore?.();
         spacerFit.restore = null;
-        spacerFit.restoreWidth?.();
-        spacerFit.restoreWidth = null;
         // v1.10.3 — Record each original page as a "recipe" so multi-copy
         // (GST Rule 48) can duplicate multi-page invoices correctly.
         // v1.10.8 — Each recipe is now its own cropped image (was: one
@@ -3198,7 +2517,10 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         // scale. The invoice image lands smaller on the page → text is
         // proportionally smaller → more content fits per PDF page. This
         // matches how MS Word / LibreOffice "shrink to fit" works.
-        const pdfScale = scalePlan.placeScale;
+        const rawScale = Number(printSettings.pdfFontScale);
+        const pdfScale = isFinite(rawScale) && rawScale > 0
+            ? Math.max(0.5, Math.min(1.4, rawScale))
+            : 1.0;
         // v1.10.45 — Reserve vertical space for page-2+ header band and the
         // page-number footer band, so content never overlaps them.
         // Reported: business name "Hem E..." collided with the "TERMS &
@@ -3234,14 +2556,20 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         // Test hook for tests/smoke.mjs (ERR-024): where each PDF page ends, and
         // where the things a page must never cut through sit - all in the same
         // DOM pixels. Read-only, and costs nothing to anyone else.
-        // v1.10.86 - measured on the copy that was drawn (see onclone).
         try {
+            const t = printRef.current.getBoundingClientRect().top;
+            const rel = (el) => { const r = el.getBoundingClientRect(); return [r.top - t, r.bottom - t]; };
+            const firstRow = printRef.current.querySelector('.inv-table tbody tr');
+            const sig = printRef.current.querySelector('.inv-signature, [data-pdf-signature]');
             window.__lastPdfLayout = {
-                pageHeight: contentHeightMulti * captureWidthPx / contentWidth,
-                fullHeight: contentHeightFull * captureWidthPx / contentWidth,
-                total: mainCanvas.height * captureWidthPx / mainCanvas.width,
+                pageHeight: contentHeightMulti * domContainerWidth / contentWidth,
+                fullHeight: contentHeightFull * domContainerWidth / contentWidth,
+                total: mainCanvas.height * domContainerWidth / mainCanvas.width,
                 ends: [],
-                ...(cloneLayoutHook || pdfLayoutHook(printRef.current)),
+                rowHeight: firstRow ? rel(firstRow)[1] - rel(firstRow)[0] : 0,
+                signature: sig ? rel(sig) : null,
+                blocks: [...printRef.current.querySelectorAll('.inv-footer-block')].map(rel).filter(([a, b]) => b - a > 2),
+                atoms: [...printRef.current.querySelectorAll('.inv-signature, img, [data-pdf-page-boundary]')].map(rel).filter(([a, b]) => b - a > 2),
             };
         }
         catch { /* test hook only */ }
@@ -3288,8 +2616,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
             // v1.10.8 multi-page path — snap page breaks to safe DOM row boundaries.
             //
             // 1. Convert DOM-pixel boundaries → canvas-pixel boundaries.
-            // html2canvas draws the copy at `scale` canvas px per CSS px.
-            const domToCanvasScale = mainCanvas.width / (captureWidthPx || domContainerWidth);
+            const domToCanvasScale = mainCanvas.width / domContainerWidth;
             const canvasBoundariesPx = domBoundariesPx.map(y => y * domToCanvasScale);
             const totalCanvasHeightPx = mainCanvas.height;
             if (!canvasBoundariesPx.includes(totalCanvasHeightPx)) {
@@ -3371,7 +2698,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         for (const pageEl of extraPages) {
             const c = await html2canvas(pageEl, {
                 ...captureOptions(pageEl),
-                onclone: (cd) => { showHiddenPaneInClone(cd); cd.querySelectorAll('*').forEach(n => { n.style.letterSpacing = '0px'; n.style.wordSpacing = '0px'; }); }
+                onclone: (cd) => { cd.querySelectorAll('*').forEach(n => { n.style.letterSpacing = '0px'; n.style.wordSpacing = '0px'; }); }
             });
             const extraImg = c.toDataURL(imgFormat === 'PNG' ? 'image/png' : 'image/jpeg', jpegQuality);
             const extraH = Math.min((c.height * pdfWidth) / c.width, extraMaxH);
@@ -3429,7 +2756,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                 }
             }
         }
-        // v1.10.3 — free the multi-megabyte base64 image strings once
+        // v1.10.3 — release the multi-megabyte base64 image strings once
         // multi-copy replay is done. Post-processing steps below only
         // mutate the PDF pages, they don't need the source images. Prior
         // code held mainImg + pageRecipes in closure through the whole
@@ -3600,7 +2927,6 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
     //   Ctrl/Cmd+P       — download PDF
     //   Ctrl/Cmd+Enter   — add a new line item (v1.10.22)
     //   Ctrl/Cmd+Shift+D — duplicate the LAST line item (v1.10.22)
-    //   Ctrl/Cmd+Shift+F — hide / show the live preview (v1.10.86, #211)
     //   Esc              — close the leave-guard modal (v1.10.22)
     useEffect(() => {
         const onKey = (e) => {
@@ -3617,10 +2943,12 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                 if (!isMeaningfulInvoice())
                     return; // nothing to save
                 e.preventDefault();
-                saveInvoiceToDB().then(async (no) => { if (no) {
-                    toast('Invoice saved', 'success');
-                    await refreshSavedPdf(no);
-                } }).catch(() => toast('Save failed', 'error'));
+                saveInvoiceToDB().then(async (no) => {
+                    if (no) {
+                        toast('Invoice saved', 'success');
+                        await refreshSavedPdf(no);
+                    }
+                }).catch(() => toast('Save failed', 'error'));
             }
             else if (e.key === 'p' || e.key === 'P') {
                 e.preventDefault();
@@ -3645,15 +2973,10 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                     return [...prev, { ...last, id: Date.now().toString() }];
                 });
             }
-            else if (e.shiftKey && (e.key === 'f' || e.key === 'F')) {
-                // v1.10.86 (#211) - hide or show the live preview (remembered, like the button).
-                e.preventDefault();
-                setPreviewCollapsed(v => !v);
-            }
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        // eslint-disable-next-line vanilla-runtime/exhaustive-deps
     }, [isMeaningfulInvoice, leaveModal]);
     // v1.10.3 — Shared print-via-iframe helper. Prior code duplicated the
     // "createObjectURL + iframe + revoke on load" pattern in 3 places and
@@ -3663,10 +2986,12 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
     const printViaIframe = (blob) => {
         const url = URL.createObjectURL(blob);
         let cleaned = false;
-        const cleanup = () => { if (!cleaned) {
-            cleaned = true;
-            URL.revokeObjectURL(url);
-        } };
+        const cleanup = () => {
+            if (!cleaned) {
+                cleaned = true;
+                URL.revokeObjectURL(url);
+            }
+        };
         // Belt: 90s hard timeout in case onload never fires.
         const timer = setTimeout(cleanup, 90_000);
         try {
@@ -3780,10 +3105,12 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
             iframe.contentWindow.focus();
             iframe.contentWindow.print();
             // Give the driver ~8s to grab the buffer before we tear down.
-            setTimeout(() => { try {
-                iframe.remove();
-            }
-            catch { /* ignore */ } }, 8000);
+            setTimeout(() => {
+                try {
+                    iframe.remove();
+                }
+                catch { /* ignore */ }
+            }, 8000);
             return true;
         }
         catch (err) {
@@ -3809,13 +3136,46 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
     // wasted paper, watermark stamped on receipt, HSN/rate lines shown.
     // Now: single source of truth — getPaperSize().kind.
     const isThermalPaper = () => getPaperSize(invoiceOptions.paperSize, invoiceOptions).kind === 'thermal';
-    // v1.10.84 (#161) - reported: with the preview hidden, Save / Download /
-    // Print opened it and closed it again (v1.10.26 un-hid it for every
-    // capture). Nothing needs it on screen: thermal printing builds its own
-    // iframe from the receipt HTML (v1.10.42), and html2canvas captures a CLONE
-    // of the page, in which showHiddenPaneInClone puts the hidden pane back at
-    // left 0, fully opaque. The live pane keeps its real 794px layout
-    // off-screen, so the page-break measurements are the same.
+    // v1.10.26 — Focus mode moves the preview pane off-screen (position:
+    // absolute), which is fine for html2canvas (layout still computed) but
+    // breaks window.print() for thermal (prints visible viewport only).
+    // Un-collapse the preview for the duration of any print / download
+    // operation and restore after.
+    //
+    // v1.10.27 — Reported: "after print, preview panel comes back up and
+    // hiding again have to click." Prior code registered an `afterprint`
+    // listener + 30s safety timeout, which never fired in two of the three
+    // paths and left the preview expanded:
+    //   - Download PDF has NO print dialog → afterprint never fires
+    //   - A4 iframe print → afterprint fires on iframe.contentWindow, not
+    //     the parent window we were listening on
+    //   - Only thermal window.print() correctly fired afterprint on parent
+    //
+    // Fix: restore in the finally block, unconditionally. window.print()
+    // blocks the JS thread until the native dialog closes on all desktop
+    // browsers, so the restore happens after the user is done with print.
+    // On mobile Safari where print() may not block, the DOM was already
+    // captured at the moment print() was invoked, so restoring right after
+    // is safe.
+    const withPreviewOnScreen = async (fn) => {
+        const wasCollapsed = previewCollapsed;
+        if (!wasCollapsed)
+            return fn();
+        setPreviewCollapsed(false);
+        // v1.10.28 — bumped settle from 50ms → 200ms. Reported: PDF sometimes
+        // came out with content shoved to top-left on slower devices. Root
+        // cause: after removing position: absolute, browser needs a real layout
+        // pass; 50ms wasn't enough for the DOM commit + reflow on low-end Android.
+        // Two rAFs + a settle timeout so the browser commits the DOM change AND
+        // the browser lays out the newly-visible preview before we snapshot.
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 200))));
+        try {
+            return await fn();
+        }
+        finally {
+            setPreviewCollapsed(true);
+        }
+    };
     // v1.10.36 — Print pipeline split into two functions:
     //   1. `executePrint` — the actual work (buildPDF → printViaIframe).
     //      This is the SAME code path that was working in v1.10.34 and
@@ -3833,7 +3193,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
     // props → bit-for-bit identical. Zero CSS drift risk (this was the
     // v1.10.35 bug — a re-serialized iframe DOM diverged from the on-
     // screen render because of dropped cross-origin fonts + max-width
-    // caps beating inline widths). See PrintPreviewModal.jsx for details.
+    // caps beating inline widths). See PrintPreviewModal.js for details.
     // Save before any PDF or print is made, counting it as printed once more.
     // A new invoice gets its real number here (the form only shows a peek until
     // the first save), so the PDF must be built AFTER this, once the preview has
@@ -3854,7 +3214,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         return no;
     };
     // Prints what the preview shows. Returns true when it was sent to print.
-    const printPreview = async () => {
+    const printPreview = () => withPreviewOnScreen(async () => {
         try {
             // v1.10.42 — Thermal + user hasn't opted out of direct print?
             // Try the vector-HTML path first. If the browser blocks it
@@ -3874,7 +3234,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
             toast('Print failed — try Download PDF instead', 'error');
             return false;
         }
-    };
+    });
     const executePrint = async () => {
         if (!printRef.current)
             return;
@@ -3907,7 +3267,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
             return undefined;
         const t = setTimeout(() => setPrintOnOpen(true), 1500);
         return () => clearTimeout(t);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        // eslint-disable-next-line vanilla-runtime/exhaustive-deps
     }, []);
     useEffect(() => {
         if (!printOnOpen || printOnOpenDone.current)
@@ -3935,7 +3295,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
             clearDraft();
             onBack();
         })();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        // eslint-disable-next-line vanilla-runtime/exhaustive-deps
     }, [printOnOpen]);
     const directPrint = async () => {
         if (!printRef.current)
@@ -3945,7 +3305,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         // either.
         const problem = validateForSave();
         if (problem) {
-            showProblem(problem);
+            toast(problem, 'warning');
             return;
         }
         if (isThermalPaper()) {
@@ -3965,7 +3325,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
     const printFromPreview = async () => {
         const problem = validateForSave();
         if (problem) {
-            showProblem(problem);
+            toast(problem, 'warning');
             return;
         }
         await executePrint();
@@ -3976,8 +3336,10 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         const monthName = invoiceDate.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
         const params = new URLSearchParams({ name: fileName, client: client?.name || 'General', month: monthName });
         return fetch(`/api/save-pdf?${params}`, { method: 'POST', headers: { 'Content-Type': 'application/pdf' }, body: pdfBlob })
-            .then((r) => { if (!r.ok)
-            throw new Error(`save-pdf ${r.status}`); });
+            .then((r) => {
+                if (!r.ok)
+                    throw new Error(`save-pdf ${r.status}`);
+            });
     };
     // v1.10.76 (#83) - reported: editing an invoice and pressing Save updated
     // the invoice but left the old PDF in Saved Invoices. If this invoice was
@@ -3986,13 +3348,13 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         if (!hasOutput.current || !printRef.current)
             return;
         try {
-            const pdf = await buildPDF({ archive: true });
+            const pdf = await withPreviewOnScreen(() => buildPDF({ archive: true }));
             await saveToInvoicesFolder(pdf.output('blob'), `${typeConfig.prefix}_${savedNumber.replace(/\//g, '-')}.pdf`);
             toast('The PDF in Saved Invoices is updated too', 'info');
         }
         catch (err) {
             console.error('Saved Invoices PDF refresh failed:', err);
-            toast('Invoice saved, but its PDF in Saved Invoices could not be updated. Use Save PDF.', 'warning');
+            toast('Invoice saved, but its PDF in Saved Invoices could not be updated. Use Save & Download.', 'warning');
         }
     };
     const generatePDF = async () => {
@@ -4003,17 +3365,17 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         // either.
         const problem = validateForSave();
         if (problem) {
-            showProblem(problem);
+            toast(problem, 'warning');
             return;
         }
         try {
             setSaving(true);
-            setPdfBusy(true);
             // Save first so the PDF shows the number the invoice was saved under.
             const savedNumber = await saveForOutput();
             if (!savedNumber)
                 return;
-            const pdf = await buildPDF();
+            // v1.10.26 — force preview on-screen so html2canvas can snapshot it.
+            const pdf = await withPreviewOnScreen(() => buildPDF());
             const fileName = `${typeConfig.prefix}_${savedNumber.replace(/\//g, '-')}.pdf`;
             pdf.save(fileName);
             const pdfBlob = pdf.output('blob');
@@ -4041,50 +3403,141 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         }
         finally {
             setSaving(false);
-            setPdfBusy(false);
         }
     };
-    const shareWhatsApp = () => {
-        // v1.10.29 — reported: "when i use whatsapp button it is sending
-        // subtotal amount". Cause: this used `items.reduce((s, i) => s +
-        // (i.quantity * i.rate), 0)` — that's the pre-tax subtotal, not the
-        // invoice total. Now uses totals.total (post-tax, post-discount, with
-        // round-off + TCS + invoice-level discount all applied) — the same
-        // number that appears on the PDF and gets saved as bill.totalAmount.
-        // v1.10.84 (#156) - the same full message as the Invoices list, built
-        // from the form (payments and status from the saved invoice, if any).
-        // v1.10.86 - the PDF goes along (copied for Ctrl+V in the chat on the PC,
-        // the Share sheet on a phone). Like Save PDF, the invoice is saved first,
-        // so the PDF and the message carry the number it was saved under.
-        if (!printRef.current)
-            return;
-        const problem = validateForSave();
-        if (problem) {
-            showProblem(problem);
-            return;
-        }
-        sendPdfOnWhatsApp({ phone: client?.phone, toast, prepare: async () => {
-                setSaving(true);
+
+    //-> *********************** WHAT's Up FUNCTIONALITY *********************************
+    const shareWhatsApp = async () => {
+
+        // Second click: share the already generated PDF.
+        if (whatsAppPdfShareRef.current) {
+            const { file, message } = whatsAppPdfShareRef.current;
+
+            if (
+                navigator.share &&
+                navigator.canShare?.({ files: [file] })
+            ) {
                 try {
-                    const savedNumber = await saveForOutput();
-                    if (!savedNumber)
-                        return null;
-                    const bill = {
-                        invoiceNumber: savedNumber, invoiceDate: details.invoiceDate, clientName: client?.name,
-                        totalAmount: totals.total, currency: invoiceOptions.currency || 'INR',
-                        payments: editingBill?._isDuplicate ? [] : editingBill?.payments,
-                        paidAmount: editingBill?._isDuplicate ? 0 : editingBill?.paidAmount,
-                        status: editingBill?._isDuplicate ? '' : editingBill?.status,
-                        data: { details, invoiceOptions, totals },
-                    };
-                    const pdf = await buildPDF();
-                    return { blob: pdf.output('blob'), fileName: `${typeConfig.prefix}_${savedNumber.replace(/\//g, '-')}.pdf`, message: invoiceShareMessage(bill, profile) };
+                    await navigator.share({
+                        files: [file],
+                        title: file.name,
+                        text: message,
+                    });
+
+                    whatsAppPdfShareRef.current = null;
+                    setWhatsAppPdfReady(false);
+
+                    toast(
+                        'Select WhatsApp in the sharing panel to send the invoice.',
+                        'success'
+                    );
+                    return;
+
+                } catch (err) {
+                    if (err?.name === 'AbortError') return;
+                    console.warn('File sharing unavailable:', err);
                 }
-                finally {
-                    setSaving(false);
-                }
-            } });
+            }
+
+            // Fallback for browsers without file sharing.
+            openWhatsAppShare(client?.phone, message);
+
+            const url = URL.createObjectURL(file);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = file.name;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+            whatsAppPdfShareRef.current = null;
+            setWhatsAppPdfReady(false);
+
+            toast(
+                'PDF downloaded. In WhatsApp, use Attach → Document to attach it.',
+                'info',
+                10000
+            );
+            return;
+        }
+
+        // First click: save invoice and prepare PDF.
+        const problem = validateForSave();
+
+        if (problem) {
+            toast(problem, 'warning');
+            return;
+        }
+
+        try {
+            setSaving(true);
+
+            const savedNumber = await saveForOutput();
+            if (!savedNumber) return;
+
+            const pdf = await withPreviewOnScreen(() => buildPDF());
+            const pdfBlob = pdf.output('blob');
+
+            const fileName =
+                `${typeConfig.prefix}_${savedNumber.replace(/\//g, '-')}.pdf`;
+
+            const file = new File([pdfBlob], fileName, {
+                type: 'application/pdf'
+            });
+
+            if (!(readOnlyDoc && editingBill?.status === 'cancelled')) {
+                saveToInvoicesFolder(pdfBlob, fileName).catch(() => { });
+            }
+
+            const cur = invoiceOptions.currency || 'INR';
+            const total = formatCurrency(Number(totals.total) || 0, cur);
+            const subtotal = formatCurrency(printedSubtotal(totals), cur);
+
+            const dateStr = details.invoiceDate
+                ? new Date(details.invoiceDate).toLocaleDateString(
+                    'en-IN',
+                    { day: '2-digit', month: 'short', year: 'numeric' }
+                )
+                : '';
+
+            const lines = [
+                `*Invoice: ${savedNumber}*`,
+                `Date: ${dateStr}`,
+                `Client: ${client?.name || ''}`,
+                `Subtotal: ${subtotal}`,
+                `*Total: ${total}*`,
+            ];
+
+            if (profile?.businessName) {
+                lines.push('', `— ${profile.businessName}`);
+            }
+
+            whatsAppPdfShareRef.current = {
+                file,
+                message: lines.join('\n')
+            };
+
+            setWhatsAppPdfReady(true);
+
+            toast(
+                'Invoice PDF is ready. Click Share PDF Now.',
+                'success',
+                8000
+            );
+
+        } catch (err) {
+            console.error('WhatsApp PDF preparation failed:', err);
+            toast('Could not prepare invoice PDF.', 'error');
+        } finally {
+            setSaving(false);
+        }
     };
+
+
+
+
     const exportEWayBill = () => {
         if (!profile?.gstin) {
             toast('Set your GSTIN in Settings first', 'warning');
@@ -4101,7 +3554,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         // and where; uncaught, the click used to do nothing at all.
         let ewb;
         try {
-            ewb = generateEWayBillJSON(profile, client, details, billItems, totals, invoiceType, { taxInclusive });
+            ewb = generateEWayBillJSON(profile, client, details, items, totals, invoiceType, { taxInclusive });
         }
         catch (err) {
             toast(err.message || 'Could not make the E-Way Bill file', 'warning', 8000);
@@ -4124,47 +3577,6 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
     // An invoice that already has TDS / TCS keeps its box, so it can be edited.
     const tdsTcsOn = isModuleEnabled('tdsTcs', getEnabledModules());
     const ewayOn = isModuleEnabled('ewayBill', getEnabledModules());
-    const phoneFirstOn = isModuleEnabled('phoneFirst', getEnabledModules());
-    const orderInfo = isIssuedInvoice && invoiceType === 'sales-order' ? orderSummary(editingBill, allBillsForCredit) : null;
-    // v1.10.86 (#147, #189) - the totals while typing, beside Save: the same
-    // `totals` the preview prints and Save stores. Received is "Received now"
-    // on a new or unpaid sale, else what was already paid on this invoice.
-    const money = (n) => formatCurrency(Number(n) || 0, invoiceOptions.currency || 'INR');
-    const itemCount = items.filter((i) => String(i.name || '').trim()).length;
-    const receivedShown = canReceiveNow ? Math.max(0, Number(receivedNow.amount) || 0) : paidSoFar;
-    const balanceShown = Math.max(0, Math.round((receivableNow - receivedShown) * 100) / 100);
-    // v1.10.86 - the short words a folded section shows while closed.
-    const clientSummary = [
-        [client.city || client.address, client.state].filter(Boolean).join(', '),
-        client.gstin && `${getCountryConfig(client.country || profile?.country).taxIdLabel} ${client.gstin}`,
-        client.phone,
-        details.shipToSameAsBilling === false && 'ships to another address',
-    ].filter(Boolean).join(' · ');
-    const termsLines = htmlLineCount(customTerms);
-    const termsName = termsTemplates.find((t) => t.id === selectedTermsId)?.name || 'Custom';
-    // v1.10.86 - the line each card of this screen shows while it is closed.
-    const shortDate = (d) => {
-        const at = d ? parseLocalDate(d) : null;
-        // Kept on one line (no-break spaces) when the summary wraps.
-        return at && !isNaN(at.getTime()) ? at.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/ /g, '\u00a0') : '';
-    };
-    const notesLines = htmlHasText(customNotes) ? Math.max(1, htmlLineCount(customNotes)) : 0;
-    // v1.10.86 - each line's amount, from the same per-line figures the totals add up.
-    const lineAmountOf = (idx) => { const l = totals.lines?.[idx]; return l ? Math.round((l.taxable + l.tax + l.cess) * 100) / 100 : 0; };
-    const lineTaxOf = (idx) => { const l = totals.lines?.[idx]; return l ? Math.round((l.tax + l.cess) * 100) / 100 : 0; };
-    const cardSummary = {
-        type: [typeConfig?.label || invoiceType, { goods: 'Goods', services: 'Services', mixed: 'Mixed' }[invoiceOptions.invoiceMode || 'goods']].join(' · '),
-        client: client.name?.trim() ? [client.name.trim(), clientSummary].filter(Boolean).join(' · ') : 'No client yet',
-        items: itemCount ? `${itemCount} item${itemCount === 1 ? '' : 's'} · ${money(totals.total)}` : 'No items yet',
-        details: [details.invoiceNumber, shortDate(details.invoiceDate), details.dueDate && `due ${shortDate(details.dueDate)}`].filter(Boolean).join(' · '),
-        terms: [
-            `Terms: ${termsLines ? termsName : 'none'}`,
-            notesLines > 0 && `Notes: ${notesLines} line${notesLines === 1 ? '' : 's'}`,
-            internalNote.trim() && 'Private note',
-            extraSections.length > 0 && `${extraSections.length} extra page${extraSections.length === 1 ? '' : 's'}`,
-        ].filter(Boolean).join(' · '),
-    };
-    const notPrinted = (key) => (invoiceOptions[key] === false ? ' · not printed' : '');
     const saveEinvoice = async (value) => {
         try {
             const stored = (await getAllBills()).find((b) => b.id === savedId.current);
@@ -4193,18 +3605,16 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         einvoice?.irn && !readOnlyDoc && (h("div", { className: "notice notice-warn", role: "status", style: { marginBottom: '0.75rem' } },
             "This invoice has an IRN. Changes made here are not sent to the e-invoice portal. To correct an e-invoice, cancel it on the portal (within 24 hours) and issue a new one, or issue a credit note.",
             h(HelpButton, { title: "E-invoicing", doc: "gst-returns#e-invoice", size: 16 }))),
-        showEinvoice && (h(EInvoiceEditorModal, { bill: {
+        showEinvoice && (h(EInvoiceEditorModal, {
+            bill: {
                 invoiceNumber: details.invoiceNumber, invoiceDate: details.invoiceDate, invoiceType,
                 status: editingBill && !editingBill._isDuplicate ? editingBill.status : 'unpaid',
                 currency: invoiceOptions.currency || 'INR', einvoice,
-                data: { profile, client, details, items: billItems, totals, invoiceType, customTerms, invoiceOptions, taxInclusive },
-            }, profile: profile, bills: allBillsForCredit, saved: showEinvoice.saved, onSaveIrn: saveEinvoice, onClose: () => setShowEinvoice(false) })),
-        h("div", { className: "generator-toolbar", ref: toolbarRef },
-            h("div", { className: "generator-toolbar-start" },
-                h("h1", { className: "generator-page-heading" }, invoiceType === 'delivery-challan'
-                    ? (editingBill ? 'Edit Delivery Challan' : 'New Delivery Challan')
-                    : (editingBill ? 'Edit Invoice' : 'New Invoice')),
-                h("div", { className: "generator-toolbar-left" },
+                data: { profile, client, details, items, totals, invoiceType, customTerms, invoiceOptions, taxInclusive },
+            }, profile: profile, bills: allBillsForCredit, saved: showEinvoice.saved, onSaveIrn: saveEinvoice, onClose: () => setShowEinvoice(false)
+        })),
+        h("div", { className: "generator-toolbar" },
+            h("div", { className: "flex gap-2 items-center" },
                 h("button", { className: "btn btn-secondary", onClick: handleBack },
                     h(ArrowLeft, { size: 18 }),
                     " Back"),
@@ -4223,11 +3633,25 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                             : isDraft ? 'Draft — click to complete'
                                 : ((!editingBill || editingBill._isDuplicate) && !hasBeenSaved.current) ? 'Not saved yet'
                                     : 'Ready';
-                    // Focus the first missing input to accelerate the "make it
-                    // saveable" path (v1.10.86: opening its card first if it is closed).
-                    const onClick = () => { if (isDraft)
-                        focusMissing(); };
-                    return (h("button", { type: "button", onClick: onClick, disabled: !isDraft, title: isDraft ? 'Click to focus the first missing field' : label, style: {
+                    const onClick = () => {
+                        if (!isDraft)
+                            return;
+                        // Focus the first missing input to accelerate the "make
+                        // it saveable" path. Client name first (most common
+                        // missing field), then the first line item description.
+                        if (!client?.name?.trim()) {
+                            clientNameRef.current?.focus();
+                            clientNameRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            return;
+                        }
+                        const emptyRow = document.querySelector('.line-item-row input.form-input:placeholder-shown, .line-item-row input.form-input[value=""]');
+                        if (emptyRow) {
+                            emptyRow.focus();
+                            emptyRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }
+                    };
+                    return (h("button", {
+                        type: "button", onClick: onClick, disabled: !isDraft, title: isDraft ? 'Click to focus the first missing field' : label, style: {
                             display: 'inline-flex', alignItems: 'center', gap: 6,
                             fontSize: '0.75rem', fontWeight: 600,
                             padding: '0.35rem 0.7rem',
@@ -4236,48 +3660,29 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                             border: `1px solid ${color}55`,
                             color: color,
                             cursor: isDraft ? 'pointer' : 'default',
-                        } },
+                        }
+                    },
                         saving && h(Loader, { size: 12, className: "spin" }),
                         saved && h(Check, { size: 12 }),
-                        !saving && !saved && (h("span", { style: {
+                        !saving && !saved && (h("span", {
+                            style: {
                                 width: 8, height: 8, borderRadius: '50%',
                                 background: color,
                                 boxShadow: isDraft ? `0 0 0 3px ${color}33` : 'none',
-                            } })),
+                            }
+                        })),
                         label));
                 })(),
-                h(HelpButton, { title: "Saving as you go", doc: "invoices#autosave", size: 16 }))),
-            h("div", { className: "invoice-total-bar", "data-testid": "invoice-total-bar", role: "group", "aria-label": "Invoice totals" },
-                h("span", { className: "itb-cell" },
-                    h("strong", null, itemCount),
-                    " item",
-                    itemCount === 1 ? '' : 's'),
-                h("span", { className: "itb-cell" },
-                    "Taxable ",
-                    h("strong", null, money(totals.taxableAmount))),
-                showGST && h("span", { className: "itb-cell" },
-                    taxLabel,
-                    " ",
-                    h("strong", null, money(totals.totalTaxAmount))),
-                h("span", { className: "itb-cell itb-total" },
-                    "Total ",
-                    h("strong", null, money(totals.total))),
-                receivedShown > 0.005 && (h(Fragment, null,
-                    h("span", { className: "itb-cell" },
-                        canReceiveNow ? 'Received' : 'Paid',
-                        " ",
-                        h("strong", null, money(receivedShown))),
-                    h("span", { className: "itb-cell itb-balance" },
-                        "Balance ",
-                        h("strong", null, money(balanceShown)))))),
+                h(HelpButton, { title: "Saving as you go", doc: "invoices#autosave", size: 16 })),
             h("div", { className: "flex gap-2 generator-actions" },
-                h("button", { className: "btn btn-primary", onClick: async () => {
+                h("button", {
+                    className: "btn btn-primary", onClick: async () => {
                         // v1.10.58 (#47) — refuse a blank invoice. Saving reserves an
                         // invoice number, so an empty save leaves a permanent gap in a
                         // sequence GST expects to be gapless.
                         const problem = validateForSave();
                         if (problem) {
-                            showProblem(problem);
+                            toast(problem, 'warning');
                             return;
                         }
                         try {
@@ -4298,22 +3703,25 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                         finally {
                             setSaving(false);
                         }
-                    }, disabled: saving, title: "Save the invoice without downloading (Ctrl+S)" },
+                    }, disabled: saving, title: "Save the invoice without downloading (Ctrl+S)"
+                },
                     h(Check, { size: 18 }),
                     " ",
                     saving ? 'Saving…' : 'Save'),
-                h("button", { className: `btn btn-secondary${pdfBusy ? ' btn-progress' : ''}`, onClick: generatePDF, disabled: saving, "aria-busy": pdfBusy || undefined, title: "Saves the invoice and downloads its PDF (Ctrl+P)" },
+                h("button", { className: "btn btn-secondary", onClick: generatePDF, disabled: saving, title: "Save + download the PDF" },
                     h(Download, { size: 18 }),
                     " ",
-                    pdfBusy ? 'Generating...' : 'Save PDF'),
-                h("button", { className: "btn btn-secondary", onClick: directPrint, disabled: saving, title: isThermalPaper()
+                    saving ? 'Generating...' : 'Save & Download'),
+                h("button", {
+                    className: "btn btn-secondary", onClick: directPrint, disabled: saving, title: isThermalPaper()
                         ? 'Send directly to your thermal printer'
-                        : 'Open browser print dialog (skip the PDF download)' },
+                        : 'Open browser print dialog (skip the PDF download)'
+                },
                     h(Printer, { size: 18 }),
                     " Print"),
-                h("button", { className: "btn btn-secondary invoice-whatsapp-action", onClick: shareWhatsApp, disabled: saving, title: "Share invoice on WhatsApp" },
-                    h(MessageCircle, { size: 15, style: { color: '#16a34a' } }),
-                    " WhatsApp"),
+                h("button", { className: "btn btn-secondary", onClick: shareWhatsApp, disabled: saving, style: { background: '#25d366', color: '#fff', borderColor: '#25d366' } },
+                    h(MessageCircle, { size: 18 }),
+                    whatsAppPdfReady ? " Share PDF Now" : " WhatsApp"),
                 ewayOn && (invoiceType === 'tax-invoice' || invoiceType === 'delivery-challan') && (h("button", { className: "btn btn-secondary", onClick: exportEWayBill, disabled: saving, title: "Download E-Way Bill JSON for NIC portal upload" },
                     h(Truck, { size: 18 }),
                     " E-Way Bill")),
@@ -4321,958 +3729,870 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                     h(QrCode, { size: 18 }),
                     " E-invoice",
                     einvoice?.irn ? ' ✓' : '')),
-                h("button", { className: "btn btn-secondary", type: "button", onClick: () => setPreviewCollapsed(v => !v), title: previewCollapsed ? 'Show the live preview (Ctrl+Shift+F)' : 'Hide the preview and use the full width for entry (Ctrl+Shift+F)' }, previewCollapsed ? h(Fragment, null,
+                h("button", {
+                    className: "btn btn-secondary", type: "button", onClick: () => {
+                        const open = !showOptions;
+                        setShowOptions(open);
+                        // v1.10.83 - the panel is in the Invoice Type card at the top;
+                        // from further down the page it opened out of sight ("it does
+                        // nothing"), so take the user to it.
+                        if (open)
+                            setTimeout(() => document.getElementById('invoice-options-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+                    }, title: showOptions ? 'Hide the layout and column options' : 'Choose columns, sections, paper size and PDF style'
+                },
+                    h(Settings, { size: 18 }),
+                    " ",
+                    showOptions ? 'Hide Options' : 'Customize'),
+                h("button", { className: "btn btn-secondary", type: "button", onClick: () => setPreviewCollapsed(v => !v), title: previewCollapsed ? 'Show the live preview' : 'Hide the preview and use the full width for entry' }, previewCollapsed ? h(Fragment, null,
                     h(Eye, { size: 18 }),
                     " Show Preview") : h(Fragment, null,
-                    h(EyeOff, { size: 18 }),
-                    " Hide Preview")))),
+                        h(EyeOff, { size: 18 }),
+                        " Hide Preview")))),
         h("div", { className: `split-view ${previewCollapsed ? 'split-view-focus' : ''}` },
             h("div", { className: "editor-pane" },
-                h(ClientModal, { show: showClientModal, onClose: () => setShowClientModal(false), onSave: handleClientModalSave, client: modalClient, isEditing: isEditingClient, defaultCountry: profile?.country, businessKey: businessKeyOf(profile) }),
-                cards.order.map((cardId) => {
-                    // Invoice Type
-                    if (cardId === 'type')
-                        return (h(InvoiceCard, { key: "type", id: "type", cards: cards, title: "Document type", summary: cardSummary.type, help: h(HelpButton, { title: "Invoice Type", doc: "invoices#invoice-types", size: 16 }) },
-                            h("div", { className: "invoice-type-row" },
-                                h("div", { className: "invoice-type-field invoice-type-grow" },
-                                    h("label", { className: "form-label", htmlFor: "invoice-type" }, "Type"),
-                                    h("select", { id: "invoice-type", className: "form-input type-select", value: invoiceType, disabled: isIssuedInvoice || readOnlyDoc, title: isIssuedInvoice ? 'The type cannot change once an invoice is saved. Duplicate it to make a different document.' : typeConfig?.description, onChange: (e) => handleTypeChange(e.target.value) }, Object.entries(INVOICE_TYPES).filter(([key]) => typeAllowed(key) || invoiceType === key).map(([key, val]) => (h("option", { key: key, value: key, disabled: absorbLocked(key) }, val.label))))),
-                                h("div", { className: "invoice-type-field" },
-                                    h("span", { className: "form-label" },
-                                        "This invoice is for ",
-                                        h(HelpButton, { title: "Goods, services or both", doc: "invoices#goods-services", size: 16 })),
-                                    h("div", { className: "segmented", role: "group", "aria-label": "This invoice is for" }, [
-                                        { id: 'goods', label: 'Goods', desc: 'Physical products — defaults to Nos / Kg / Pcs units' },
-                                        { id: 'services', label: 'Services', desc: 'Time / work-based — defaults to Hrs and surfaces Session / Visit / Month units' },
-                                        { id: 'mixed', label: 'Mixed', desc: 'Both — full unit list available, no filtering' },
-                                    ].map(opt => {
-                                        const on = (invoiceOptions.invoiceMode || 'goods') === opt.id;
-                                        return (h("button", { key: opt.id, type: "button", "aria-pressed": on, className: `segmented-btn ${on ? 'segmented-btn-active' : ''}`, 
-                                            // v1.10.83 - a service has no unit to print, unless the unit was set by hand.
-                                            onClick: () => setInvoiceOptions(prev => ({ ...prev, invoiceMode: opt.id, ...(prev.showItemUnitManual ? {} : { showItemUnit: opt.id !== 'services' }) })), title: opt.desc }, opt.label));
-                                    })))),
-                            isIssuedInvoice && (h("p", { className: "type-desc", style: { color: 'var(--text-muted)' } },
-                                "Saved as a ",
-                                typeConfig?.label || invoiceType,
-                                ". The type stays fixed so the number series and tax treatment keep matching what the customer already has - use Duplicate to raise a different document.")),
-                            h("p", { className: "type-desc" },
-                                typeConfig?.description,
-                                invoiceOptions.invoiceMode === 'services' && h(Fragment, null,
-                                    " \u00B7 \uD83D\uDCA1 Use a ",
-                                    h("strong", null, "SAC code"),
-                                    " (services accounting code) in the HSN field")),
-                            orderInfo && (h("p", { className: "type-desc", role: "status", style: { color: 'var(--text)' } },
-                                h("strong", null, SO_STATUS_LABELS[orderInfo.status]),
-                                " - ",
-                                orderInfo.dispatched,
-                                " of ",
-                                orderInfo.ordered,
-                                " dispatched, ",
-                                orderInfo.invoiced,
-                                " invoiced",
-                                orderInfo.docs.length > 0 && h(Fragment, null,
-                                    " (",
-                                    orderInfo.docs.map((x) => x.number).join(', '),
-                                    ")"),
-                                ". Make delivery challans or invoices from it on the Dashboard, Sales orders tab.")),
-                            salesOrderOf({ data: { details } }) && invoiceType !== 'sales-order' && (h("p", { className: "type-desc", style: { color: 'var(--text)' } },
-                                "Made from sales order ",
-                                h("strong", null, details.salesOrderNo),
-                                ".")),
-                            h("div", { className: "invoice-customize-row" },
-                                h("button", { className: "btn btn-secondary", type: "button", "aria-expanded": showOptions, "aria-controls": "invoice-options-panel", onClick: () => setShowOptions(v => !v), title: showOptions ? 'Hide the layout and column options' : 'Choose columns, sections, paper size and PDF style' },
-                                    h(Settings, { size: 18 }),
-                                    " ",
-                                    showOptions ? 'Hide Options' : 'Customize invoice'),
-                                !showOptions && h("span", { className: "invoice-customize-hint" }, "Columns, what prints, paper size and PDF style")),
-                            showOptions && (h("div", { className: "invoice-options", id: "invoice-options-panel", style: { scrollMarginTop: 110 } },
-                                h("div", { className: "form-group", style: { marginBottom: '0.75rem' } },
-                                    h("label", { className: "form-label" },
-                                        "Invoice Title ",
-                                        h(HelpButton, { title: "Title, currency and exchange rate", doc: "invoice-options#title-currency", size: 16 })),
-                                    h("input", { type: "text", className: "form-input", value: invoiceOptions.customTitle, onChange: (e) => setInvoiceOptions(prev => ({ ...prev, customTitle: e.target.value })), placeholder: typeConfig?.title || 'TAX INVOICE' })),
-                                h(InvoiceCurrency, { options: invoiceOptions, baseCurrency: baseCurrency, regionMode: getRegionMode(), compact: true, invoiceDate: details.invoiceDate, total: totals.total, onCurrency: setCurrency, onRate: setExchangeRate, disabled: readOnlyDoc }),
-                                (() => {
-                                    const rec = invoiceOptions.recurring;
-                                    const isOn = !!rec?.enabled;
-                                    const toggle = () => {
-                                        if (isOn) {
-                                            setInvoiceOptions(prev => ({ ...prev, recurring: { ...prev.recurring, enabled: false } }));
-                                        }
-                                        else {
-                                            // One month after the invoice date, kept inside the
-                                            // month (31 Jan -> 28 Feb, not 3 Mar) and as a local date.
-                                            const from = parseLocalDate(details.invoiceDate || localToday());
-                                            const next = new Date(from.getFullYear(), from.getMonth() + 1, 1);
-                                            next.setDate(Math.min(from.getDate(), new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate()));
-                                            setInvoiceOptions(prev => ({
-                                                ...prev,
-                                                recurring: {
-                                                    enabled: true,
-                                                    frequency: 'monthly',
-                                                    interval: 1,
-                                                    nextDate: toLocalIsoDate(next),
-                                                    endMode: 'never',
-                                                    endDate: '',
-                                                    maxOccurrences: '',
-                                                },
-                                            }));
-                                        }
-                                    };
-                                    const set = (key, val) => setInvoiceOptions(prev => ({
-                                        ...prev, recurring: { ...prev.recurring, [key]: val },
+                h("div", { className: "glass-panel p-6 mb-6" },
+                    h("div", { className: "flex justify-between items-center" },
+                        h("h3", { className: "section-title", style: { margin: 0 } },
+                            "Invoice Type ",
+                            h(HelpButton, { title: "Invoice Type", doc: "invoices#invoice-types", size: 16 }))),
+                    h("div", { className: "type-selector", style: { marginTop: '0.75rem' } }, Object.entries(INVOICE_TYPES).map(([key, val]) => (h("button", { key: key, type: "button", className: `type-chip ${invoiceType === key ? 'type-chip-active' : ''}`, disabled: isIssuedInvoice && invoiceType !== key, title: isIssuedInvoice ? 'The type cannot change once an invoice is saved. Duplicate it to make a different document.' : val.description, onClick: () => handleTypeChange(key) }, val.label)))),
+                    isIssuedInvoice && (h("p", { className: "type-desc", style: { color: 'var(--text-muted)' } },
+                        "Saved as a ",
+                        typeConfig?.label || invoiceType,
+                        ". The type stays fixed so the number series and tax treatment keep matching what the customer already has - use Duplicate to raise a different document.")),
+                    h("p", { className: "type-desc" }, typeConfig?.description),
+                    h("div", { style: { display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem', flexWrap: 'wrap' } },
+                        h("span", { style: { fontSize: '0.78rem', color: 'var(--text-muted)', marginRight: '0.25rem' } },
+                            "This invoice is for: ",
+                            h(HelpButton, { title: "Goods, services or both", doc: "invoices#goods-services", size: 16 })),
+                        [
+                            { id: 'goods', label: '📦 Goods', desc: 'Physical products — defaults to Nos / Kg / Pcs units' },
+                            { id: 'services', label: '⏱ Services', desc: 'Time / work-based — defaults to Hrs and surfaces Session / Visit / Month units' },
+                            { id: 'mixed', label: '🔀 Mixed', desc: 'Both — full unit list available, no filtering' },
+                        ].map(opt => (h("button", {
+                            key: opt.id, type: "button", className: `type-chip ${(invoiceOptions.invoiceMode || 'goods') === opt.id ? 'type-chip-active' : ''}`,
+                            // v1.10.83 - a service has no unit to print, unless the unit was set by hand.
+                            onClick: () => setInvoiceOptions(prev => ({ ...prev, invoiceMode: opt.id, ...(prev.showItemUnitManual ? {} : { showItemUnit: opt.id !== 'services' }) })), title: opt.desc, style: { fontSize: '0.78rem', padding: '0.3rem 0.6rem' }
+                        }, opt.label))),
+                        invoiceOptions.invoiceMode === 'services' && (h("span", { style: { fontSize: '0.7rem', color: 'var(--text-muted)', marginLeft: 'auto' } },
+                            "\uD83D\uDCA1 Use a ",
+                            h("strong", null, "SAC code"),
+                            " (services accounting code) in the HSN field"))),
+                    showOptions && (h("div", { className: "invoice-options", id: "invoice-options-panel", style: { scrollMarginTop: 110 } },
+                        h("div", { className: "form-group", style: { marginBottom: '0.75rem' } },
+                            h("label", { className: "form-label" },
+                                "Invoice Title ",
+                                h(HelpButton, { title: "Title, currency and exchange rate", doc: "invoice-options#title-currency", size: 16 })),
+                            h("input", { type: "text", className: "form-input", value: invoiceOptions.customTitle, onChange: (e) => setInvoiceOptions(prev => ({ ...prev, customTitle: e.target.value })), placeholder: typeConfig?.title || 'TAX INVOICE' })),
+                        h(InvoiceCurrency, { options: invoiceOptions, baseCurrency: baseCurrency, regionMode: getRegionMode(), compact: true, invoiceDate: details.invoiceDate, total: totals.total, onCurrency: setCurrency, onRate: setExchangeRate, disabled: readOnlyDoc }),
+                        (() => {
+                            const rec = invoiceOptions.recurring;
+                            const isOn = !!rec?.enabled;
+                            const toggle = () => {
+                                if (isOn) {
+                                    setInvoiceOptions(prev => ({ ...prev, recurring: { ...prev.recurring, enabled: false } }));
+                                }
+                                else {
+                                    // One month after the invoice date, kept inside the
+                                    // month (31 Jan -> 28 Feb, not 3 Mar) and as a local date.
+                                    const from = parseLocalDate(details.invoiceDate || localToday());
+                                    const next = new Date(from.getFullYear(), from.getMonth() + 1, 1);
+                                    next.setDate(Math.min(from.getDate(), new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate()));
+                                    setInvoiceOptions(prev => ({
+                                        ...prev,
+                                        recurring: {
+                                            enabled: true,
+                                            frequency: 'monthly',
+                                            interval: 1,
+                                            nextDate: toLocalIsoDate(next),
+                                            endMode: 'never',
+                                            endDate: '',
+                                            maxOccurrences: '',
+                                        },
                                     }));
-                                    return (h("div", { className: `form-group${isOn ? ' notice notice-info' : ''}`, style: { marginBottom: '0.75rem', padding: '0.6rem', borderRadius: '6px', display: 'block' } },
-                                        h("label", { style: { display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', fontSize: '0.82rem', cursor: 'pointer' } },
-                                            h("input", { type: "checkbox", checked: isOn, onChange: toggle, style: { width: 16, height: 16, accentColor: 'var(--primary)' } }),
-                                            h("strong", null, "\uD83D\uDD01 Make this a recurring invoice"),
-                                            h(HelpButton, { title: "Recurring invoice", doc: "invoice-options#recurring", size: 16 }),
-                                            h("span", { style: { fontSize: '0.7rem', color: 'var(--text-muted)' } }, "(auto-generate a new invoice on schedule, same items, new number)")),
-                                        isOn && (h("div", { style: { marginTop: '0.6rem', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' } },
-                                            h("div", { className: "form-group", style: { margin: 0 } },
-                                                h("label", { className: "form-label" }, "Frequency"),
-                                                h("select", { className: "form-input", value: rec.frequency, onChange: e => set('frequency', e.target.value) },
-                                                    h("option", { value: "weekly" }, "Weekly"),
-                                                    h("option", { value: "monthly" }, "Monthly"),
-                                                    h("option", { value: "quarterly" }, "Quarterly"),
-                                                    h("option", { value: "yearly" }, "Yearly"))),
-                                            h("div", { className: "form-group", style: { margin: 0 } },
-                                                h("label", { className: "form-label" }, "Every N (interval)"),
-                                                h("input", { type: "number", min: "1", max: "12", className: "form-input", value: rec.interval || 1, onChange: e => set('interval', parseInt(e.target.value) || 1) })),
-                                            h("div", { className: "form-group", style: { margin: 0 } },
-                                                h("label", { className: "form-label" }, "Next invoice date"),
-                                                h("input", { type: "date", className: "form-input", value: rec.nextDate || '', onChange: e => set('nextDate', e.target.value) })),
-                                            h("div", { className: "form-group", style: { margin: 0 } },
-                                                h("label", { className: "form-label" }, "End condition"),
-                                                h("select", { className: "form-input", value: rec.endMode || 'never', onChange: e => set('endMode', e.target.value) },
-                                                    h("option", { value: "never" }, "Never (until I stop it)"),
-                                                    h("option", { value: "onDate" }, "On a specific date"),
-                                                    h("option", { value: "afterN" }, "After N invoices"))),
-                                            rec.endMode === 'onDate' && (h("div", { className: "form-group", style: { margin: 0, gridColumn: 'span 2' } },
-                                                h("label", { className: "form-label" }, "Stop generating after this date"),
-                                                h("input", { type: "date", className: "form-input", value: rec.endDate || '', onChange: e => set('endDate', e.target.value) }))),
-                                            rec.endMode === 'afterN' && (h("div", { className: "form-group", style: { margin: 0, gridColumn: 'span 2' } },
-                                                h("label", { className: "form-label" }, "Stop after this many invoices have been generated"),
-                                                h("input", { type: "number", min: "1", className: "form-input", value: rec.maxOccurrences || '', onChange: e => set('maxOccurrences', parseInt(e.target.value) || ''), placeholder: "e.g. 12 for a 1-year monthly contract" }))),
-                                            h("div", { style: { gridColumn: 'span 2', fontSize: '0.7rem', color: 'var(--text-muted)', lineHeight: 1.5 } },
-                                                "Auto-generation fires every time you open the app (or daily if it stays running). Future invoices get fresh sequential numbers, today's date as their invoice date, and the same client + items + amounts as this one. Edit or pause the template any time via ",
-                                                h("strong", null, "Recurring"),
-                                                " in the sidebar.")))));
-                                })(),
-                                (profile?.country || 'India') === 'India' && (tdsTcsOn || invoiceOptions.showTCS) && (h("div", { className: `form-group${invoiceOptions.showTCS ? ' notice notice-warn' : ''}`, style: { marginBottom: '0.75rem', padding: '0.6rem', borderRadius: '6px', display: 'block' } },
-                                    h("label", { style: { display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', fontSize: '0.82rem', cursor: 'pointer' } },
-                                        h("input", { type: "checkbox", checked: !!invoiceOptions.showTCS, onChange: () => setInvoiceOptions(prev => {
-                                                // Turning TCS on for an invoice whose remembered section can no
-                                                // longer be chosen (206C(1H)) starts from the first current one.
-                                                const turningOn = !prev.showTCS;
-                                                const valid = tcsList.some(s => s.code === prev.tcsSection);
-                                                return turningOn && !valid
-                                                    ? { ...prev, showTCS: true, tcsSection: tcsList[0].code, tcsRate: tcsList[0].rate }
-                                                    : { ...prev, showTCS: turningOn };
-                                            }), style: { width: 16, height: 16, accentColor: 'var(--primary)' } }),
-                                        h("strong", null, "TCS \u2014 Tax Collected at Source"),
-                                        h(HelpButton, { title: "TCS", doc: "invoices#tcs", size: 16 }),
-                                        h("span", { style: { fontSize: '0.7rem', color: '#94a3b8' } }, "(Adds to invoice total)")),
-                                    invoiceOptions.showTCS && (h("div", { style: { display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '0.5rem', marginTop: '0.5rem' } },
-                                        h("select", { className: "form-input", value: invoiceOptions.tcsSection || tcsList[0].code, onChange: (e) => {
-                                                const code = e.target.value;
-                                                const section = tcsList.find(s => s.code === code);
-                                                setInvoiceOptions(prev => ({ ...prev, tcsSection: code, tcsRate: code === 'custom' ? prev.tcsRate : section?.rate ?? prev.tcsRate }));
-                                            } },
-                                            invoiceOptions.tcsSection && !tcsList.some(s => s.code === invoiceOptions.tcsSection) && (h("option", { value: invoiceOptions.tcsSection, disabled: true }, sectionOptionLabel(invoiceOptions.tcsSection))),
-                                            tcsList.map(s => h("option", { key: s.code, value: s.code }, s.label))),
-                                        h("input", { type: "number", step: "any", min: "0", max: "100", className: "form-input", value: invoiceOptions.tcsRate, onChange: (e) => setInvoiceOptions(prev => ({ ...prev, tcsRate: e.target.value })), placeholder: "Rate %" }))))),
-                                (profile?.country || 'India') === 'India' && (tdsTcsOn || invoiceOptions.showTDS) && (h("div", { className: `form-group${invoiceOptions.showTDS ? ' notice notice-info' : ''}`, style: { marginBottom: '0.75rem', padding: '0.6rem', borderRadius: '6px', display: 'block' } },
-                                    h("label", { style: { display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', fontSize: '0.82rem', cursor: 'pointer' } },
-                                        h("input", { type: "checkbox", checked: !!invoiceOptions.showTDS, onChange: () => setInvoiceOptions(prev => ({ ...prev, showTDS: !prev.showTDS })), style: { width: 16, height: 16, accentColor: 'var(--primary)' } }),
-                                        h("strong", null, "TDS \u2014 Tax Deducted at Source"),
-                                        h(HelpButton, { title: "TDS", doc: "invoices#tds", size: 16 }),
-                                        h("span", { style: { fontSize: '0.7rem', color: '#94a3b8' } }, "(Buyer deducts; informational)")),
-                                    invoiceOptions.showTDS && (h("div", { style: { display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '0.5rem', marginTop: '0.5rem' } },
-                                        h("select", { className: "form-input", value: invoiceOptions.tdsSection || tdsList[0].code, onChange: (e) => {
-                                                const code = e.target.value;
-                                                const section = tdsList.find(s => s.code === code);
-                                                setInvoiceOptions(prev => ({ ...prev, tdsSection: code, tdsRate: code === 'custom' ? prev.tdsRate : section?.rate ?? prev.tdsRate }));
-                                            } },
-                                            invoiceOptions.tdsSection && !tdsList.some(s => s.code === invoiceOptions.tdsSection) && (h("option", { value: invoiceOptions.tdsSection, disabled: true }, sectionOptionLabel(invoiceOptions.tdsSection))),
-                                            tdsList.map(s => h("option", { key: s.code, value: s.code }, s.label))),
-                                        h("input", { type: "number", step: "any", min: "0", max: "100", className: "form-input", value: invoiceOptions.tdsRate, onChange: (e) => setInvoiceOptions(prev => ({ ...prev, tdsRate: e.target.value })), placeholder: "Rate %" }))))),
-                                (() => {
-                                    const accounts = getActiveAccounts(profile);
-                                    if (accounts.length === 0)
-                                        return null;
-                                    const resolved = getAccountById(profile, invoiceOptions.selectedAccountId);
-                                    return (h("div", { className: "form-group", style: { marginBottom: '0.75rem' } },
-                                        h("div", { className: "label-with-toggle" },
-                                            h("label", { className: "form-label" },
-                                                "Payment account on this invoice ",
-                                                h(HelpButton, { title: "Payment account on this invoice", doc: "invoice-options#payment-account", size: 16 })),
-                                            h("span", null,
-                                                h(PrintToggle, { optKey: "showBankDetails", label: "Bank details", options: invoiceOptions, setOptions: setInvoiceOptions, disabled: readOnlyDoc }),
-                                                h(PrintToggle, { optKey: "showUPI", label: "UPI QR", options: invoiceOptions, setOptions: setInvoiceOptions, disabled: readOnlyDoc }))),
-                                        h("select", { className: "form-input", value: resolved?.id || '', onChange: (e) => {
-                                                // v1.10.21 — reported: "working but on select it is not
-                                                // changing have to save and reopen it". Cause: the
-                                                // preview reads options.paymentAccountSnapshot first
-                                                // (bank frozen at the last save). Picking a new
-                                                // account from the dropdown only updated
-                                                // selectedAccountId, so the preview kept showing the
-                                                // old snapshot until save+reopen re-snapshotted. Fix:
-                                                // resnap immediately from the LIVE profile when the
-                                                // user picks a different account so the preview
-                                                // reflects the new bank without a round trip.
-                                                const newId = e.target.value || null;
-                                                const newSnap = newId ? getAccountById(profile, newId) : null;
-                                                setInvoiceOptions(prev => ({ ...prev, selectedAccountId: newId, paymentAccountSnapshot: newSnap }));
-                                            } }, accounts.map(a => (h("option", { key: a.id, value: a.id },
-                                            a.isDefault ? '⭐ ' : '',
-                                            a.label || a.bankName || 'Untitled account',
-                                            a.bankName && a.label !== a.bankName ? ` — ${a.bankName}` : '')))),
-                                        h("small", { style: { color: 'var(--text-muted)', fontSize: '0.7rem' } }, "Bank details and UPI QR on the PDF come from the selected account. Manage accounts in Settings \u2192 Payment Accounts.")));
-                                })(),
-                                h("div", { className: "form-group", style: { marginBottom: '0.75rem' } },
-                                    h("label", { className: "form-label" },
-                                        "PDF Style ",
-                                        h(HelpButton, { title: "PDF Style", doc: "invoice-options#style", size: 16 })),
-                                    h("div", { style: { display: 'flex', gap: '0.5rem', flexWrap: 'wrap' } }, PDF_STYLES.map(s => (h("button", { key: s.id, type: "button", className: `type-chip ${(invoiceOptions.pdfStyle || 'classic') === s.id ? 'type-chip-active' : ''}`, onClick: () => setInvoiceOptions(prev => ({ ...prev, pdfStyle: s.id })), title: s.desc }, s.label))))),
-                                h("div", { className: "form-group", style: { marginBottom: '0.75rem' } },
-                                    h("label", { className: "form-label" },
-                                        "Accent Color ",
-                                        h(HelpButton, { title: "Accent Color", doc: "invoice-options#accent-colour", size: 16 })),
-                                    h("div", { style: { display: 'flex', gap: '0.4rem', flexWrap: 'wrap', alignItems: 'center' } },
-                                        h("button", { type: "button", title: "Auto (match invoice type)", style: { width: '28px', height: '28px', borderRadius: '50%', border: !invoiceOptions.accentColor ? '2.5px solid #334155' : '2px solid #cbd5e1', background: 'conic-gradient(#1e40af, #7c3aed, #0f766e, #be123c, #1e40af)', cursor: 'pointer', position: 'relative' }, onClick: () => setInvoiceOptions(prev => ({ ...prev, accentColor: '' })) }, !invoiceOptions.accentColor && h("span", { style: { position: 'absolute', inset: '3px', borderRadius: '50%', border: '2px solid white' } })),
-                                        ACCENT_PRESETS.map(p => (h("button", { key: p.color, type: "button", title: p.label, style: { width: '28px', height: '28px', borderRadius: '50%', backgroundColor: p.color, border: invoiceOptions.accentColor === p.color ? '2.5px solid #334155' : '2px solid #cbd5e1', cursor: 'pointer', position: 'relative' }, onClick: () => setInvoiceOptions(prev => ({ ...prev, accentColor: p.color })) }, invoiceOptions.accentColor === p.color && h("span", { style: { position: 'absolute', inset: '3px', borderRadius: '50%', border: '2px solid white' } })))))),
-                                [
-                                    { group: 'Header & branding', items: [
-                                            ['showLogo', 'Logo'],
-                                            ['showBusinessName', 'Business name'],
-                                            ['showBusinessAddress', 'Business address'],
-                                            ['showBusinessPhone', 'Business phone'],
-                                            ['showBusinessEmail', 'Business email'],
-                                            ['showState', 'Business state'],
-                                            ['showGSTIN', 'Tax ID (GSTIN/VAT/etc.)'],
-                                        ] },
-                                    { group: 'Client / Bill-to', items: [
-                                            ['showClientAddress', 'Client address'],
-                                            ['showClientPhone', 'Client phone'],
-                                            ['showClientEmail', 'Client email'],
-                                            ['showPlaceOfSupply', 'Place of Supply'],
-                                        ] },
-                                    { group: 'Invoice meta', items: [
-                                            ['showInvoiceNumber', 'Invoice number'],
-                                            ['showInvoiceDate', 'Invoice date'],
-                                            ['showDueDate', 'Due date'],
-                                        ] },
-                                    // v1.10.84 (#152, #138) - showGST was labelled "Tax % column" but
-                                    // has always switched GST off for the whole invoice. It gets
-                                    // its own group and a name that says so; hiding the columns
-                                    // alone is showTaxColumns below.
-                                    { group: 'Tax', items: [
-                                            ['showGST', 'Charge GST on this invoice (GST/VAT/etc.) - untick for no tax at all'],
-                                        ] },
-                                    { group: 'Items table', items: [
-                                            ['showHSN', 'HSN/SAC column'],
-                                            ['showItemQty', 'Qty column'],
-                                            // v1.10.33 — Renamed from "Unit column" to match
-                                            // reality: InvoicePreview renders the unit INSIDE the
-                                            // Qty cell ("5 Nos", not a separate column). Prior
-                                            // label misled users into unticking Qty and expecting
-                                            // Unit to survive as its own column — it just vanished
-                                            // instead. Label now describes what actually happens.
-                                            // v1.10.83 - off by itself in Services mode (see the mode chips).
-                                            ['showItemUnit', 'Unit (Hrs, Nos...) next to Qty'],
-                                            // v1.10.86 - (#189, #192) information only: never changes the rate or totals.
-                                            ['showMRP', 'MRP column (printed price; does not change the bill)'],
-                                            ['showRateColumn', 'Rate column'],
-                                            ['showDiscount', 'Discount column'],
-                                            ['showTaxColumns', 'Tax % columns (rate and tax on each line; GST is still charged)'],
-                                            ['showCess', 'GST Cess % column (India — tobacco/auto/coal)'],
-                                        ] },
-                                    { group: 'Totals', items: [
-                                            ['showSubtotal', 'Subtotal row'],
-                                            ['showAmountWords', 'Amount in words'],
-                                            ['showRoundOff', 'Round-off line'],
-                                            ['showHsnSummary', 'HSN/SAC tax summary table'],
-                                            ['showTaxInWords', 'Tax amount in words'],
-                                        ] },
-                                    { group: 'Compliance flags (India)', items: [
-                                            ['reverseCharge', 'Reverse Charge applies (Section 9(3)/9(4)) — recipient pays GST'],
-                                        ] },
-                                    // Paper-size selector rendered outside the checkbox-grid pattern
-                                    // — see the block below the .map(). Adding a group marker here
-                                    // keeps the visual flow but the actual UI is a dropdown.
-                                    { group: '__PAPER_SIZE__', items: [] },
-                                    { group: 'Footer', items: [
-                                            ['showBankDetails', 'Bank details'],
-                                            ['showAccountLabel', 'Show "Pay via: <account>" label above bank block'],
-                                            // v1.10.74 - the QR needs a rupee invoice with a UPI ID, not an Indian business.
-                                            ['showUPI', 'UPI QR (rupee invoices)'],
-                                            ['showSignature', 'Signature block'],
-                                            ['showSignatoryText', 'Show "Authorized Signatory" caption'],
-                                            ['showTerms', 'Terms & Conditions'],
-                                            ['showNotes', 'Notes / Remarks'],
-                                            // v1.10.84 - GST rules want it on export / SEZ invoices: hide only if it is in your terms.
-                                            ['showExportDeclaration', 'Export / LUT declaration (exports and SEZ; GST rules want it on the invoice)'],
-                                            ['showSystemGeneratedNote', 'Note: system-generated invoice, no signature or stamp required'],
-                                            ['showDeclaration', 'Declaration'],
-                                            ['showCustomerSeal', "\"Customer's Seal and Signature\" box (Boxed grid / Tally style)"],
-                                        ] },
-                                ].map(section => {
-                                    if (section.group === '__PAPER_SIZE__') {
-                                        return (h("div", { key: "paper-size", style: { marginBottom: '0.6rem' } },
-                                            h("div", { style: { fontSize: '0.7rem', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.3rem' } },
-                                                "Paper / print size ",
-                                                h(HelpButton, { title: "Paper size", doc: "invoice-options#paper-size", size: 16 })),
-                                            h("select", { className: "form-input", style: { fontSize: '0.85rem' }, value: invoiceOptions.paperSize || 'a4', onChange: e => setInvoiceOptions(prev => ({ ...prev, paperSize: e.target.value })) }, Object.entries(PAPER_SIZES).map(([key, ps]) => (h("option", { key: key, value: key }, ps.label)))),
-                                            h("p", { style: { fontSize: '0.72rem', color: 'var(--text-muted)', margin: '0.3rem 0 0' } }, getPaperSize(invoiceOptions.paperSize, invoiceOptions).hint),
-                                            invoiceOptions.paperSize === 'custom' && (h("div", { style: { marginTop: '0.5rem', padding: '0.55rem 0.65rem', background: 'var(--bg-secondary)', borderRadius: 6, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' } },
-                                                h("div", null,
-                                                    h("label", { style: { fontSize: '0.72rem', fontWeight: 600, display: 'block', marginBottom: 3 } }, "Width (mm)"),
-                                                    h("input", { type: "number", min: "30", max: "500", step: "1", value: invoiceOptions.customPaperWidth || 80, onChange: e => setInvoiceOptions(prev => ({ ...prev, customPaperWidth: parseInt(e.target.value, 10) || 80 })), className: "form-input", style: { fontSize: '0.8rem', padding: '0.35rem' } })),
-                                                h("div", null,
-                                                    h("label", { style: { fontSize: '0.72rem', fontWeight: 600, display: 'block', marginBottom: 3 } }, "Height (mm)"),
-                                                    h("input", { type: "number", min: "50", max: "1200", step: "1", value: invoiceOptions.customPaperHeight || 297, onChange: e => setInvoiceOptions(prev => ({ ...prev, customPaperHeight: parseInt(e.target.value, 10) || 297 })), className: "form-input", style: { fontSize: '0.8rem', padding: '0.35rem' } })),
-                                                h("p", { style: { fontSize: '0.7rem', color: 'var(--text-muted)', gridColumn: 'span 2', margin: 0 } },
-                                                    "Tip: enter your printer's ",
-                                                    h("strong", null, "printable"),
-                                                    " width, not the roll width. Most 58mm thermals print at 48mm; 80mm print at 72mm. ",
-                                                    h("strong", null, "Below 100mm width auto-switches to thermal receipt layout"),
-                                                    " \u2014 same rendering as the 58/80mm presets, just at your exact size."),
-                                                h("div", { style: { gridColumn: 'span 2', display: 'flex', gap: '0.35rem', flexWrap: 'wrap', marginTop: 4 } },
-                                                    h("span", { style: { fontSize: '0.7rem', color: 'var(--text-muted)', alignSelf: 'center' } }, "Quick-pick:"),
-                                                    [
-                                                        { label: '40mm', w: 32 },
-                                                        { label: '76mm', w: 68 },
-                                                        { label: '90mm', w: 80 },
-                                                        { label: '110mm', w: 102 },
-                                                    ].map(p => (h("button", { type: "button", key: p.label, onClick: () => setInvoiceOptions(prev => ({ ...prev, customPaperWidth: p.w, customPaperHeight: 297 })), className: "btn btn-secondary", style: { fontSize: '0.7rem', padding: '0.15rem 0.5rem' }, title: `Set to ${p.label} roll (${p.w}mm printable × auto height)` }, p.label)))))),
-                                            getPaperSize(invoiceOptions.paperSize, invoiceOptions).kind === 'thermal' && (h("div", { style: { marginTop: '0.6rem', padding: '0.6rem', background: 'var(--bg-secondary)', borderRadius: 6 } },
-                                                h("div", { style: { fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.4rem' } },
-                                                    "Thermal printer settings ",
-                                                    h(HelpButton, { title: "Thermal printer settings", doc: "invoice-options#thermal-options", size: 16 })),
-                                                h("label", { style: { display: 'block', fontSize: '0.78rem', marginBottom: '0.35rem' } },
-                                                    h("span", { style: { fontWeight: 600 } }, "Font size"),
-                                                    h("select", { className: "form-input", style: { fontSize: '0.78rem', marginTop: 2 }, value: invoiceOptions.thermalFontSize || 'medium', onChange: e => setInvoiceOptions(prev => ({ ...prev, thermalFontSize: e.target.value })) },
-                                                        h("option", { value: "small" }, "Small (fits more per page)"),
-                                                        h("option", { value: "medium" }, "Medium (recommended)"),
-                                                        h("option", { value: "large" }, "Large (easier to read)"))),
-                                                h("label", { style: { display: 'flex', alignItems: 'flex-start', gap: '0.4rem', fontSize: '0.78rem', marginTop: '0.5rem', cursor: 'pointer' } },
-                                                    h("input", { type: "checkbox", checked: !!invoiceOptions.thermalCompact, onChange: e => setInvoiceOptions(prev => ({ ...prev, thermalCompact: e.target.checked })), style: { marginTop: 2, accentColor: 'var(--primary)' } }),
-                                                    h("span", null,
-                                                        h("strong", null, "Compact mode"),
-                                                        h("span", { style: { display: 'block', fontSize: '0.7rem', color: 'var(--text-muted)' } }, "Tighter item rows, to save paper on long orders. Whether HSN and the quantity \u00D7 rate line print is set in Print Settings."))),
-                                                h("label", { style: { display: 'flex', alignItems: 'flex-start', gap: '0.4rem', fontSize: '0.78rem', marginTop: '0.4rem', cursor: 'pointer' } },
-                                                    h("input", { type: "checkbox", checked: invoiceOptions.thermalCutMark !== false, onChange: e => setInvoiceOptions(prev => ({ ...prev, thermalCutMark: e.target.checked })), style: { marginTop: 2, accentColor: 'var(--primary)' } }),
-                                                    h("span", null,
-                                                        h("strong", null, "Cut mark at bottom"),
-                                                        h("span", { style: { display: 'block', fontSize: '0.7rem', color: 'var(--text-muted)' } }, "Prints a CUT HERE line to tear against. Turn it off if your printer cuts the paper itself.")))))));
-                                    }
-                                    return (h("div", { key: section.group, style: { marginBottom: '0.6rem' } },
-                                        h("div", { style: { fontSize: '0.7rem', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.3rem' } },
-                                            section.group,
-                                            " ",
-                                            h(HelpButton, { title: section.group, doc: OPTION_GROUP_HELP[section.group], size: 16 })),
-                                        h("div", { className: "options-grid" }, section.items.map(([key, label]) => {
-                                            // These default to OFF; everything else defaults to ON.
-                                            // v1.10.70 - showSystemGeneratedNote added: without it the box
-                                            // showed ticked while the invoice printed no note.
-                                            const checked = invoiceOptionOn(invoiceOptions, key);
-                                            return (h("label", { key: key, className: "option-toggle" },
-                                                h("input", { type: "checkbox", checked: checked, onChange: () => toggleOption(key) }),
-                                                h("span", null, label)));
-                                        }))));
+                                }
+                            };
+                            const set = (key, val) => setInvoiceOptions(prev => ({
+                                ...prev, recurring: { ...prev.recurring, [key]: val },
+                            }));
+                            return (h("div", { className: `form-group${isOn ? ' notice notice-info' : ''}`, style: { marginBottom: '0.75rem', padding: '0.6rem', borderRadius: '6px', display: 'block' } },
+                                h("label", { style: { display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', fontSize: '0.82rem', cursor: 'pointer' } },
+                                    h("input", { type: "checkbox", checked: isOn, onChange: toggle, style: { width: 16, height: 16, accentColor: 'var(--primary)' } }),
+                                    h("strong", null, "\uD83D\uDD01 Make this a recurring invoice"),
+                                    h(HelpButton, { title: "Recurring invoice", doc: "invoice-options#recurring", size: 16 }),
+                                    h("span", { style: { fontSize: '0.7rem', color: 'var(--text-muted)' } }, "(auto-generate a new invoice on schedule, same items, new number)")),
+                                isOn && (h("div", { style: { marginTop: '0.6rem', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' } },
+                                    h("div", { className: "form-group", style: { margin: 0 } },
+                                        h("label", { className: "form-label" }, "Frequency"),
+                                        h("select", { className: "form-input", value: rec.frequency, onChange: e => set('frequency', e.target.value) },
+                                            h("option", { value: "weekly" }, "Weekly"),
+                                            h("option", { value: "monthly" }, "Monthly"),
+                                            h("option", { value: "quarterly" }, "Quarterly"),
+                                            h("option", { value: "yearly" }, "Yearly"))),
+                                    h("div", { className: "form-group", style: { margin: 0 } },
+                                        h("label", { className: "form-label" }, "Every N (interval)"),
+                                        h("input", { type: "number", min: "1", max: "12", className: "form-input", value: rec.interval || 1, onChange: e => set('interval', parseInt(e.target.value) || 1) })),
+                                    h("div", { className: "form-group", style: { margin: 0 } },
+                                        h("label", { className: "form-label" }, "Next invoice date"),
+                                        h("input", { type: "date", className: "form-input", value: rec.nextDate || '', onChange: e => set('nextDate', e.target.value) })),
+                                    h("div", { className: "form-group", style: { margin: 0 } },
+                                        h("label", { className: "form-label" }, "End condition"),
+                                        h("select", { className: "form-input", value: rec.endMode || 'never', onChange: e => set('endMode', e.target.value) },
+                                            h("option", { value: "never" }, "Never (until I stop it)"),
+                                            h("option", { value: "onDate" }, "On a specific date"),
+                                            h("option", { value: "afterN" }, "After N invoices"))),
+                                    rec.endMode === 'onDate' && (h("div", { className: "form-group", style: { margin: 0, gridColumn: 'span 2' } },
+                                        h("label", { className: "form-label" }, "Stop generating after this date"),
+                                        h("input", { type: "date", className: "form-input", value: rec.endDate || '', onChange: e => set('endDate', e.target.value) }))),
+                                    rec.endMode === 'afterN' && (h("div", { className: "form-group", style: { margin: 0, gridColumn: 'span 2' } },
+                                        h("label", { className: "form-label" }, "Stop after this many invoices have been generated"),
+                                        h("input", { type: "number", min: "1", className: "form-input", value: rec.maxOccurrences || '', onChange: e => set('maxOccurrences', parseInt(e.target.value) || ''), placeholder: "e.g. 12 for a 1-year monthly contract" }))),
+                                    h("div", { style: { gridColumn: 'span 2', fontSize: '0.7rem', color: 'var(--text-muted)', lineHeight: 1.5 } },
+                                        "Auto-generation fires every time you open the app (or daily if it stays running). Future invoices get fresh sequential numbers, today's date as their invoice date, and the same client + items + amounts as this one. Edit or pause the template any time via ",
+                                        h("strong", null, "Recurring"),
+                                        " in the sidebar.")))));
+                        })(),
+                        (profile?.country || 'India') === 'India' && (tdsTcsOn || invoiceOptions.showTCS) && (h("div", { className: `form-group${invoiceOptions.showTCS ? ' notice notice-warn' : ''}`, style: { marginBottom: '0.75rem', padding: '0.6rem', borderRadius: '6px', display: 'block' } },
+                            h("label", { style: { display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', fontSize: '0.82rem', cursor: 'pointer' } },
+                                h("input", {
+                                    type: "checkbox", checked: !!invoiceOptions.showTCS, onChange: () => setInvoiceOptions(prev => {
+                                        // Turning TCS on for an invoice whose remembered section can no
+                                        // longer be chosen (206C(1H)) starts from the first current one.
+                                        const turningOn = !prev.showTCS;
+                                        const valid = TCS_SECTIONS.some(s => s.code === prev.tcsSection);
+                                        return turningOn && !valid
+                                            ? { ...prev, showTCS: true, tcsSection: TCS_SECTIONS[0].code, tcsRate: TCS_SECTIONS[0].rate }
+                                            : { ...prev, showTCS: turningOn };
+                                    }), style: { width: 16, height: 16, accentColor: 'var(--primary)' }
                                 }),
-                                invoiceOptionOn(invoiceOptions, 'showDeclaration') && (h("div", { className: "form-group", style: { marginTop: '0.4rem' } },
-                                    h("label", { className: "form-label", style: { fontSize: '0.78rem' } }, "Declaration text"),
-                                    h("textarea", { className: "form-input", rows: 2, value: invoiceOptions.declarationText ?? DEFAULT_DECLARATION, onChange: e => setInvoiceOptions(prev => ({ ...prev, declarationText: e.target.value })) }))),
-                                h("div", { style: { display: 'flex', gap: '0.5rem', marginTop: '0.4rem' } },
-                                    h("button", { type: "button", className: "btn btn-secondary", onClick: () => {
-                                            // v1.10.84 - display only: Charge GST (showGST) and the round-off
-                                            // line change the money, so Hide all leaves them alone.
-                                            const allKeys = ['showLogo', 'showBusinessName', 'showBusinessAddress', 'showBusinessPhone', 'showBusinessEmail', 'showState', 'showGSTIN', 'showClientAddress', 'showClientPhone', 'showClientEmail', 'showPlaceOfSupply', 'showInvoiceNumber', 'showInvoiceDate', 'showDueDate', 'showHSN', 'showItemQty', 'showItemUnit', 'showRateColumn', 'showDiscount', 'showTaxColumns', 'showSubtotal', 'showAmountWords', 'showBankDetails', 'showAccountLabel', 'showUPI', 'showSignature', 'showSignatoryText', 'showTerms', 'showNotes', 'showExportDeclaration'];
-                                            setInvoiceOptions(prev => { const out = { ...prev }; allKeys.forEach(k => { out[k] = false; }); return out; });
-                                        }, style: { fontSize: '0.72rem', padding: '0.3rem 0.6rem' } }, "Hide all"),
-                                    h("button", { type: "button", className: "btn btn-secondary", onClick: () => setInvoiceOptions(prev => ({
-                                            ...DEFAULT_OPTIONS,
-                                            // v1.10.33 — Preserve per-bill data that lives inside
-                                            // invoiceOptions but is NOT a "display option" the
-                                            // reset button should touch. Prior code was a raw
-                                            // setInvoiceOptions(DEFAULT_OPTIONS) which nulled
-                                            // paymentAccountSnapshot (bank details frozen at save
-                                            // time, v1.10.20 invariant) and selectedAccountId
-                                            // (the account picked for THIS bill) — so an edit-
-                                            // then-reset silently repointed the bank block to the
-                                            // legacy profile bank.
-                                            paymentAccountSnapshot: prev.paymentAccountSnapshot,
-                                            selectedAccountId: prev.selectedAccountId,
-                                        })), style: { fontSize: '0.72rem', padding: '0.3rem 0.6rem' } }, "Reset to default"))))));
-                    // Client Details
-                    if (cardId === 'client')
-                        return (h(InvoiceCard, { key: "client", id: "client", cards: cards, title: "Billed To", summary: cardSummary.client, help: h(HelpButton, { title: "Billed To", doc: "invoices#billed-to", size: 16 }) },
-                            !editingBill && clientCredit.available > 0.005 && (h("div", { style: {
-                                    marginBottom: '1rem', padding: '0.75rem 1rem',
-                                    background: 'rgba(3, 105, 161, 0.08)',
-                                    border: '1px solid rgba(3, 105, 161, 0.3)',
-                                    borderRadius: 8, fontSize: '0.85rem',
-                                } },
-                                h("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' } },
-                                    h("div", null,
-                                        h("strong", { style: { color: '#0369a1' } },
-                                            "\uD83D\uDCB3 Client has ",
-                                            formatCurrency(clientCredit.available, invoiceOptions.currency || 'INR'),
-                                            " credit"),
-                                        h(HelpButton, { title: "Using a client's credit", doc: "invoices#client-credit", size: 16 }),
-                                        h("span", { style: { color: 'var(--text-muted)', marginLeft: 8 } },
-                                            "from ",
-                                            clientCredit.sources.length,
-                                            " prior overpayment",
-                                            clientCredit.sources.length > 1 ? 's' : '',
-                                            ' ',
-                                            "(",
-                                            clientCredit.sources.map(s => s.invoiceNumber).slice(0, 3).join(', '),
-                                            clientCredit.sources.length > 3 ? '…' : '',
-                                            ")")),
-                                    h("div", { style: { display: 'flex', gap: '0.4rem', alignItems: 'center' } },
-                                        h("input", { type: "number", min: "0", step: "any", className: "form-input", value: creditToApply || '', placeholder: "0", onChange: e => {
-                                                const v = Math.max(0, Number(e.target.value) || 0);
-                                                const cap = Math.min(clientCredit.available, Number(totals.total) || Infinity);
-                                                setCreditToApply(Math.min(v, cap));
-                                            }, style: { width: 100, fontSize: '0.82rem', padding: '0.3rem 0.5rem' } }),
-                                        h("button", { type: "button", className: "btn btn-secondary", style: { fontSize: '0.78rem', padding: '0.3rem 0.6rem' }, onClick: () => setCreditToApply(Math.min(clientCredit.available, Number(totals.total) || 0)) }, "Apply full"),
-                                        creditToApply > 0 && (h("button", { type: "button", className: "btn btn-secondary", style: { fontSize: '0.78rem', padding: '0.3rem 0.6rem', color: '#dc2626', borderColor: '#fca5a5' }, onClick: () => setCreditToApply(0) }, "Skip")))),
-                                creditToApply > 0.005 && (h("div", { style: { marginTop: 6, fontSize: '0.78rem', color: '#0369a1' } },
-                                    "\u2192 Will apply ",
-                                    formatCurrency(creditToApply, invoiceOptions.currency || 'INR'),
-                                    " as advance from prior overpayment",
-                                    creditToApply < clientCredit.available ? ` (${formatCurrency(clientCredit.available - creditToApply, invoiceOptions.currency || 'INR')} credit will remain)` : '',
-                                    ".")),
-                                h("label", { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, fontSize: '0.72rem', color: 'var(--text-muted)' } },
-                                    h("input", { type: "checkbox", checked: !!invoiceOptions.autoApplyClientCredit, onChange: e => setInvoiceOptions(prev => ({ ...prev, autoApplyClientCredit: e.target.checked })) }),
-                                    "Auto-apply available client credit on future invoices"))),
-                            h("div", { className: "grid grid-cols-2 gap-4" },
-                                phoneFirstOn && (h("div", { className: "form-group full-width" },
-                                    h("label", { className: "form-label", htmlFor: "phone-first" }, "Customer phone"),
-                                    h("input", { id: "phone-first", type: "tel", inputMode: "tel", className: "form-input", value: phoneQuery, onChange: (e) => onPhoneChange(e.target.value), placeholder: "Type the phone number: finds the customer, or adds a new one", autoComplete: "off" }),
-                                    phoneIsNew && (h("div", { style: { display: 'flex', gap: '0.4rem', marginTop: '0.4rem', flexWrap: 'wrap' } },
-                                        h("input", { type: "text", className: "form-input", style: { flex: '1 1 12rem' }, value: newPhoneName, "aria-label": "New customer's name", onChange: (e) => setNewPhoneName(e.target.value), onKeyDown: (e) => { if (e.key === 'Enter') {
-                                                e.preventDefault();
-                                                addPhoneCustomer();
-                                            } }, placeholder: "New customer: their name (optional)" }),
-                                        h("button", { type: "button", className: "btn btn-primary", onClick: addPhoneCustomer },
-                                            h(UserPlus, { size: 14 }),
-                                            " Add customer"))))),
-                                h("div", { className: "form-group full-width", style: { position: 'relative' } },
-                                    h("div", { className: "label-with-toggle" },
-                                        h("label", { className: "form-label" }, "Client Name"),
-                                        !readOnlyDoc && (h("button", { type: "button", className: "btn btn-primary", "data-testid": "add-client-btn", style: { fontSize: '0.75rem', padding: '0.15rem 0.55rem', marginBottom: '0.4rem' }, onClick: () => {
-                                                // v1.10.86 (#202) - a typed name that is already a saved client is not offered as a new one.
-                                                if (!selectedClientId && !savedClientNow)
-                                                    return openAddClientModal();
-                                                setModalClient({ name: '', country: '' });
-                                                setIsEditingClient(false);
-                                                setShowClientModal(true);
-                                            } },
-                                            h(UserPlus, { size: 13 }),
-                                            " New client"))),
-                                    h("div", { style: { display: 'flex', gap: '0.4rem' } },
-                                        h("input", { type: "text", className: "form-input", style: { flex: 1 }, value: client.name, ref: clientNameRef, onChange: (e) => {
-                                                setClient({ ...client, name: e.target.value });
-                                                setSelectedClientId(null);
-                                                setShowClientSuggestions(true);
-                                                setClientPickerIdx(-1);
-                                            }, onFocus: () => { if (savedClients.length > 0)
-                                                setShowClientSuggestions(true); }, onKeyDown: (e) => {
-                                                // v1.10.37 — Arrow keys / Enter / Escape on the client
-                                                // picker. Reported: "20 invoices/day forces mouse on
-                                                // the client autocomplete." Now: keyboard-only path.
-                                                if (!showClientSuggestions || !filteredClients.length)
-                                                    return;
-                                                if (e.key === 'ArrowDown') {
-                                                    e.preventDefault();
-                                                    setClientPickerIdx(i => (i + 1) % filteredClients.length);
-                                                }
-                                                else if (e.key === 'ArrowUp') {
-                                                    e.preventDefault();
-                                                    setClientPickerIdx(i => (i <= 0 ? filteredClients.length - 1 : i - 1));
-                                                }
-                                                else if (e.key === 'Enter') {
-                                                    // Only intercept Enter when the user has actually
-                                                    // arrow-nav'd to a suggestion; otherwise let Enter
-                                                    // fall through to the form for the "Add new client"
-                                                    // path via openAddClientModal.
-                                                    if (clientPickerIdx >= 0 && filteredClients[clientPickerIdx]) {
-                                                        e.preventDefault();
-                                                        selectSavedClient(filteredClients[clientPickerIdx]);
-                                                    }
-                                                }
-                                                else if (e.key === 'Escape') {
-                                                    setShowClientSuggestions(false);
-                                                }
-                                            }, placeholder: "Type client name to search or add new", autoComplete: "off" }),
-                                        selectedClientId && (h("button", { type: "button", className: "btn-client-edit", onClick: () => openEditClientModal(savedClients.find(c => c.id === selectedClientId)), title: "Edit saved client" },
-                                            h(Pencil, { size: 14 })))),
-                                    showClientSuggestions && savedClients.length > 0 && (h("div", { className: "client-suggestions", ref: clientSuggestionsRef },
-                                        filteredClients.length > 0 && filteredClients.map((cli, i) => (h("div", { key: cli.id, className: "client-suggestion-row", style: i === clientPickerIdx ? { background: 'var(--primary-light, rgba(30,64,175,0.12))' } : undefined },
-                                            h("button", { type: "button", className: "client-suggestion-item", onMouseEnter: () => setClientPickerIdx(i), onClick: () => selectSavedClient(cli) },
-                                                h("div", { className: "client-suggestion-main" },
-                                                    h("strong", null, cli.name),
-                                                    (cli.city || cli.address) && h("small", { className: "client-suggestion-addr" },
-                                                        cli.city || cli.address.substring(0, 30),
-                                                        !cli.city && cli.address.length > 30 ? '...' : '')),
-                                                h("span", null,
-                                                    cli.state,
-                                                    cli.gstin ? ` · ${cli.gstin}` : '')),
-                                            h("button", { type: "button", className: "client-suggestion-edit", onClick: () => { openEditClientModal(cli); setShowClientSuggestions(false); }, title: "Edit client" },
-                                                h(Pencil, { size: 12 }))))),
-                                        client.name.trim() && (h("button", { type: "button", className: "client-suggestion-save", onClick: openAddClientModal },
-                                            h(UserPlus, { size: 14 }),
-                                            " Save \"",
-                                            client.name.trim(),
-                                            "\" as new client")),
-                                        filteredClients.length === 0 && !client.name.trim() && (h("div", { className: "client-picker-empty" }, "Type to search clients")))))),
-                            h(FoldSection, { title: "More client details", testId: "more-client-details", help: h(HelpButton, { title: "Billed To", doc: "invoices#billed-to", size: 16 }), summary: clientSummary || 'address, state, GSTIN, ship-to', open: clientMoreOpen, onToggle: setClientMoreOpen },
-                                h("div", { className: "grid grid-cols-2 gap-4" },
-                                    h("div", { className: "form-group full-width" },
-                                        h("div", { className: "label-with-toggle" },
-                                            h("label", { className: "form-label" }, "Billing Address"),
-                                            h(PrintToggle, { optKey: "showClientAddress", label: "Print", options: invoiceOptions, setOptions: setInvoiceOptions, disabled: readOnlyDoc })),
-                                        h("input", { type: "text", className: "form-input", value: client.address, onChange: (e) => setClient({ ...client, address: e.target.value }), placeholder: "Street address, locality" })),
-                                    h("div", { className: "form-group full-width inv-row3" },
-                                        h("div", { className: "form-group" },
-                                            h("label", { className: "form-label", htmlFor: "client-country" }, "Country"),
-                                            h("select", { id: "client-country", className: "form-input", value: client.country || profile?.country || 'India', onChange: (e) => {
-                                                    setClient({ ...client, country: e.target.value, state: '' });
-                                                    // v1.10.83 - a client abroad: their currency, on a new invoice.
-                                                    if (!editingSaved)
-                                                        setCurrency(currencyForClient({ country: e.target.value }, profile, { lastForeign: invoiceOptions.lastForeignCurrency }));
-                                                } }, (() => {
-                                                const visible = getCountriesForRegion(getRegionMode());
-                                                const cur = client.country || profile?.country;
-                                                const out = [];
-                                                if (cur && !visible.some(c => c.name === cur)) {
-                                                    out.push(h("option", { key: cur, value: cur }, cur));
-                                                }
-                                                return out.concat(visible.map(c => h("option", { key: c.code, value: c.name }, c.name)));
-                                            })())),
-                                        h("div", { className: "form-group" },
-                                            h("label", { className: "form-label" }, "City"),
-                                            h("input", { type: "text", className: "form-input", value: client.city, onChange: (e) => setClient({ ...client, city: e.target.value }), placeholder: "e.g. Mumbai" })),
-                                        invoiceOptions.showState && (() => {
-                                            const cc = getCountryConfig(client.country || profile?.country);
-                                            const stateOpts = getStatesForCountry(client.country || profile?.country);
-                                            return (h("div", { className: "form-group" },
-                                                h("label", { className: "form-label" }, cc.stateLabel),
-                                                stateOpts.length > 0 ? (h("select", { className: "form-input", value: client.state, onChange: (e) => setClient({ ...client, state: e.target.value }) },
-                                                    h("option", { value: "" },
-                                                        "Select ",
-                                                        cc.stateLabel),
-                                                    stateOpts.map(s => h("option", { key: s, value: s }, s)))) : (h("input", { type: "text", className: "form-input", value: client.state, onChange: (e) => setClient({ ...client, state: e.target.value }), placeholder: cc.stateLabel }))));
-                                        })()),
-                                    h("div", { className: "form-group full-width inv-row3" },
-                                        h("div", { className: "form-group" },
-                                            (() => { const cc = getCountryConfig(client.country || profile?.country); return h("label", { className: "form-label" }, cc.postalLabel); })(),
-                                            h("input", { type: "text", className: "form-input", value: client.pin, onChange: (e) => setClient({ ...client, pin: e.target.value }), placeholder: "Postal / PIN code" })),
-                                        invoiceOptions.showGSTIN && (() => {
-                                            const cc = getCountryConfig(client.country || profile?.country);
-                                            return (h("div", { className: "form-group" },
-                                                h("label", { className: "form-label" }, cc.taxIdLabel),
-                                                h("input", { type: "text", className: "form-input", value: client.gstin, 
-                                                    // v1.10.74 - drop the old hint on edit; it is re-checked on blur.
-                                                    onChange: (e) => { setClient({ ...client, gstin: e.target.value.toUpperCase() }); setGstinHint(null); }, onBlur: handleClientGstinBlur, placeholder: "Optional", maxLength: 20 }),
-                                                gstinHint && (h("small", { style: { color: gstinHint.tone === 'warn' ? '#d97706' : '#16a34a', fontSize: '0.7rem', display: 'block', marginTop: '0.2rem' } },
-                                                    gstinHint.tone === 'warn' ? '⚠' : '✓',
-                                                    " ",
-                                                    gstinHint.message,
-                                                    h(HelpButton, { title: "What the GSTIN check tells you", doc: "invoices#gstin-check", size: 16 })))));
-                                        })()),
-                                    (!servicesMode || details.shipToSameAsBilling === false) && h("div", { className: "form-group full-width", style: { marginTop: '0.5rem', padding: '0.6rem 0.85rem', background: 'var(--bg-secondary)', borderRadius: 6 } },
-                                        h("label", { style: { display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', fontSize: '0.88rem' } },
-                                            h("input", { type: "checkbox", checked: details.shipToSameAsBilling !== false, onChange: e => setDetails({ ...details, shipToSameAsBilling: e.target.checked }), style: { width: 16, height: 16, accentColor: 'var(--primary)' } }),
+                                h("strong", null, "TCS \u2014 Tax Collected at Source"),
+                                h(HelpButton, { title: "TCS", doc: "invoices#tcs", size: 16 }),
+                                h("span", { style: { fontSize: '0.7rem', color: '#94a3b8' } }, "(Adds to invoice total)")),
+                            invoiceOptions.showTCS && (h("div", { style: { display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '0.5rem', marginTop: '0.5rem' } },
+                                h("select", {
+                                    className: "form-input", value: invoiceOptions.tcsSection || TCS_SECTIONS[0].code, onChange: (e) => {
+                                        const code = e.target.value;
+                                        const section = TCS_SECTIONS.find(s => s.code === code);
+                                        setInvoiceOptions(prev => ({ ...prev, tcsSection: code, tcsRate: code === 'custom' ? prev.tcsRate : section?.rate ?? prev.tcsRate }));
+                                    }
+                                },
+                                    REMOVED_TCS_SECTIONS[invoiceOptions.tcsSection] && (h("option", { value: invoiceOptions.tcsSection, disabled: true }, REMOVED_TCS_SECTIONS[invoiceOptions.tcsSection])),
+                                    TCS_SECTIONS.map(s => h("option", { key: s.code, value: s.code }, s.label))),
+                                h("input", { type: "number", step: "any", min: "0", max: "100", className: "form-input", value: invoiceOptions.tcsRate, onChange: (e) => setInvoiceOptions(prev => ({ ...prev, tcsRate: e.target.value })), placeholder: "Rate %" }))))),
+                        (profile?.country || 'India') === 'India' && (tdsTcsOn || invoiceOptions.showTDS) && (h("div", { className: `form-group${invoiceOptions.showTDS ? ' notice notice-info' : ''}`, style: { marginBottom: '0.75rem', padding: '0.6rem', borderRadius: '6px', display: 'block' } },
+                            h("label", { style: { display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', fontSize: '0.82rem', cursor: 'pointer' } },
+                                h("input", { type: "checkbox", checked: !!invoiceOptions.showTDS, onChange: () => setInvoiceOptions(prev => ({ ...prev, showTDS: !prev.showTDS })), style: { width: 16, height: 16, accentColor: 'var(--primary)' } }),
+                                h("strong", null, "TDS \u2014 Tax Deducted at Source"),
+                                h(HelpButton, { title: "TDS", doc: "invoices#tds", size: 16 }),
+                                h("span", { style: { fontSize: '0.7rem', color: '#94a3b8' } }, "(Buyer deducts; informational)")),
+                            invoiceOptions.showTDS && (h("div", { style: { display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '0.5rem', marginTop: '0.5rem' } },
+                                h("select", {
+                                    className: "form-input", value: invoiceOptions.tdsSection || '194Q', onChange: (e) => {
+                                        const code = e.target.value;
+                                        const section = TDS_SECTIONS.find(s => s.code === code);
+                                        setInvoiceOptions(prev => ({ ...prev, tdsSection: code, tdsRate: code === 'custom' ? prev.tdsRate : section?.rate ?? prev.tdsRate }));
+                                    }
+                                }, TDS_SECTIONS.map(s => h("option", { key: s.code, value: s.code }, s.label))),
+                                h("input", { type: "number", step: "any", min: "0", max: "100", className: "form-input", value: invoiceOptions.tdsRate, onChange: (e) => setInvoiceOptions(prev => ({ ...prev, tdsRate: e.target.value })), placeholder: "Rate %" }))))),
+                        (() => {
+                            const accounts = getActiveAccounts(profile);
+                            if (accounts.length === 0)
+                                return null;
+                            const resolved = getAccountById(profile, invoiceOptions.selectedAccountId);
+                            return (h("div", { className: "form-group", style: { marginBottom: '0.75rem' } },
+                                h("label", { className: "form-label" },
+                                    "Payment account on this invoice ",
+                                    h(HelpButton, { title: "Payment account on this invoice", doc: "invoice-options#payment-account", size: 16 })),
+                                h("select", {
+                                    className: "form-input", value: resolved?.id || '', onChange: (e) => {
+                                        // v1.10.21 — reported: "working but on select it is not
+                                        // changing have to save and reopen it". Cause: the
+                                        // preview reads options.paymentAccountSnapshot first
+                                        // (bank frozen at the last save). Picking a new
+                                        // account from the dropdown only updated
+                                        // selectedAccountId, so the preview kept showing the
+                                        // old snapshot until save+reopen re-snapshotted. Fix:
+                                        // resnap immediately from the LIVE profile when the
+                                        // user picks a different account so the preview
+                                        // reflects the new bank without a round trip.
+                                        const newId = e.target.value || null;
+                                        const newSnap = newId ? getAccountById(profile, newId) : null;
+                                        setInvoiceOptions(prev => ({ ...prev, selectedAccountId: newId, paymentAccountSnapshot: newSnap }));
+                                    }
+                                }, accounts.map(a => (h("option", { key: a.id, value: a.id },
+                                    a.isDefault ? '⭐ ' : '',
+                                    a.label || a.bankName || 'Untitled account',
+                                    a.bankName && a.label !== a.bankName ? ` — ${a.bankName}` : '')))),
+                                h("small", { style: { color: 'var(--text-muted)', fontSize: '0.7rem' } }, "Bank details and UPI QR on the PDF come from the selected account. Manage accounts in Settings \u2192 Payment Accounts.")));
+                        })(),
+                        h("div", { className: "form-group", style: { marginBottom: '0.75rem' } },
+                            h("label", { className: "form-label" },
+                                "PDF Style ",
+                                h(HelpButton, { title: "PDF Style", doc: "invoice-options#style", size: 16 })),
+                            h("div", { style: { display: 'flex', gap: '0.5rem' } }, PDF_STYLES.map(s => (h("button", { key: s.id, type: "button", className: `type-chip ${(invoiceOptions.pdfStyle || 'classic') === s.id ? 'type-chip-active' : ''}`, onClick: () => setInvoiceOptions(prev => ({ ...prev, pdfStyle: s.id })), title: s.desc }, s.label))))),
+                        h("div", { className: "form-group", style: { marginBottom: '0.75rem' } },
+                            h("label", { className: "form-label" },
+                                "Accent Color ",
+                                h(HelpButton, { title: "Accent Color", doc: "invoice-options#accent-colour", size: 16 })),
+                            h("div", { style: { display: 'flex', gap: '0.4rem', flexWrap: 'wrap', alignItems: 'center' } },
+                                h("button", { type: "button", title: "Auto (match invoice type)", style: { width: '28px', height: '28px', borderRadius: '50%', border: !invoiceOptions.accentColor ? '2.5px solid #334155' : '2px solid #cbd5e1', background: 'conic-gradient(#1e40af, #7c3aed, #0f766e, #be123c, #1e40af)', cursor: 'pointer', position: 'relative' }, onClick: () => setInvoiceOptions(prev => ({ ...prev, accentColor: '' })) }, !invoiceOptions.accentColor && h("span", { style: { position: 'absolute', inset: '3px', borderRadius: '50%', border: '2px solid white' } })),
+                                ACCENT_PRESETS.map(p => (h("button", { key: p.color, type: "button", title: p.label, style: { width: '28px', height: '28px', borderRadius: '50%', backgroundColor: p.color, border: invoiceOptions.accentColor === p.color ? '2.5px solid #334155' : '2px solid #cbd5e1', cursor: 'pointer', position: 'relative' }, onClick: () => setInvoiceOptions(prev => ({ ...prev, accentColor: p.color })) }, invoiceOptions.accentColor === p.color && h("span", { style: { position: 'absolute', inset: '3px', borderRadius: '50%', border: '2px solid white' } })))))),
+                        [
+                            {
+                                group: 'Header & branding', items: [
+                                    ['showLogo', 'Logo'],
+                                    ['showBusinessName', 'Business name'],
+                                    ['showBusinessAddress', 'Business address'],
+                                    ['showBusinessPhone', 'Business phone'],
+                                    ['showBusinessEmail', 'Business email'],
+                                    ['showState', 'Business state'],
+                                    ['showGSTIN', 'Tax ID (GSTIN/VAT/etc.)'],
+                                ]
+                            },
+                            {
+                                group: 'Client / Bill-to', items: [
+                                    ['showClientAddress', 'Client address'],
+                                    ['showClientPhone', 'Client phone'],
+                                    ['showClientEmail', 'Client email'],
+                                    ['showPlaceOfSupply', 'Place of Supply'],
+                                ]
+                            },
+                            {
+                                group: 'Invoice meta', items: [
+                                    ['showInvoiceNumber', 'Invoice number'],
+                                    ['showInvoiceDate', 'Invoice date'],
+                                    ['showDueDate', 'Due date'],
+                                ]
+                            },
+                            {
+                                group: 'Items table', items: [
+                                    ['showHSN', 'HSN/SAC column'],
+                                    ['showItemQty', 'Qty column'],
+                                    // v1.10.33 — Renamed from "Unit column" to match
+                                    // reality: InvoicePreview renders the unit INSIDE the
+                                    // Qty cell ("5 Nos", not a separate column). Prior
+                                    // label misled users into unticking Qty and expecting
+                                    // Unit to survive as its own column — it just vanished
+                                    // instead. Label now describes what actually happens.
+                                    // v1.10.83 - off by itself in Services mode (see the mode chips).
+                                    ['showItemUnit', 'Unit (Hrs, Nos...) next to Qty'],
+                                    ['showRateColumn', 'Rate column'],
+                                    ['showDiscount', 'Discount column'],
+                                    ['showGST', 'Tax % column (GST/VAT/etc.)'],
+                                    ['showCess', 'GST Cess % column (India — tobacco/auto/coal)'],
+                                ]
+                            },
+                            {
+                                group: 'Totals', items: [
+                                    ['showSubtotal', 'Subtotal row'],
+                                    ['showAmountWords', 'Amount in words'],
+                                    ['showRoundOff', 'Round-off line'],
+                                    ['showHsnSummary', 'HSN/SAC tax summary table'],
+                                    ['showTaxInWords', 'Tax amount in words'],
+                                ]
+                            },
+                            {
+                                group: 'Compliance flags (India)', items: [
+                                    ['reverseCharge', 'Reverse Charge applies (Section 9(3)/9(4)) — recipient pays GST'],
+                                ]
+                            },
+                            // Paper-size selector rendered outside the checkbox-grid pattern
+                            // — see the block below the .map(). Adding a group marker here
+                            // keeps the visual flow but the actual UI is a dropdown.
+                            { group: '__PAPER_SIZE__', items: [] },
+                            {
+                                group: 'Footer', items: [
+                                    ['showBankDetails', 'Bank details'],
+                                    ['showAccountLabel', 'Show "Pay via: <account>" label above bank block'],
+                                    // v1.10.74 - the QR needs a rupee invoice with a UPI ID, not an Indian business.
+                                    ['showUPI', 'UPI QR (rupee invoices)'],
+                                    ['showSignature', 'Signature block'],
+                                    ['showSignatoryText', 'Show "Authorized Signatory" caption'],
+                                    ['showTerms', 'Terms & Conditions'],
+                                    ['showNotes', 'Notes / Remarks'],
+                                    ['showSystemGeneratedNote', 'Note: system-generated invoice, no signature or stamp required'],
+                                    ['showDeclaration', 'Declaration'],
+                                    ['showCustomerSeal', "\"Customer's Seal and Signature\" box (Boxed grid / Tally style)"],
+                                ]
+                            },
+                        ].map(section => {
+                            if (section.group === '__PAPER_SIZE__') {
+                                return (h("div", { key: "paper-size", style: { marginBottom: '0.6rem' } },
+                                    h("div", { style: { fontSize: '0.7rem', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.3rem' } },
+                                        "Paper / print size ",
+                                        h(HelpButton, { title: "Paper size", doc: "invoice-options#paper-size", size: 16 })),
+                                    h("select", { className: "form-input", style: { fontSize: '0.85rem' }, value: invoiceOptions.paperSize || 'a4', onChange: e => setInvoiceOptions(prev => ({ ...prev, paperSize: e.target.value })) }, Object.entries(PAPER_SIZES).map(([key, ps]) => (h("option", { key: key, value: key }, ps.label)))),
+                                    h("p", { style: { fontSize: '0.72rem', color: 'var(--text-muted)', margin: '0.3rem 0 0' } }, getPaperSize(invoiceOptions.paperSize, invoiceOptions).hint),
+                                    invoiceOptions.paperSize === 'custom' && (h("div", { style: { marginTop: '0.5rem', padding: '0.55rem 0.65rem', background: 'var(--bg-secondary)', borderRadius: 6, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' } },
+                                        h("div", null,
+                                            h("label", { style: { fontSize: '0.72rem', fontWeight: 600, display: 'block', marginBottom: 3 } }, "Width (mm)"),
+                                            h("input", { type: "number", min: "30", max: "500", step: "1", value: invoiceOptions.customPaperWidth || 80, onChange: e => setInvoiceOptions(prev => ({ ...prev, customPaperWidth: parseInt(e.target.value, 10) || 80 })), className: "form-input", style: { fontSize: '0.8rem', padding: '0.35rem' } })),
+                                        h("div", null,
+                                            h("label", { style: { fontSize: '0.72rem', fontWeight: 600, display: 'block', marginBottom: 3 } }, "Height (mm)"),
+                                            h("input", { type: "number", min: "50", max: "1200", step: "1", value: invoiceOptions.customPaperHeight || 297, onChange: e => setInvoiceOptions(prev => ({ ...prev, customPaperHeight: parseInt(e.target.value, 10) || 297 })), className: "form-input", style: { fontSize: '0.8rem', padding: '0.35rem' } })),
+                                        h("p", { style: { fontSize: '0.7rem', color: 'var(--text-muted)', gridColumn: 'span 2', margin: 0 } },
+                                            "Tip: enter your printer's ",
+                                            h("strong", null, "printable"),
+                                            " width, not the roll width. Most 58mm thermals print at 48mm; 80mm print at 72mm. ",
+                                            h("strong", null, "Below 100mm width auto-switches to thermal receipt layout"),
+                                            " \u2014 same rendering as the 58/80mm presets, just at your exact size."),
+                                        h("div", { style: { gridColumn: 'span 2', display: 'flex', gap: '0.35rem', flexWrap: 'wrap', marginTop: 4 } },
+                                            h("span", { style: { fontSize: '0.7rem', color: 'var(--text-muted)', alignSelf: 'center' } }, "Quick-pick:"),
+                                            [
+                                                { label: '40mm', w: 32 },
+                                                { label: '76mm', w: 68 },
+                                                { label: '90mm', w: 80 },
+                                                { label: '110mm', w: 102 },
+                                            ].map(p => (h("button", { type: "button", key: p.label, onClick: () => setInvoiceOptions(prev => ({ ...prev, customPaperWidth: p.w, customPaperHeight: 297 })), className: "btn btn-secondary", style: { fontSize: '0.7rem', padding: '0.15rem 0.5rem' }, title: `Set to ${p.label} roll (${p.w}mm printable × auto height)` }, p.label)))))),
+                                    getPaperSize(invoiceOptions.paperSize, invoiceOptions).kind === 'thermal' && (h("div", { style: { marginTop: '0.6rem', padding: '0.6rem', background: 'var(--bg-secondary)', borderRadius: 6 } },
+                                        h("div", { style: { fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.4rem' } },
+                                            "Thermal printer settings ",
+                                            h(HelpButton, { title: "Thermal printer settings", doc: "invoice-options#thermal-options", size: 16 })),
+                                        h("label", { style: { display: 'block', fontSize: '0.78rem', marginBottom: '0.35rem' } },
+                                            h("span", { style: { fontWeight: 600 } }, "Font size"),
+                                            h("select", { className: "form-input", style: { fontSize: '0.78rem', marginTop: 2 }, value: invoiceOptions.thermalFontSize || 'medium', onChange: e => setInvoiceOptions(prev => ({ ...prev, thermalFontSize: e.target.value })) },
+                                                h("option", { value: "small" }, "Small (fits more per page)"),
+                                                h("option", { value: "medium" }, "Medium (recommended)"),
+                                                h("option", { value: "large" }, "Large (easier to read)"))),
+                                        h("label", { style: { display: 'flex', alignItems: 'flex-start', gap: '0.4rem', fontSize: '0.78rem', marginTop: '0.5rem', cursor: 'pointer' } },
+                                            h("input", { type: "checkbox", checked: !!invoiceOptions.thermalCompact, onChange: e => setInvoiceOptions(prev => ({ ...prev, thermalCompact: e.target.checked })), style: { marginTop: 2, accentColor: 'var(--primary)' } }),
                                             h("span", null,
-                                                h("strong", null, "Ship to"),
-                                                " same as bill-to address ",
-                                                h(HelpButton, { title: "Ship to", doc: "invoices#ship-to", size: 16 }))),
-                                        details.shipToSameAsBilling === false && (h("div", { className: "grid grid-cols-2 gap-3", style: { marginTop: '0.6rem' } },
-                                            h("div", { className: "form-group full-width" },
-                                                h("label", { className: "form-label", style: { fontSize: '0.78rem' } }, "Shipping Address"),
-                                                h("textarea", { className: "form-input", rows: 2, value: details.shippingAddress || '', onChange: e => setDetails({ ...details, shippingAddress: e.target.value }), placeholder: "Delivery address / warehouse / consignee location" })),
-                                            h("div", { className: "form-group" },
-                                                h("label", { className: "form-label", style: { fontSize: '0.78rem' } }, "Shipping City"),
-                                                h("input", { type: "text", className: "form-input", value: details.shippingCity || '', onChange: e => setDetails({ ...details, shippingCity: e.target.value }) })),
-                                            h("div", { className: "form-group" },
-                                                h("label", { className: "form-label", style: { fontSize: '0.78rem' } }, "Shipping PIN"),
-                                                h("input", { type: "text", className: "form-input", value: details.shippingPin || '', onChange: e => setDetails({ ...details, shippingPin: e.target.value }), placeholder: "6-digit PIN", maxLength: 6 })),
-                                            h("div", { className: "form-group full-width" },
-                                                h("label", { className: "form-label", style: { fontSize: '0.78rem' } }, "Shipping State"),
-                                                (() => {
-                                                    const posOpts = getStatesForCountry(profile?.country);
-                                                    return posOpts.length > 0 ? (h("select", { className: "form-input", value: details.shippingState || '', onChange: e => setDetails({ ...details, shippingState: e.target.value }) },
-                                                        h("option", { value: "" }, "Same as billing state"),
-                                                        posOpts.map(s => h("option", { key: s, value: s }, s)))) : (h("input", { type: "text", className: "form-input", value: details.shippingState || '', onChange: e => setDetails({ ...details, shippingState: e.target.value }), placeholder: "Delivery state / region" }));
-                                                })()))))))));
-                    // Line Items - v1.10.86 (#147): right under Billed To, before the invoice details
-                    if (cardId === 'items')
-                        return (h(InvoiceCard, { key: "items", id: "items", cards: cards, title: "Line Items", summary: cardSummary.items, help: h(HelpButton, { title: "Line Items", doc: "invoices#items", size: 16 }) },
-                            showGST && (h("div", { className: "inv-items-opts" },
-                                showGST && (h("label", { style: { display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', cursor: 'pointer', userSelect: 'none' } },
-                                    h("input", { type: "checkbox", checked: taxInclusive, onChange: e => setTaxInclusive(e.target.checked), style: { width: 16, height: 16, accentColor: 'var(--primary)', cursor: 'pointer' } }),
-                                    h("span", { style: { fontWeight: 500 } }, "Prices include tax"),
-                                    h(HelpButton, { title: "Prices that already include GST", doc: "invoices#tax-inclusive", size: 16 }))),
-                                showGST && taxInclusive && (h("label", { style: { display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', cursor: 'pointer', userSelect: 'none' }, title: "The Rate column prints each price without GST (rate / (1 + GST%)), so Qty x Rate matches the Amount. The totals do not change." },
-                                    h("input", { type: "checkbox", checked: !!invoiceOptions.rateBeforeTax, onChange: e => setInvoiceOptions(prev => ({ ...prev, rateBeforeTax: e.target.checked })), style: { width: 16, height: 16, accentColor: 'var(--primary)', cursor: 'pointer' } }),
-                                    h("span", null, "Print rates before GST"))))),
-                            barcodesOn && !servicesMode && !readOnlyDoc && products.some((p) => p.barcode) && (h(ScanBarcodeBox, { onScan: scanBarcode })),
-                            items.map((item, idx) => (h(LineItem, { key: item.id, item: item, invoiceOptions: invoiceOptions, taxInclusive: taxInclusive, showGST: showGST, taxLabel: taxLabel, units: units, countryTaxRates: countryTaxRates, filterUnitsByMode: filterUnitsByMode, invoiceMode: invoiceOptions.invoiceMode, currency: invoiceOptions.currency, profileCountry: profile?.country, suggestions: getProductSuggestions(item.id), onFieldChange: handleItemChange, onSelectProduct: selectProduct, onSetProductSearch: setProductSearch, onAddCustomUnit: handleAddCustomUnit, onRemoveCustomUnit: handleRemoveCustomUnit, onRemove: removeItem, clampNonNeg: clampNonNeg, isLastRow: idx === items.length - 1, isOnlyRow: items.length === 1, onAddRow: addItem, onSizeChange: handleSizeChange, sizeLines: item.rft ? sizeLines : undefined, onRftChange: handleRftChange, notInProducts: isUnknownItem(item), onSaveAsProduct: saveLineAsProduct, lineAmount: lineAmountOf(idx), lineTax: lineTaxOf(idx) }))),
-                            h("div", { style: { display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' } },
-                                h("button", { type: "button", className: "btn btn-secondary add-item-btn", onClick: addItem },
-                                    h(Plus, { size: 18 }),
-                                    " Add Item"),
-                                !hasDeliveryCharge && !servicesMode && (h("button", { type: "button", className: "btn btn-secondary", onClick: addDeliveryCharge, title: "Adds a 'Delivery charges' line, taxed at the goods' GST rate (composite supply)" },
-                                    h(Truck, { size: 16 }),
-                                    " Delivery charges")),
-                                hasDeliveryCharge && showGST && (h("span", { style: { fontSize: '0.75rem', color: 'var(--text-muted)' } }, "Delivery is taxed like the goods it ships with (composite supply), so it starts at the highest GST rate on this invoice. Change it if needed."))),
-                            servicesMode && !wholeDiscountOpen && !Number(invoiceOptions.invoiceDiscountValue) ? (h("button", { type: "button", className: "btn-link", onClick: () => setWholeDiscountOpen(true), style: { marginTop: '0.75rem', background: 'none', border: 0, padding: 0, cursor: 'pointer', fontSize: '0.82rem', color: 'var(--text-muted)' } }, "+ Discount on the whole bill")) : (h("div", { style: { display: 'flex', alignItems: 'center', gap: 8, marginTop: '0.75rem', flexWrap: 'wrap' } },
-                                h("label", { style: { fontSize: '0.82rem', color: 'var(--text-muted)' } },
-                                    "Discount on total (whole bill) ",
-                                    h(HelpButton, { title: "Discounts", doc: "invoices#discounts", size: 16 })),
-                                h("input", { type: "number", min: "0", step: "any", className: "form-input", value: invoiceOptions.invoiceDiscountValue || '', onFocus: (e) => e.target.select(), onChange: (e) => setInvoiceOptions(prev => ({ ...prev, invoiceDiscountValue: clampNonNeg(e.target.value) })), style: { width: 100 }, placeholder: "0" }),
-                                h("select", { className: "form-input", value: invoiceOptions.invoiceDiscountType === 'percent' ? 'percent' : 'fixed', onChange: (e) => setInvoiceOptions(prev => ({ ...prev, invoiceDiscountType: e.target.value })), style: { width: 128 } },
-                                    h("option", { value: "fixed" },
-                                        currencySymbolFor(invoiceOptions.currency),
-                                        " (fixed)"),
-                                    h("option", { value: "percent" }, invoiceOptions.invoiceDiscountBeforeGst ? '% of value' : '% of total')),
-                                showGST && (h("select", { className: "form-input", "aria-label": "When the discount is taken", value: invoiceOptions.invoiceDiscountBeforeGst ? 'before' : 'after', onChange: (e) => setInvoiceOptions(prev => ({ ...prev, invoiceDiscountBeforeGst: e.target.value === 'before' })), style: { width: 200 } },
-                                    h("option", { value: "after" }, "After GST (cash discount)"),
-                                    h("option", { value: "before" }, "Before GST (trade discount)"))),
-                                h("span", { style: { fontSize: '0.72rem', color: 'var(--text-muted)', fontStyle: 'italic' } }, invoiceOptions.invoiceDiscountBeforeGst && showGST
-                                    ? 'Shared over the lines before GST, so GST is worked out on the reduced value.'
-                                    : 'Taken off the total after GST.'))),
-                            SALES_INVOICE_TYPES.includes(invoiceType) && paidWhenOpened.length > 0 && (h("div", { style: { marginTop: '0.75rem', fontSize: '0.82rem', color: 'var(--text-muted)' } },
-                                "Paid so far ",
-                                h("strong", null, formatCurrency(paidSoFar, invoiceOptions.currency || 'INR')),
-                                ". Payments are recorded and changed on the Dashboard.")),
-                            canReceiveNow && (h("div", { "data-testid": "received-now", style: { display: 'flex', alignItems: 'center', gap: 8, marginTop: '0.75rem', flexWrap: 'wrap' } },
-                                h("label", { htmlFor: "received-now-amount", style: { fontSize: '0.82rem', color: 'var(--text-muted)' } },
-                                    "Received now ",
-                                    h(HelpButton, { title: "Payment received with the invoice", doc: "invoices#received-now", size: 16 })),
-                                h("input", { id: "received-now-amount", type: "number", min: "0", step: "any", className: "form-input", value: receivedNow.amount, onFocus: (e) => e.target.select(), onChange: (e) => setReceivedNow(prev => ({ ...prev, amount: e.target.value })), style: { width: 110 }, placeholder: "0" }),
-                                h("button", { type: "button", className: "btn btn-secondary", title: "Fill in the balance of this invoice", onClick: () => setReceivedNow(prev => ({ ...prev, amount: String(receivableNow) })), style: { padding: '0.35rem 0.75rem', fontSize: '0.8rem' } }, "Full"),
-                                h("select", { className: "form-input", "aria-label": "How it was paid", value: receivedNow.mode, onChange: (e) => { rememberPaidMode(e.target.value); setReceivedNow(prev => ({ ...prev, mode: e.target.value })); }, style: { width: 150 } }, PAID_MODES.map(([v, label]) => h("option", { key: v, value: v }, label))),
-                                h("span", { style: { fontSize: '0.72rem', color: 'var(--text-muted)', fontStyle: 'italic' } }, Number(receivedNow.amount) > receivableNow + 0.01
-                                    ? 'More than the balance: the extra is kept as the client\'s credit.'
-                                    : 'Saved as a payment with the invoice. Cash also goes into the Cash book.'))),
-                            billProfit && (h("div", { "data-testid": "bill-profit", style: { display: 'flex', alignItems: 'center', gap: 8, marginTop: '0.6rem', fontSize: '0.82rem', color: 'var(--text-muted)', flexWrap: 'wrap' } }, profitShown ? (h(Fragment, null,
-                                h("span", null,
-                                    "Profit on this bill: ",
-                                    h("strong", { style: { color: billProfit.profit >= 0 ? 'var(--success, #16a34a)' : 'var(--danger)' } }, formatCurrency(billProfit.profit, baseCurrency)),
-                                    billProfit.margin !== null && h(Fragment, null,
-                                        " (",
-                                        billProfit.margin,
-                                        "%)")),
-                                billProfit.missing > 0 && (h("span", { style: { fontSize: '0.72rem', fontStyle: 'italic' } },
-                                    billProfit.missing,
-                                    " item",
-                                    billProfit.missing !== 1 ? 's have' : ' has',
-                                    " no purchase price (counted at 0)")),
-                                h("button", { type: "button", className: "btn btn-secondary", onClick: () => setProfitShown(false), title: "Hide it (for example when the customer can see the screen)", style: { padding: '0.15rem 0.5rem', fontSize: '0.72rem' } },
-                                    h(EyeOff, { size: 12 }),
-                                    " Hide"))) : (h("button", { type: "button", className: "btn btn-secondary", onClick: () => setProfitShown(true), style: { padding: '0.15rem 0.5rem', fontSize: '0.72rem' } },
-                                h(Eye, { size: 12 }),
-                                " Show profit")))),
-                            h(CreditLimitWarning, { savedClient: savedClientNow, bills: allBillsForCredit, profile: profile, excludeId: editingBill && !editingBill._isDuplicate ? editingBill.id : null, invoiceType: invoiceType, totals: totals, currency: invoiceOptions.currency, exchangeRate: invoiceOptions.exchangeRate, paid: editingBill && !editingBill._isDuplicate ? paidTowards(editingBill) : 0, creditApplied: editingBill ? 0 : creditToApply })));
-                    // Invoice Details
-                    if (cardId === 'details')
-                        return (h(InvoiceCard, { key: "details", id: "details", cards: cards, title: "Invoice Details", summary: cardSummary.details, help: h(HelpButton, { title: "Invoice Details", doc: "invoices#details", size: 16 }) },
-                            h("div", { className: "grid grid-cols-2 gap-4" },
-                                h("div", { className: "form-group" },
-                                    h("label", { className: "form-label" }, "Invoice Number"),
-                                    (() => {
-                                        const gstLimit = !!profile?.gstin && ['tax-invoice', 'credit-note'].includes(invoiceType);
-                                        const len = String(details.invoiceNumber || '').length;
-                                        return (h(Fragment, null,
-                                            h("input", { type: "text", className: "form-input", value: details.invoiceNumber, maxLength: gstLimit ? 16 : undefined, "data-testid": "invoice-number", onChange: (e) => setDetails({ ...details, invoiceNumber: gstLimit ? e.target.value.replace(/[^A-Za-z0-9\-/]/g, '') : e.target.value }) }),
-                                            gstLimit && (h("small", { style: { display: 'block', marginTop: '0.3rem', fontSize: '0.72rem', color: len > 16 ? 'var(--danger)' : 'var(--text-muted)' } },
-                                                len,
-                                                "/16 \u00B7 GST allows letters, digits, - and /"))));
-                                    })()),
-                                h("div", { className: "form-group" },
-                                    h("label", { className: "form-label" }, "Invoice Date"),
-                                    h("input", { type: "date", className: "form-input", value: details.invoiceDate, onChange: (e) => setDetails({ ...details, invoiceDate: e.target.value }) })),
-                                h("div", { className: "form-group full-width inv-row3" },
-                                    h("div", { className: "form-group" },
-                                        h("div", { className: "label-with-toggle" },
-                                            h("label", { className: "form-label" }, "Due Date"),
-                                            h(PrintToggle, { optKey: "showDueDate", label: "Print", options: invoiceOptions, setOptions: setInvoiceOptions, disabled: readOnlyDoc })),
-                                        h("input", { type: "date", className: "form-input", value: details.dueDate, onChange: (e) => setDetails({ ...details, dueDate: e.target.value }) }),
-                                        h("div", { style: { display: 'flex', gap: '0.3rem', marginTop: '0.3rem', flexWrap: 'wrap', alignItems: 'center' } },
-                                            h("span", { style: { fontSize: '0.72rem', color: 'var(--text-muted)' } }, "Due in"),
-                                            [7, 15, 30].map(n => (h("button", { key: n, type: "button", className: "btn btn-secondary", style: { fontSize: '0.7rem', padding: '0.1rem 0.45rem' }, onClick: () => {
-                                                    const d = parseLocalDate(details.invoiceDate || localToday());
-                                                    setDetails({ ...details, dueDate: toLocalIsoDate(new Date(d.getFullYear(), d.getMonth(), d.getDate() + n)) });
-                                                } },
-                                                n,
-                                                " days"))))),
-                                    (getRegionMode() !== 'india' || isForeignClient(client, profile) || (invoiceOptions.currency || baseCurrency) !== baseCurrency) && (h(InvoiceCurrency, { options: invoiceOptions, baseCurrency: baseCurrency, regionMode: getRegionMode(), invoiceDate: details.invoiceDate, total: totals.total, onCurrency: setCurrency, onRate: setExchangeRate, disabled: readOnlyDoc })),
-                                    (showGST || invoiceOptions.showPlaceOfSupply) && (() => {
-                                        const posOpts = getStatesForCountry(profile?.country);
-                                        return (h("div", { className: "form-group" },
-                                            h("div", { className: "label-with-toggle" },
-                                                h("label", { className: "form-label" }, "Place of Supply"),
-                                                h(PrintToggle, { optKey: "showPlaceOfSupply", label: "Print", options: invoiceOptions, setOptions: setInvoiceOptions, disabled: readOnlyDoc })),
-                                            posOpts.length > 0 ? (h("select", { className: "form-input", value: details.placeOfSupply, onChange: (e) => setDetails({ ...details, placeOfSupply: e.target.value }) },
-                                                h("option", { value: "" }, isForeignClient(client, profile) ? 'Outside India (export)' : 'Defaults to Client State'),
-                                                posOpts.map(s => h("option", { key: s, value: s }, s)))) : (h("input", { type: "text", className: "form-input", value: details.placeOfSupply, onChange: (e) => setDetails({ ...details, placeOfSupply: e.target.value }), placeholder: "State / Region" }))));
-                                    })()),
-                                lutEligible && (() => {
-                                    const savedArn = normaliseLutArn(profile?.lutArn);
-                                    const invFy = fyOf(details.invoiceDate);
-                                    return (h("div", { className: `form-group full-width notice ${invoiceOptions.isLUT ? 'notice-info' : 'notice-warn'}`, style: { padding: '0.6rem 0.85rem', borderRadius: 6, display: 'block' } },
-                                        h("label", { style: { display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', cursor: 'pointer', fontSize: '0.88rem' } },
-                                            h("input", { type: "checkbox", checked: !!invoiceOptions.isLUT, disabled: readOnlyDoc, onChange: e => toggleLut(e.target.checked), style: { width: 16, height: 16, accentColor: 'var(--primary)' } }),
-                                            h("strong", null,
-                                                client?.isSEZ ? 'SEZ supply' : 'Export',
-                                                " under LUT (no IGST)"),
-                                            h(HelpButton, { title: "Exports and SEZ supplies under a LUT", doc: "invoices#lut", size: 16 })),
-                                        h("div", { style: { marginTop: '0.3rem' } },
-                                            h(PrintToggle, { optKey: "showExportDeclaration", label: "Print the declaration on the invoice", options: invoiceOptions, setOptions: setInvoiceOptions, disabled: readOnlyDoc })),
-                                        h("p", { style: { margin: '0.35rem 0 0', fontSize: '0.78rem', lineHeight: 1.5 } }, invoiceOptions.isLUT
-                                            ? h(Fragment, null,
-                                                "No IGST is charged (zero-rated). The invoice prints the Rule 46 declaration",
-                                                invoiceOptions.lutArn ? h(Fragment, null,
-                                                    " with LUT ARN ",
-                                                    h("strong", null, invoiceOptions.lutArn),
-                                                    invoiceOptions.lutFy ? ` (FY ${invoiceOptions.lutFy})` : '') : '',
-                                                ".")
-                                            : h(Fragment, null,
-                                                "IGST is charged on this ",
-                                                client?.isSEZ ? 'SEZ supply' : 'export',
-                                                " (with payment of IGST, claimed back later as a refund).")),
-                                        !savedArn && (h("p", { style: { margin: '0.35rem 0 0', fontSize: '0.78rem', lineHeight: 1.5 } },
-                                            h("strong", null, "Have a LUT?"),
-                                            " Exports and SEZ supplies under a LUT are billed without IGST, so you don't pay tax and wait for a refund. File it on the GST portal each financial year (Form GST RFD-11), then add its ARN in Settings \u2192 Company.",
-                                            h(HelpButton, { title: "LUT for exports", doc: "gst-basics#lut", size: 14 }))),
-                                        savedArn && invFy && profile?.lutFy !== invFy && (h("p", { style: { margin: '0.35rem 0 0', fontSize: '0.78rem', lineHeight: 1.5, color: 'var(--warn-text)' } },
-                                            "\u26A0 Your saved LUT is for FY ",
-                                            profile?.lutFy || '(year not set)',
-                                            ", but this invoice is dated in FY ",
-                                            invFy,
-                                            ". A LUT covers one financial year: file one for FY ",
-                                            invFy,
-                                            " on the GST portal and update it in Settings \u2192 Company."))));
-                                })(),
-                                currencyCountryMismatch({ currency: invoiceOptions.currency, client, profile }) && !readOnlyDoc && (h("div", { className: "form-group full-width notice notice-warn", style: { padding: '0.6rem 0.85rem', borderRadius: 6, display: 'block', fontSize: '0.82rem', lineHeight: 1.5 } },
-                                    h("strong", null, "Export under LUT? First set the client's country."),
-                                    " You are billing in ",
-                                    invoiceOptions.currency,
-                                    ", but ",
-                                    client?.name || 'this client',
-                                    " is saved in India, so this is billed as a sale in India: no LUT, and IGST is charged. If they are abroad, set their country. The invoice then becomes an export: the place of supply prints \"Outside India\", the LUT box appears here (no IGST, and the LUT line prints on the PDF), and your SWIFT and purpose code print.",
-                                    ' ',
-                                    h("button", { type: "button", className: "btn btn-secondary", style: { padding: '0.2rem 0.6rem', fontSize: '0.8rem', marginTop: 4 }, onClick: () => { cards.open('client'); setClientMoreOpen(true); setTimeout(() => { const el = document.getElementById('client-country'); el?.scrollIntoView({ behavior: 'smooth', block: 'center' }); el?.focus(); }, 50); } }, "Set the client's country"))),
-                                showGST && isForeignClient(client, profile) && !client?.isSEZ && !readOnlyDoc
-                                    && (profile?.country || 'India') === 'India' && getStateCode(String(details.placeOfSupply || '').trim()) && (h("div", { className: "form-group full-width notice notice-warn", style: { padding: '0.6rem 0.85rem', borderRadius: 6, display: 'block', fontSize: '0.82rem', lineHeight: 1.5 } },
-                                    h("strong", null,
-                                        "Export under LUT? Place of supply is ",
-                                        details.placeOfSupply,
-                                        "."),
+                                                h("strong", null, "Compact mode"),
+                                                h("span", { style: { display: 'block', fontSize: '0.7rem', color: 'var(--text-muted)' } }, "Tighter item rows, to save paper on long orders. Whether HSN and the quantity \u00D7 rate line print is set in Print Settings."))),
+                                        h("label", { style: { display: 'flex', alignItems: 'flex-start', gap: '0.4rem', fontSize: '0.78rem', marginTop: '0.4rem', cursor: 'pointer' } },
+                                            h("input", { type: "checkbox", checked: invoiceOptions.thermalCutMark !== false, onChange: e => setInvoiceOptions(prev => ({ ...prev, thermalCutMark: e.target.checked })), style: { marginTop: 2, accentColor: 'var(--primary)' } }),
+                                            h("span", null,
+                                                h("strong", null, "Cut mark at bottom"),
+                                                h("span", { style: { display: 'block', fontSize: '0.7rem', color: 'var(--text-muted)' } }, "Prints a CUT HERE line to tear against. Turn it off if your printer cuts the paper itself.")))))));
+                            }
+                            return (h("div", { key: section.group, style: { marginBottom: '0.6rem' } },
+                                h("div", { style: { fontSize: '0.7rem', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.3rem' } },
+                                    section.group,
                                     " ",
-                                    client?.name || 'This client',
-                                    " is in ",
-                                    client.country,
-                                    ", but the place of supply is an Indian state, so this is billed as a sale in India: no LUT, and IGST is charged. For an export, the place of supply is outside India.",
+                                    h(HelpButton, { title: section.group, doc: OPTION_GROUP_HELP[section.group], size: 16 })),
+                                h("div", { className: "options-grid" }, section.items.map(([key, label]) => {
+                                    // These default to OFF; everything else defaults to ON.
+                                    // v1.10.70 - showSystemGeneratedNote added: without it the box
+                                    // showed ticked while the invoice printed no note.
+                                    const checked = invoiceOptionOn(invoiceOptions, key);
+                                    return (h("label", { key: key, className: "option-toggle" },
+                                        h("input", { type: "checkbox", checked: checked, onChange: () => toggleOption(key) }),
+                                        h("span", null, label)));
+                                }))));
+                        }),
+                        invoiceOptionOn(invoiceOptions, 'showDeclaration') && (h("div", { className: "form-group", style: { marginTop: '0.4rem' } },
+                            h("label", { className: "form-label", style: { fontSize: '0.78rem' } }, "Declaration text"),
+                            h("textarea", { className: "form-input", rows: 2, value: invoiceOptions.declarationText ?? DEFAULT_DECLARATION, onChange: e => setInvoiceOptions(prev => ({ ...prev, declarationText: e.target.value })) }))),
+                        h("div", { style: { display: 'flex', gap: '0.5rem', marginTop: '0.4rem' } },
+                            h("button", {
+                                type: "button", className: "btn btn-secondary", onClick: () => {
+                                    const allKeys = ['showLogo', 'showBusinessName', 'showBusinessAddress', 'showBusinessPhone', 'showBusinessEmail', 'showState', 'showGSTIN', 'showClientAddress', 'showClientPhone', 'showClientEmail', 'showPlaceOfSupply', 'showInvoiceNumber', 'showInvoiceDate', 'showDueDate', 'showHSN', 'showItemQty', 'showItemUnit', 'showRateColumn', 'showDiscount', 'showGST', 'showSubtotal', 'showAmountWords', 'showRoundOff', 'showBankDetails', 'showAccountLabel', 'showUPI', 'showSignature', 'showSignatoryText', 'showTerms', 'showNotes'];
+                                    setInvoiceOptions(prev => { const out = { ...prev }; allKeys.forEach(k => { out[k] = false; }); return out; });
+                                }, style: { fontSize: '0.72rem', padding: '0.3rem 0.6rem' }
+                            }, "Hide all"),
+                            h("button", {
+                                type: "button", className: "btn btn-secondary", onClick: () => setInvoiceOptions(prev => ({
+                                    ...DEFAULT_OPTIONS,
+                                    // v1.10.33 — Preserve per-bill data that lives inside
+                                    // invoiceOptions but is NOT a "display option" the
+                                    // reset button should touch. Prior code was a raw
+                                    // setInvoiceOptions(DEFAULT_OPTIONS) which nulled
+                                    // paymentAccountSnapshot (bank details frozen at save
+                                    // time, v1.10.20 invariant) and selectedAccountId
+                                    // (the account picked for THIS bill) — so an edit-
+                                    // then-reset silently repointed the bank block to the
+                                    // legacy profile bank.
+                                    paymentAccountSnapshot: prev.paymentAccountSnapshot,
+                                    selectedAccountId: prev.selectedAccountId,
+                                })), style: { fontSize: '0.72rem', padding: '0.3rem 0.6rem' }
+                            }, "Reset to default"))))),
+                h(ClientModal, { show: showClientModal, onClose: () => setShowClientModal(false), onSave: handleClientModalSave, client: modalClient, isEditing: isEditingClient, defaultCountry: profile?.country }),
+                h("div", { className: "glass-panel p-6 mb-6" },
+                    h("div", { className: "flex justify-between items-center mb-4" },
+                        h("h3", { className: "section-title", style: { margin: 0 } },
+                            "Billed To ",
+                            h(HelpButton, { title: "Billed To", doc: "invoices#billed-to", size: 16 }))),
+                    !editingBill && clientCredit.available > 0.005 && (h("div", {
+                        style: {
+                            marginBottom: '1rem', padding: '0.75rem 1rem',
+                            background: 'rgba(3, 105, 161, 0.08)',
+                            border: '1px solid rgba(3, 105, 161, 0.3)',
+                            borderRadius: 8, fontSize: '0.85rem',
+                        }
+                    },
+                        h("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' } },
+                            h("div", null,
+                                h("strong", { style: { color: '#0369a1' } },
+                                    "\uD83D\uDCB3 Client has ",
+                                    formatCurrency(clientCredit.available, invoiceOptions.currency || 'INR'),
+                                    " credit"),
+                                h(HelpButton, { title: "Using a client's credit", doc: "invoices#client-credit", size: 16 }),
+                                h("span", { style: { color: 'var(--text-muted)', marginLeft: 8 } },
+                                    "from ",
+                                    clientCredit.sources.length,
+                                    " prior overpayment",
+                                    clientCredit.sources.length > 1 ? 's' : '',
                                     ' ',
-                                    h("button", { type: "button", className: "btn btn-secondary", style: { padding: '0.2rem 0.6rem', fontSize: '0.8rem', marginTop: 4 }, onClick: () => setDetails({ ...details, placeOfSupply: '' }) }, "Make it an export"))),
-                                !showGST && INVOICE_TYPES[invoiceType]?.showGST && profile?.gstin && (profile?.country || 'India') === 'India'
-                                    && (isForeignClient(client, profile) || client?.isSEZ) && !readOnlyDoc && (h("div", { className: "form-group full-width notice notice-warn", style: { padding: '0.6rem 0.85rem', borderRadius: 6, display: 'block', fontSize: '0.82rem', lineHeight: 1.5 } },
-                                    h("strong", null, "Export under LUT? GST is turned off on this invoice."),
-                                    " Without it (Customize \u2192 Charge GST on this invoice), there is no LUT box and the LUT line is not printed. A GST-registered business needs it on an export or SEZ invoice; under the LUT the tax is still 0.",
-                                    ' ',
-                                    h("button", { type: "button", className: "btn btn-secondary", style: { padding: '0.2rem 0.6rem', fontSize: '0.8rem', marginTop: 4 }, onClick: () => setInvoiceOptions(prev => ({ ...prev, showGST: true, showPlaceOfSupply: true })) }, "Turn GST on"))),
-                                invoiceType === 'credit-note' && (h("div", { className: "form-group full-width" },
-                                    h("label", { className: "form-label" }, "Original Invoice Reference"),
-                                    h("input", { type: "text", className: "form-input", value: details.originalInvoiceRef, onChange: (e) => setDetails({ ...details, originalInvoiceRef: e.target.value }), placeholder: "e.g. INV/2025-26/0001" }))),
-                                (() => {
-                                    const filled = ORDER_DETAIL_FIELDS.filter(f => String(details[f.key] || '').trim()).length
-                                        + customFieldsOf(details).filter(f => f.label && f.value).length;
-                                    const ownFieldNames = savedCustomLabels().length > 0; // #126: open when the user has their own fields
-                                    // v1.10.83 - a services invoice has no vehicle or dispatch; those
-                                    // boxes show only if one is already filled.
-                                    const fields = ORDER_DETAIL_FIELDS.filter(f => !servicesMode || !GOODS_ONLY_DETAILS.includes(f.key) || String(details[f.key] || '').trim());
-                                    const periodBackwards = details.periodFrom && details.periodTo && details.periodTo < details.periodFrom;
-                                    const hasAccounts = getActiveAccounts(profile).length > 0;
-                                    const said = [
-                                        filled > 0 && `${filled} order / dispatch detail${filled === 1 ? '' : 's'}`,
-                                        ccOn && details.costCentreName && `cost centre ${details.costCentreName}`,
-                                        details.ecoGstin && 'e-commerce operator GSTIN',
-                                        invoiceOptions.purposeCode && `purpose code ${invoiceOptions.purposeCode}`,
-                                        hasAccounts && invoiceOptions.showBankDetails === false && 'bank details not printed',
-                                        hasAccounts && invoiceOptions.showUPI === false && 'UPI QR not printed',
-                                    ].filter(Boolean).join(' · ');
-                                    return (h("div", { className: "form-group full-width" },
-                                        h(FoldSection, { title: "More invoice details", defaultOpen: ownFieldNames, testId: "more-invoice-details", help: h(HelpButton, { title: "Order, dispatch and reference details", doc: "invoices#order-details", size: 16 }), summary: said || (servicesMode ? "client's PO no, service period, work details" : "buyer's order no, vehicle no, service period, payment details") },
-                                            h("div", { className: "grid grid-cols-2 gap-3" },
-                                                hasAccounts && (h("div", { className: "form-group full-width" },
-                                                    h("div", { className: "label-with-toggle" },
-                                                        h("label", { className: "form-label" }, "Payment details on the invoice"),
-                                                        h("span", null,
-                                                            h(PrintToggle, { optKey: "showBankDetails", label: "Bank details", options: invoiceOptions, setOptions: setInvoiceOptions, disabled: readOnlyDoc }),
-                                                            h(PrintToggle, { optKey: "showUPI", label: "UPI QR", options: invoiceOptions, setOptions: setInvoiceOptions, disabled: readOnlyDoc }))))),
-                                                ccOn && (h("div", { className: "form-group" },
-                                                    h("label", { className: "form-label", htmlFor: "cost-centre" }, "Cost centre"),
-                                                    h(CostCentreSelect, { centres: centres, value: details.costCentre || '', name: details.costCentreName || '', onChange: (id, name) => setDetails((prev) => {
-                                                            const { costCentre: _id, costCentreName: _name, ...rest } = prev;
-                                                            return { ...rest, ...centreFields(id, name) };
-                                                        }) }))),
-                                                (isForeignClient(client, profile) || (invoiceOptions.currency || baseCurrency) !== baseCurrency) && baseCurrency === 'INR' && (() => {
-                                                    const accountCode = getAccountById(profile, invoiceOptions.selectedAccountId)?.purposeCode || '';
-                                                    return (h("div", { className: "form-group" },
-                                                        h("label", { className: "form-label", htmlFor: "purpose-code" },
-                                                            "Purpose code (RBI) ",
-                                                            h(HelpButton, { title: "Purpose codes", doc: "settings#paid-from-abroad", size: 14 })),
-                                                        h(ComboInput, { id: "purpose-code", type: "text", className: "form-input", options: PURPOSE_CODE_OPTIONS, listLabel: "Purpose codes", disabled: readOnlyDoc, value: invoiceOptions.purposeCode || '', onChange: (e) => setInvoiceOptions(prev => ({ ...prev, purposeCode: e.target.value.toUpperCase().trim() })), placeholder: accountCode ? `${accountCode} (from your bank account)` : 'e.g. P0802 software, P1006 consulting' })));
-                                                })(),
-                                                ['tax-invoice', 'credit-note'].includes(invoiceType) && (profile?.country || 'India') === 'India' && (() => {
-                                                    const eco = details.ecoGstin || '';
-                                                    const ok = !eco || decodeGstin(eco)?.checksumOk;
-                                                    return (h("div", { className: "form-group" },
-                                                        h("label", { className: "form-label", htmlFor: "eco-gstin", style: { fontSize: '0.78rem' } },
-                                                            "E-commerce operator GSTIN ",
-                                                            h(HelpButton, { title: "E-commerce operator GSTIN", doc: "gst-returns#table-14", size: 14 })),
-                                                        h("input", { id: "eco-gstin", type: "text", className: "form-input", maxLength: 15, value: eco, placeholder: "Only for a sale through Flipkart, Amazon...", style: ok ? undefined : { borderColor: '#f59e0b' }, onChange: e => setDetails({ ...details, ecoGstin: e.target.value.toUpperCase().replace(/[^0-9A-Z]/g, '') }) }),
-                                                        !ok && (h("small", { style: { color: '#d97706', fontSize: '0.7rem', display: 'block', marginTop: '0.2rem' } },
-                                                            "\u26A0 ",
-                                                            eco.length !== 15 ? 'A GSTIN has 15 letters and digits.' : 'This GSTIN fails its own checksum. Check for a typo.'))));
-                                                })(),
-                                                fields.map(f => (h("div", { key: f.key, className: `form-group${f.wide ? ' full-width' : ''}` },
-                                                    h("label", { className: "form-label", style: { fontSize: '0.78rem' } }, f.label),
-                                                    h("input", { type: f.type || 'text', className: "form-input", value: details[f.key] || '', placeholder: f.placeholder || '', onChange: e => setDetails({ ...details, [f.key]: e.target.value }) }))))),
-                                            h(CustomFields, { details: details, setDetails: setDetails }),
-                                            periodBackwards && (h("p", { style: { margin: '0.4rem 0 0', fontSize: '0.78rem', color: 'var(--warn-text, #b45309)' } }, "\u26A0 The service period ends before it starts. Check the two dates.")))));
-                                })())));
-                    // v1.10.86 (#147, #189) - Terms, notes, the private note and extra
-                    // pages: each opens on click and, while closed, says what is in it
-                    // ("Standard (5 lines)"). Nothing in them moved or changed.
-                    // v1.10.86 - the card around them has a title and closes too.
-                    if (cardId === 'terms')
-                        return (h(InvoiceCard, { key: "terms", id: "terms", cards: cards, title: "Terms & notes", summary: cardSummary.terms, help: h(HelpButton, { title: "Terms & Conditions", doc: "invoices#terms-notes", size: 16 }) },
-                            h(FoldSection, { title: "Terms & Conditions", testId: "fold-terms", help: h(HelpButton, { title: "Terms & Conditions", doc: "invoices#terms-notes", size: 16 }), summary: termsLines ? `${termsName} (${termsLines} line${termsLines === 1 ? '' : 's'})${notPrinted('showTerms')}` : 'none' },
-                                h("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.75rem' } },
-                                    h(PrintToggle, { optKey: "showTerms", label: "Print on invoice", options: invoiceOptions, setOptions: setInvoiceOptions, disabled: readOnlyDoc }),
-                                    h("div", { style: { display: 'flex', gap: '0.35rem', alignItems: 'center' } },
-                                        h("span", { style: { fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 } },
-                                            "PDF layout ",
-                                            h(HelpButton, { title: "PDF layout: Compact or Formatted", doc: "invoices#terms-layout", size: 16 })),
-                                        [
-                                            { id: 'compact', label: 'Compact', hint: 'Tiny footer text — saves paper' },
-                                            { id: 'formatted', label: 'Formatted', hint: 'Larger readable paragraphs' },
-                                        ].map(mode => {
-                                            // v1.10.74 - same rule InvoicePreview prints with: per-invoice
-                                            // choice, then Print Settings, then services -> formatted.
-                                            const effectiveMode = invoiceOptions.termsFormatMode || _psPrintForRates.termsFormatMode
-                                                || ((invoiceOptions.invoiceMode || 'goods') === 'services' ? 'formatted' : 'compact');
-                                            const active = effectiveMode === mode.id;
-                                            return (h("button", { key: mode.id, type: "button", onClick: () => setInvoiceOptions(prev => ({ ...prev, termsFormatMode: mode.id })), title: mode.hint, style: {
-                                                    fontSize: '0.72rem', fontWeight: 600,
-                                                    padding: '0.28rem 0.65rem', borderRadius: 999,
-                                                    background: active
-                                                        ? 'linear-gradient(135deg, var(--primary), var(--primary-darker))'
-                                                        : 'var(--bg-secondary)',
-                                                    color: active ? '#fff' : 'var(--text)',
-                                                    border: active ? '1px solid transparent' : '1px solid var(--border)',
-                                                    cursor: 'pointer', transition: 'all 0.15s',
-                                                } }, mode.label));
-                                        }))),
-                                h("div", { style: { display: 'grid', gridTemplateColumns: termsTemplates.length > 0 ? '1fr 1fr' : '1fr', gap: '0.75rem', marginBottom: '0.5rem' } },
-                                    h("div", { className: "form-group", style: { marginBottom: 0 } },
-                                        h("label", { className: "form-label" }, "Insert preset (by business type)"),
-                                        h("select", { className: "form-input", defaultValue: "", onChange: async (e) => {
-                                                if (!e.target.value)
-                                                    return;
-                                                const preset = TERMS_PRESETS.find(p => p.id === e.target.value);
-                                                if (!preset)
-                                                    return;
-                                                // P2 #33 — "never ask again" via sessionStorage flag.
-                                                // Users iterating through 3 presets to compare shouldn't
-                                                // see 3 confirm dialogs. Ask once per session; subsequent
-                                                // presets swap silently until they close the tab.
-                                                if (htmlHasText(customTerms)) {
-                                                    const skipConfirm = sessionStorage.getItem('gst_termsPresetConfirmed') === '1';
-                                                    if (!skipConfirm) {
-                                                        const proceed = await confirmAction({
-                                                            title: 'Replace current Terms?',
-                                                            message: 'Your existing Terms text will be lost. Subsequent preset swaps this session will happen silently — this confirmation is shown once.',
-                                                            confirmLabel: 'Replace',
-                                                            tone: 'warning',
-                                                        });
-                                                        if (!proceed) {
-                                                            e.target.value = '';
-                                                            return;
-                                                        }
-                                                        try {
-                                                            sessionStorage.setItem('gst_termsPresetConfirmed', '1');
-                                                        }
-                                                        catch { /* ignore */ }
-                                                    }
-                                                }
-                                                setCustomTerms(preset.body);
-                                                setSelectedTermsId('');
+                                    "(",
+                                    clientCredit.sources.map(s => s.invoiceNumber).slice(0, 3).join(', '),
+                                    clientCredit.sources.length > 3 ? '…' : '',
+                                    ")")),
+                            h("div", { style: { display: 'flex', gap: '0.4rem', alignItems: 'center' } },
+                                h("input", {
+                                    type: "number", min: "0", step: "any", className: "form-input", value: creditToApply || '', placeholder: "0", onChange: e => {
+                                        const v = Math.max(0, Number(e.target.value) || 0);
+                                        const cap = Math.min(clientCredit.available, Number(totals.total) || Infinity);
+                                        setCreditToApply(Math.min(v, cap));
+                                    }, style: { width: 100, fontSize: '0.82rem', padding: '0.3rem 0.5rem' }
+                                }),
+                                h("button", { type: "button", className: "btn btn-secondary", style: { fontSize: '0.78rem', padding: '0.3rem 0.6rem' }, onClick: () => setCreditToApply(Math.min(clientCredit.available, Number(totals.total) || 0)) }, "Apply full"),
+                                creditToApply > 0 && (h("button", { type: "button", className: "btn btn-secondary", style: { fontSize: '0.78rem', padding: '0.3rem 0.6rem', color: '#dc2626', borderColor: '#fca5a5' }, onClick: () => setCreditToApply(0) }, "Skip")))),
+                        creditToApply > 0.005 && (h("div", { style: { marginTop: 6, fontSize: '0.78rem', color: '#0369a1' } },
+                            "\u2192 Will apply ",
+                            formatCurrency(creditToApply, invoiceOptions.currency || 'INR'),
+                            " as advance from prior overpayment",
+                            creditToApply < clientCredit.available ? ` (${formatCurrency(clientCredit.available - creditToApply, invoiceOptions.currency || 'INR')} credit will remain)` : '',
+                            ".")),
+                        h("label", { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, fontSize: '0.72rem', color: 'var(--text-muted)' } },
+                            h("input", { type: "checkbox", checked: !!invoiceOptions.autoApplyClientCredit, onChange: e => setInvoiceOptions(prev => ({ ...prev, autoApplyClientCredit: e.target.checked })) }),
+                            "Auto-apply available client credit on future invoices"))),
+                    h("div", { className: "grid grid-cols-2 gap-4" },
+                        h("div", { className: "form-group full-width", style: { position: 'relative' } },
+                            h("label", { className: "form-label" }, "Client Name"),
+                            h("div", { style: { display: 'flex', gap: '0.4rem' } },
+                                h("input", {
+                                    type: "text", className: "form-input", style: { flex: 1 }, value: client.name, ref: clientNameRef, onChange: (e) => {
+                                        setClient({ ...client, name: e.target.value });
+                                        setSelectedClientId(null);
+                                        setShowClientSuggestions(true);
+                                        setClientPickerIdx(-1);
+                                    }, onFocus: () => {
+                                        if (savedClients.length > 0)
+                                            setShowClientSuggestions(true);
+                                    }, onKeyDown: (e) => {
+                                        // v1.10.37 — Arrow keys / Enter / Escape on the client
+                                        // picker. Reported: "20 invoices/day forces mouse on
+                                        // the client autocomplete." Now: keyboard-only path.
+                                        if (!showClientSuggestions || !filteredClients.length)
+                                            return;
+                                        if (e.key === 'ArrowDown') {
+                                            e.preventDefault();
+                                            setClientPickerIdx(i => (i + 1) % filteredClients.length);
+                                        }
+                                        else if (e.key === 'ArrowUp') {
+                                            e.preventDefault();
+                                            setClientPickerIdx(i => (i <= 0 ? filteredClients.length - 1 : i - 1));
+                                        }
+                                        else if (e.key === 'Enter') {
+                                            // Only intercept Enter when the user has actually
+                                            // arrow-nav'd to a suggestion; otherwise let Enter
+                                            // fall through to the form for the "Add new client"
+                                            // path via openAddClientModal.
+                                            if (clientPickerIdx >= 0 && filteredClients[clientPickerIdx]) {
+                                                e.preventDefault();
+                                                selectSavedClient(filteredClients[clientPickerIdx]);
+                                            }
+                                        }
+                                        else if (e.key === 'Escape') {
+                                            setShowClientSuggestions(false);
+                                        }
+                                    }, placeholder: "Type client name to search or add new", autoComplete: "off"
+                                }),
+                                selectedClientId && (h("button", { type: "button", className: "btn-client-edit", onClick: () => openEditClientModal(savedClients.find(c => c.id === selectedClientId)), title: "Edit saved client" },
+                                    h(Pencil, { size: 14 })))),
+                            showClientSuggestions && savedClients.length > 0 && (h("div", { className: "client-suggestions", ref: clientSuggestionsRef },
+                                filteredClients.length > 0 && filteredClients.map((cli, i) => (h("div", { key: cli.id, className: "client-suggestion-row", style: i === clientPickerIdx ? { background: 'var(--primary-light, rgba(30,64,175,0.12))' } : undefined },
+                                    h("button", { type: "button", className: "client-suggestion-item", onMouseEnter: () => setClientPickerIdx(i), onClick: () => selectSavedClient(cli) },
+                                        h("div", { className: "client-suggestion-main" },
+                                            h("strong", null, cli.name),
+                                            (cli.city || cli.address) && h("small", { className: "client-suggestion-addr" },
+                                                cli.city || cli.address.substring(0, 30),
+                                                !cli.city && cli.address.length > 30 ? '...' : '')),
+                                        h("span", null,
+                                            cli.state,
+                                            cli.gstin ? ` · ${cli.gstin}` : '')),
+                                    h("button", { type: "button", className: "client-suggestion-edit", onClick: () => { openEditClientModal(cli); setShowClientSuggestions(false); }, title: "Edit client" },
+                                        h(Pencil, { size: 12 }))))),
+                                client.name.trim() && (h("button", { type: "button", className: "client-suggestion-save", onClick: openAddClientModal },
+                                    h(UserPlus, { size: 14 }),
+                                    " Save \"",
+                                    client.name.trim(),
+                                    "\" as new client")),
+                                filteredClients.length === 0 && !client.name.trim() && (h("div", { className: "client-picker-empty" }, "Type to search clients"))))),
+                        h("div", { className: "form-group full-width" },
+                            h("label", { className: "form-label" }, "Billing Address"),
+                            h("input", { type: "text", className: "form-input", value: client.address, onChange: (e) => setClient({ ...client, address: e.target.value }), placeholder: "Street address, locality" })),
+                        h("div", { className: "form-group" },
+                            h("label", { className: "form-label", htmlFor: "client-country" }, "Country"),
+                            h("select", {
+                                id: "client-country", className: "form-input", value: client.country || profile?.country || 'India', onChange: (e) => {
+                                    setClient({ ...client, country: e.target.value, state: '' });
+                                    // v1.10.83 - a client abroad: their currency, on a new invoice.
+                                    if (!editingSaved)
+                                        setCurrency(currencyForClient({ country: e.target.value }, profile, { lastForeign: invoiceOptions.lastForeignCurrency }));
+                                }
+                            }, (() => {
+                                const visible = getCountriesForRegion(getRegionMode());
+                                const cur = client.country || profile?.country;
+                                const out = [];
+                                if (cur && !visible.some(c => c.name === cur)) {
+                                    out.push(h("option", { key: cur, value: cur }, cur));
+                                }
+                                return out.concat(visible.map(c => h("option", { key: c.code, value: c.name }, c.name)));
+                            })())),
+                        h("div", { className: "form-group" },
+                            h("label", { className: "form-label" }, "City"),
+                            h("input", { type: "text", className: "form-input", value: client.city, onChange: (e) => setClient({ ...client, city: e.target.value }), placeholder: "e.g. Mumbai" })),
+                        h("div", { className: "form-group" },
+                            (() => { const cc = getCountryConfig(client.country || profile?.country); return h("label", { className: "form-label" }, cc.postalLabel); })(),
+                            h("input", { type: "text", className: "form-input", value: client.pin, onChange: (e) => setClient({ ...client, pin: e.target.value }), placeholder: "Postal / PIN code" })),
+                        invoiceOptions.showState && (() => {
+                            const cc = getCountryConfig(client.country || profile?.country);
+                            const stateOpts = getStatesForCountry(client.country || profile?.country);
+                            return (h("div", { className: "form-group" },
+                                h("label", { className: "form-label" }, cc.stateLabel),
+                                stateOpts.length > 0 ? (h("select", { className: "form-input", value: client.state, onChange: (e) => setClient({ ...client, state: e.target.value }) },
+                                    h("option", { value: "" },
+                                        "Select ",
+                                        cc.stateLabel),
+                                    stateOpts.map(s => h("option", { key: s, value: s }, s)))) : (h("input", { type: "text", className: "form-input", value: client.state, onChange: (e) => setClient({ ...client, state: e.target.value }), placeholder: cc.stateLabel }))));
+                        })(),
+                        invoiceOptions.showGSTIN && (() => {
+                            const cc = getCountryConfig(client.country || profile?.country);
+                            return (h("div", { className: "form-group" },
+                                h("label", { className: "form-label" }, cc.taxIdLabel),
+                                h("input", {
+                                    type: "text", className: "form-input", value: client.gstin,
+                                    // v1.10.74 - drop the old hint on edit; it is re-checked on blur.
+                                    onChange: (e) => { setClient({ ...client, gstin: e.target.value.toUpperCase() }); setGstinHint(null); }, onBlur: handleClientGstinBlur, placeholder: "Optional", maxLength: 20
+                                }),
+                                gstinHint && (h("small", { style: { color: gstinHint.tone === 'warn' ? '#d97706' : '#16a34a', fontSize: '0.7rem', display: 'block', marginTop: '0.2rem' } },
+                                    gstinHint.tone === 'warn' ? '⚠' : '✓',
+                                    " ",
+                                    gstinHint.message,
+                                    h(HelpButton, { title: "What the GSTIN check tells you", doc: "invoices#gstin-check", size: 16 })))));
+                        })())),
+                h("div", { className: "glass-panel p-6 mb-6" },
+                    h("h3", { className: "section-title" },
+                        "Invoice Details ",
+                        h(HelpButton, { title: "Invoice Details", doc: "invoices#details", size: 16 })),
+                    h("div", { className: "grid grid-cols-2 gap-4" },
+                        h("div", { className: "form-group" },
+                            h("label", { className: "form-label" }, "Invoice Number"),
+                            h("input", { type: "text", className: "form-input", value: details.invoiceNumber, onChange: (e) => setDetails({ ...details, invoiceNumber: e.target.value }) })),
+                        h("div", { className: "form-group" },
+                            h("label", { className: "form-label" }, "Invoice Date"),
+                            h("input", { type: "date", className: "form-input", value: details.invoiceDate, onChange: (e) => setDetails({ ...details, invoiceDate: e.target.value }) })),
+                        h("div", { className: "form-group" },
+                            h("label", { className: "form-label" }, "Due Date"),
+                            h("input", { type: "date", className: "form-input", value: details.dueDate, onChange: (e) => setDetails({ ...details, dueDate: e.target.value }) }),
+                            h("div", { style: { display: 'flex', gap: '0.3rem', marginTop: '0.3rem', flexWrap: 'wrap', alignItems: 'center' } },
+                                h("span", { style: { fontSize: '0.72rem', color: 'var(--text-muted)' } }, "Due in"),
+                                [7, 15, 30].map(n => (h("button", {
+                                    key: n, type: "button", className: "btn btn-secondary", style: { fontSize: '0.7rem', padding: '0.1rem 0.45rem' }, onClick: () => {
+                                        const d = parseLocalDate(details.invoiceDate || localToday());
+                                        setDetails({ ...details, dueDate: toLocalIsoDate(new Date(d.getFullYear(), d.getMonth(), d.getDate() + n)) });
+                                    }
+                                },
+                                    n,
+                                    " days"))))),
+                        (getRegionMode() !== 'india' || isForeignClient(client, profile) || (invoiceOptions.currency || baseCurrency) !== baseCurrency) && (h(InvoiceCurrency, { options: invoiceOptions, baseCurrency: baseCurrency, regionMode: getRegionMode(), invoiceDate: details.invoiceDate, total: totals.total, onCurrency: setCurrency, onRate: setExchangeRate, disabled: readOnlyDoc })),
+                        ccOn && (h("div", { className: "form-group" },
+                            h("label", { className: "form-label", htmlFor: "cost-centre" }, "Cost centre"),
+                            h(CostCentreSelect, {
+                                centres: centres, value: details.costCentre || '', name: details.costCentreName || '', onChange: (id, name) => setDetails((prev) => {
+                                    const { costCentre: _id, costCentreName: _name, ...rest } = prev;
+                                    return { ...rest, ...centreFields(id, name) };
+                                })
+                            }))),
+                        lutEligible && (() => {
+                            const savedArn = normaliseLutArn(profile?.lutArn);
+                            const invFy = fyOf(details.invoiceDate);
+                            return (h("div", { className: `form-group full-width notice ${invoiceOptions.isLUT ? 'notice-info' : 'notice-warn'}`, style: { padding: '0.6rem 0.85rem', borderRadius: 6, display: 'block' } },
+                                h("label", { style: { display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', cursor: 'pointer', fontSize: '0.88rem' } },
+                                    h("input", { type: "checkbox", checked: !!invoiceOptions.isLUT, disabled: readOnlyDoc, onChange: e => toggleLut(e.target.checked), style: { width: 16, height: 16, accentColor: 'var(--primary)' } }),
+                                    h("strong", null,
+                                        client?.isSEZ ? 'SEZ supply' : 'Export',
+                                        " under LUT (no IGST)"),
+                                    h(HelpButton, { title: "Exports and SEZ supplies under a LUT", doc: "invoices#lut", size: 16 })),
+                                h("p", { style: { margin: '0.35rem 0 0', fontSize: '0.78rem', lineHeight: 1.5 } }, invoiceOptions.isLUT
+                                    ? h(Fragment, null,
+                                        "No IGST is charged (zero-rated). The invoice prints the Rule 46 declaration",
+                                        invoiceOptions.lutArn ? h(Fragment, null,
+                                            " with LUT ARN ",
+                                            h("strong", null, invoiceOptions.lutArn),
+                                            invoiceOptions.lutFy ? ` (FY ${invoiceOptions.lutFy})` : '') : '',
+                                        ".")
+                                    : h(Fragment, null,
+                                        "IGST is charged on this ",
+                                        client?.isSEZ ? 'SEZ supply' : 'export',
+                                        " (with payment of IGST, claimed back later as a refund).")),
+                                !savedArn && (h("p", { style: { margin: '0.35rem 0 0', fontSize: '0.78rem', lineHeight: 1.5 } },
+                                    h("strong", null, "Have a LUT?"),
+                                    " Exports and SEZ supplies under a LUT are billed without IGST, so you don't pay tax and wait for a refund. File it on the GST portal without a filing fee each financial year (Form GST RFD-11), then add its ARN in Settings \u2192 Company.",
+                                    h(HelpButton, { title: "LUT for exports", doc: "gst-basics#lut", size: 14 }))),
+                                savedArn && invFy && profile?.lutFy !== invFy && (h("p", { style: { margin: '0.35rem 0 0', fontSize: '0.78rem', lineHeight: 1.5, color: 'var(--warn-text)' } },
+                                    "\u26A0 Your saved LUT is for FY ",
+                                    profile?.lutFy || '(year not set)',
+                                    ", but this invoice is dated in FY ",
+                                    invFy,
+                                    ". A LUT covers one financial year: file one for FY ",
+                                    invFy,
+                                    " on the GST portal and update it in Settings \u2192 Company."))));
+                        })(),
+                        (invoiceOptions.currency || baseCurrency) !== baseCurrency && baseCurrency === 'INR'
+                        && !isForeignClient(client, profile) && !client?.isSEZ && !readOnlyDoc && (h("div", { className: "form-group full-width notice notice-warn", style: { padding: '0.6rem 0.85rem', borderRadius: 6, display: 'block', fontSize: '0.82rem', lineHeight: 1.5 } },
+                            h("strong", null, "Export under LUT? First set the client's country."),
+                            " You are billing in ",
+                            invoiceOptions.currency,
+                            ", but ",
+                            client?.name || 'this client',
+                            " is saved in India, so this is billed as a sale in India: no LUT, and IGST is charged. If they are abroad, set their country. The invoice then becomes an export: the place of supply prints \"Outside India\", the LUT box appears here (no IGST, and the LUT line prints on the PDF), and your SWIFT and purpose code print.",
+                            ' ',
+                            h("button", { type: "button", className: "btn btn-secondary", style: { padding: '0.2rem 0.6rem', fontSize: '0.8rem', marginTop: 4 }, onClick: () => { const el = document.getElementById('client-country'); el?.scrollIntoView({ behavior: 'smooth', block: 'center' }); el?.focus(); } }, "Set the client's country"))),
+                        showGST && isForeignClient(client, profile) && !client?.isSEZ && !readOnlyDoc
+                        && (profile?.country || 'India') === 'India' && getStateCode(String(details.placeOfSupply || '').trim()) && (h("div", { className: "form-group full-width notice notice-warn", style: { padding: '0.6rem 0.85rem', borderRadius: 6, display: 'block', fontSize: '0.82rem', lineHeight: 1.5 } },
+                            h("strong", null,
+                                "Export under LUT? Place of supply is ",
+                                details.placeOfSupply,
+                                "."),
+                            " ",
+                            client?.name || 'This client',
+                            " is in ",
+                            client.country,
+                            ", but the place of supply is an Indian state, so this is billed as a sale in India: no LUT, and IGST is charged. For an export, the place of supply is outside India.",
+                            ' ',
+                            h("button", { type: "button", className: "btn btn-secondary", style: { padding: '0.2rem 0.6rem', fontSize: '0.8rem', marginTop: 4 }, onClick: () => setDetails({ ...details, placeOfSupply: '' }) }, "Make it an export"))),
+                        !showGST && INVOICE_TYPES[invoiceType]?.showGST && profile?.gstin && (profile?.country || 'India') === 'India'
+                        && (isForeignClient(client, profile) || client?.isSEZ) && !readOnlyDoc && (h("div", { className: "form-group full-width notice notice-warn", style: { padding: '0.6rem 0.85rem', borderRadius: 6, display: 'block', fontSize: '0.82rem', lineHeight: 1.5 } },
+                            h("strong", null, "Export under LUT? GST is turned off on this invoice."),
+                            " Without it (Customize \u2192 Tax % column), there is no LUT box and the LUT line is not printed. A GST-registered business needs it on an export or SEZ invoice; under the LUT the tax is still 0.",
+                            ' ',
+                            h("button", { type: "button", className: "btn btn-secondary", style: { padding: '0.2rem 0.6rem', fontSize: '0.8rem', marginTop: 4 }, onClick: () => setInvoiceOptions(prev => ({ ...prev, showGST: true, showPlaceOfSupply: true })) }, "Turn GST on"))),
+                        (isForeignClient(client, profile) || (invoiceOptions.currency || baseCurrency) !== baseCurrency) && baseCurrency === 'INR' && (() => {
+                            const accountCode = getAccountById(profile, invoiceOptions.selectedAccountId)?.purposeCode || '';
+                            return (h("div", { className: "form-group" },
+                                h("label", { className: "form-label", htmlFor: "purpose-code" },
+                                    "Purpose code (RBI) ",
+                                    h(HelpButton, { title: "Purpose codes", doc: "settings#paid-from-abroad", size: 14 })),
+                                h("input", { id: "purpose-code", type: "text", className: "form-input", list: "purpose-codes-inv", disabled: readOnlyDoc, value: invoiceOptions.purposeCode || '', onChange: (e) => setInvoiceOptions(prev => ({ ...prev, purposeCode: e.target.value.toUpperCase().trim() })), placeholder: accountCode ? `${accountCode} (from your bank account)` : 'e.g. P0802 software, P1006 consulting' }),
+                                h("datalist", { id: "purpose-codes-inv" }, PURPOSE_CODES.map(p => h("option", { key: p.code, value: p.code }, `${p.code} - ${p.label}`)))));
+                        })(),
+                        invoiceOptions.showPlaceOfSupply && (() => {
+                            const posOpts = getStatesForCountry(profile?.country);
+                            return (h("div", { className: "form-group" },
+                                h("label", { className: "form-label" }, "Place of Supply"),
+                                posOpts.length > 0 ? (h("select", { className: "form-input", value: details.placeOfSupply, onChange: (e) => setDetails({ ...details, placeOfSupply: e.target.value }) },
+                                    h("option", { value: "" }, isForeignClient(client, profile) ? 'Outside India (export)' : 'Defaults to Client State'),
+                                    posOpts.map(s => h("option", { key: s, value: s }, s)))) : (h("input", { type: "text", className: "form-input", value: details.placeOfSupply, onChange: (e) => setDetails({ ...details, placeOfSupply: e.target.value }), placeholder: "State / Region" }))));
+                        })(),
+                        invoiceType === 'credit-note' && (h("div", { className: "form-group full-width" },
+                            h("label", { className: "form-label" }, "Original Invoice Reference"),
+                            h("input", { type: "text", className: "form-input", value: details.originalInvoiceRef, onChange: (e) => setDetails({ ...details, originalInvoiceRef: e.target.value }), placeholder: "e.g. INV/2025-26/0001" }))),
+                        (!servicesMode || details.shipToSameAsBilling === false) && h("div", { className: "form-group full-width", style: { marginTop: '0.5rem', padding: '0.6rem 0.85rem', background: 'var(--bg-secondary)', borderRadius: 6 } },
+                            h("label", { style: { display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', fontSize: '0.88rem' } },
+                                h("input", { type: "checkbox", checked: details.shipToSameAsBilling !== false, onChange: e => setDetails({ ...details, shipToSameAsBilling: e.target.checked }), style: { width: 16, height: 16, accentColor: 'var(--primary)' } }),
+                                h("span", null,
+                                    h("strong", null, "Ship to"),
+                                    " same as bill-to address ",
+                                    h(HelpButton, { title: "Ship to", doc: "invoices#ship-to", size: 16 }))),
+                            details.shipToSameAsBilling === false && (h("div", { className: "grid grid-cols-2 gap-3", style: { marginTop: '0.6rem' } },
+                                h("div", { className: "form-group full-width" },
+                                    h("label", { className: "form-label", style: { fontSize: '0.78rem' } }, "Shipping Address"),
+                                    h("textarea", { className: "form-input", rows: 2, value: details.shippingAddress || '', onChange: e => setDetails({ ...details, shippingAddress: e.target.value }), placeholder: "Delivery address / warehouse / consignee location" })),
+                                h("div", { className: "form-group" },
+                                    h("label", { className: "form-label", style: { fontSize: '0.78rem' } }, "Shipping City"),
+                                    h("input", { type: "text", className: "form-input", value: details.shippingCity || '', onChange: e => setDetails({ ...details, shippingCity: e.target.value }) })),
+                                h("div", { className: "form-group" },
+                                    h("label", { className: "form-label", style: { fontSize: '0.78rem' } }, "Shipping PIN"),
+                                    h("input", { type: "text", className: "form-input", value: details.shippingPin || '', onChange: e => setDetails({ ...details, shippingPin: e.target.value }), placeholder: "6-digit PIN", maxLength: 6 })),
+                                h("div", { className: "form-group full-width" },
+                                    h("label", { className: "form-label", style: { fontSize: '0.78rem' } }, "Shipping State"),
+                                    (() => {
+                                        const posOpts = getStatesForCountry(profile?.country);
+                                        return posOpts.length > 0 ? (h("select", { className: "form-input", value: details.shippingState || '', onChange: e => setDetails({ ...details, shippingState: e.target.value }) },
+                                            h("option", { value: "" }, "Same as billing state"),
+                                            posOpts.map(s => h("option", { key: s, value: s }, s)))) : (h("input", { type: "text", className: "form-input", value: details.shippingState || '', onChange: e => setDetails({ ...details, shippingState: e.target.value }), placeholder: "Delivery state / region" }));
+                                    })())))),
+                        (() => {
+                            const filled = ORDER_DETAIL_FIELDS.filter(f => String(details[f.key] || '').trim()).length;
+                            // v1.10.83 - a services invoice has no vehicle or dispatch; those
+                            // boxes show only if one is already filled.
+                            const fields = ORDER_DETAIL_FIELDS.filter(f => !servicesMode || !GOODS_ONLY_DETAILS.includes(f.key) || String(details[f.key] || '').trim());
+                            const periodBackwards = details.periodFrom && details.periodTo && details.periodTo < details.periodFrom;
+                            return (h("details", { className: "form-group full-width", open: filled > 0 || undefined, style: { padding: '0.6rem 0.85rem', background: 'var(--bg-secondary)', borderRadius: 6 } },
+                                h("summary", { style: { cursor: 'pointer', fontSize: '0.88rem', userSelect: 'none' } },
+                                    h("strong", null, "Order, dispatch & reference details"),
+                                    h(HelpButton, { title: "Order, dispatch and reference details", doc: "invoices#order-details", size: 16 }),
+                                    h("span", { style: { color: 'var(--text-muted)' } },
+                                        " (optional",
+                                        filled ? `, ${filled} filled` : '',
+                                        ") - ",
+                                        servicesMode ? "client's PO no, service period, work details" : "buyer's order no, vehicle no, service period, work details")),
+                                h("div", { className: "grid grid-cols-2 gap-3", style: { marginTop: '0.6rem' } }, fields.map(f => (h("div", { key: f.key, className: `form-group${f.wide ? ' full-width' : ''}` },
+                                    h("label", { className: "form-label", style: { fontSize: '0.78rem' } }, f.label),
+                                    h("input", { type: f.type || 'text', className: "form-input", value: details[f.key] || '', placeholder: f.placeholder || '', onChange: e => setDetails({ ...details, [f.key]: e.target.value }) }))))),
+                                periodBackwards && (h("p", { style: { margin: '0.4rem 0 0', fontSize: '0.78rem', color: 'var(--warn-text, #b45309)' } }, "\u26A0 The service period ends before it starts. Check the two dates."))));
+                        })())),
+                h("div", { className: "glass-panel p-6 mb-6" },
+                    h("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' } },
+                        h("h3", { className: "section-title", style: { margin: 0 } },
+                            "Line Items ",
+                            h(HelpButton, { title: "Line Items", doc: "invoices#items", size: 16 })),
+                        showGST && (h("label", { style: { display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', cursor: 'pointer', userSelect: 'none' } },
+                            h("input", { type: "checkbox", checked: taxInclusive, onChange: e => setTaxInclusive(e.target.checked), style: { width: 16, height: 16, accentColor: 'var(--primary)', cursor: 'pointer' } }),
+                            h("span", { style: { fontWeight: 500 } }, "Prices include tax"),
+                            h(HelpButton, { title: "Prices that already include GST", doc: "invoices#tax-inclusive", size: 16 })))),
+                    items.map((item, idx) => (h(LineItem, { key: item.id, item: item, invoiceOptions: invoiceOptions, taxInclusive: taxInclusive, showGST: showGST, taxLabel: taxLabel, units: units, countryTaxRates: countryTaxRates, filterUnitsByMode: filterUnitsByMode, invoiceMode: invoiceOptions.invoiceMode, currency: invoiceOptions.currency, profileCountry: profile?.country, suggestions: getProductSuggestions(item.id), onFieldChange: handleItemChange, onSelectProduct: selectProduct, onSetProductSearch: setProductSearch, onAddCustomUnit: handleAddCustomUnit, onRemoveCustomUnit: handleRemoveCustomUnit, onRemove: removeItem, clampNonNeg: clampNonNeg, isLastRow: idx === items.length - 1, isOnlyRow: items.length === 1, onAddRow: addItem }))),
+                    h("div", { style: { display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' } },
+                        h("button", { className: "btn btn-secondary mt-2", onClick: addItem },
+                            h(Plus, { size: 18 }),
+                            " Add Item"),
+                        !hasDeliveryCharge && !servicesMode && (h("button", { type: "button", className: "btn btn-secondary mt-2", onClick: addDeliveryCharge, title: "Adds a 'Delivery charges' line, taxed at the goods' GST rate (composite supply)" },
+                            h(Truck, { size: 16 }),
+                            " Delivery charges")),
+                        hasDeliveryCharge && showGST && (h("span", { className: "mt-2", style: { fontSize: '0.75rem', color: 'var(--text-muted)' } }, "Delivery is taxed like the goods it ships with (composite supply), so it starts at the highest GST rate on this invoice. Change it if needed."))),
+                    servicesMode && !wholeDiscountOpen && !Number(invoiceOptions.invoiceDiscountValue) ? (h("button", { type: "button", className: "btn-link", onClick: () => setWholeDiscountOpen(true), style: { marginTop: '0.75rem', background: 'none', border: 0, padding: 0, cursor: 'pointer', fontSize: '0.82rem', color: 'var(--text-muted)' } }, "+ Discount on the whole bill")) : (h("div", { style: { display: 'flex', alignItems: 'center', gap: 8, marginTop: '0.75rem', flexWrap: 'wrap' } },
+                        h("label", { style: { fontSize: '0.82rem', color: 'var(--text-muted)' } },
+                            "Discount on total (whole bill) ",
+                            h(HelpButton, { title: "Discounts", doc: "invoices#discounts", size: 16 })),
+                        h("input", { type: "number", min: "0", step: "any", className: "form-input", value: invoiceOptions.invoiceDiscountValue || '', onFocus: (e) => e.target.select(), onChange: (e) => setInvoiceOptions(prev => ({ ...prev, invoiceDiscountValue: clampNonNeg(e.target.value) })), style: { width: 100 }, placeholder: "0" }),
+                        h("select", { className: "form-input", value: invoiceOptions.invoiceDiscountType === 'percent' ? 'percent' : 'fixed', onChange: (e) => setInvoiceOptions(prev => ({ ...prev, invoiceDiscountType: e.target.value })), style: { width: 128 } },
+                            h("option", { value: "fixed" },
+                                currencySymbolFor(invoiceOptions.currency),
+                                " (fixed)"),
+                            h("option", { value: "percent" }, "% of total")),
+                        h("span", { style: { fontSize: '0.72rem', color: 'var(--text-muted)', fontStyle: 'italic' } }, "Applied after tax. For GST-compliant pre-tax discount, use per-line discount instead.")))),
+                h("div", { className: "glass-panel p-6 mb-6" },
+                    h("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.75rem' } },
+                        h("h3", { className: "section-title", style: { margin: 0 } },
+                            "Terms & Conditions ",
+                            h(HelpButton, { title: "Terms & Conditions", doc: "invoices#terms-notes", size: 16 })),
+                        h("div", { style: { display: 'flex', gap: '0.35rem', alignItems: 'center' } },
+                            h("span", { style: { fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 } },
+                                "PDF layout ",
+                                h(HelpButton, { title: "PDF layout: Compact or Formatted", doc: "invoices#terms-layout", size: 16 })),
+                            [
+                                { id: 'compact', label: 'Compact', hint: 'Tiny footer text — saves paper' },
+                                { id: 'formatted', label: 'Formatted', hint: 'Larger readable paragraphs' },
+                            ].map(mode => {
+                                // v1.10.74 - same rule InvoicePreview prints with: per-invoice
+                                // choice, then Print Settings, then services -> formatted.
+                                const effectiveMode = invoiceOptions.termsFormatMode || _psPrintForRates.termsFormatMode
+                                    || ((invoiceOptions.invoiceMode || 'goods') === 'services' ? 'formatted' : 'compact');
+                                const active = effectiveMode === mode.id;
+                                return (h("button", {
+                                    key: mode.id, type: "button", onClick: () => setInvoiceOptions(prev => ({ ...prev, termsFormatMode: mode.id })), title: mode.hint, style: {
+                                        fontSize: '0.72rem', fontWeight: 600,
+                                        padding: '0.28rem 0.65rem', borderRadius: 999,
+                                        background: active
+                                            ? 'linear-gradient(135deg, var(--primary), var(--primary-darker))'
+                                            : 'var(--bg-secondary)',
+                                        color: active ? '#fff' : 'var(--text)',
+                                        border: active ? '1px solid transparent' : '1px solid var(--border)',
+                                        cursor: 'pointer', transition: 'all 0.15s',
+                                    }
+                                }, mode.label));
+                            }))),
+                    h("div", { style: { display: 'grid', gridTemplateColumns: termsTemplates.length > 0 ? '1fr 1fr' : '1fr', gap: '0.75rem', marginBottom: '0.5rem' } },
+                        h("div", { className: "form-group", style: { marginBottom: 0 } },
+                            h("label", { className: "form-label" }, "Insert preset (by business type)"),
+                            h("select", {
+                                className: "form-input", defaultValue: "", onChange: async (e) => {
+                                    if (!e.target.value)
+                                        return;
+                                    const preset = TERMS_PRESETS.find(p => p.id === e.target.value);
+                                    if (!preset)
+                                        return;
+                                    // P2 #33 — "never ask again" via sessionStorage flag.
+                                    // Users iterating through 3 presets to compare shouldn't
+                                    // see 3 confirm dialogs. Ask once per session; subsequent
+                                    // presets swap silently until they close the tab.
+                                    if (htmlHasText(customTerms)) {
+                                        const skipConfirm = sessionStorage.getItem('gst_termsPresetConfirmed') === '1';
+                                        if (!skipConfirm) {
+                                            const proceed = await confirmAction({
+                                                title: 'Replace current Terms?',
+                                                message: 'Your existing Terms text will be lost. Subsequent preset swaps this session will happen silently — this confirmation is shown once.',
+                                                confirmLabel: 'Replace',
+                                                tone: 'warning',
+                                            });
+                                            if (!proceed) {
                                                 e.target.value = '';
-                                                if (preset.body)
-                                                    toast(`Inserted "${preset.label}" preset`, 'success');
-                                            } },
-                                            h("option", { value: "" }, "\u2014 Pick a business type \u2014"),
-                                            TERMS_PRESETS.map(p => h("option", { key: p.id, value: p.id }, p.label))),
-                                        h("small", { style: { color: '#94a3b8', fontSize: '0.7rem' } }, "India-specific starter wording. Edit freely.")),
-                                    termsTemplates.length > 0 && (h("div", { className: "form-group", style: { marginBottom: 0 } },
-                                        h("label", { className: "form-label" }, "Load saved template"),
-                                        h("select", { className: "form-input", value: selectedTermsId, onChange: (e) => handleTermsSelect(e.target.value) },
-                                            h("option", { value: "" }, "\u2014 Custom \u2014"),
-                                            termsTemplates.map(t => h("option", { key: t.id, value: t.id }, t.name)))))),
-                                h("div", { className: "form-group" },
-                                    h("label", { className: "form-label" }, "Terms (appears on invoice \u2014 supports rich formatting)"),
-                                    h(RichEditor, { toolbar: true, value: customTerms, onChange: (v) => { setCustomTerms(v); setSelectedTermsId(''); }, placeholder: "Enter or paste your terms & conditions..." }))),
-                            h(FoldSection, { title: "Notes / Remarks", testId: "fold-notes", help: h(HelpButton, { title: "Notes / Remarks", doc: "invoices#terms-notes", size: 16 }), summary: htmlHasText(customNotes) ? `${htmlFirstWords(customNotes)}${notPrinted('showNotes')}` : 'none' },
-                                h("div", { className: "form-group" },
-                                    h("div", { className: "label-with-toggle" },
-                                        h("label", { className: "form-label" }, "Notes (supports rich formatting)"),
-                                        h(PrintToggle, { optKey: "showNotes", label: "Print on invoice", options: invoiceOptions, setOptions: setInvoiceOptions, disabled: readOnlyDoc })),
-                                    h(RichEditor, { toolbar: true, value: customNotes, onChange: (v) => setCustomNotes(v), placeholder: "Project details, special instructions, additional notes..." }))),
-                            h(FoldSection, { title: "Private note", testId: "fold-private-note", help: h(HelpButton, { title: "Private Note", doc: "invoices#private-note", size: 16 }), summary: internalNote.trim() ? htmlFirstWords(internalNote) : 'none (never printed)' },
-                                h("div", { className: "form-group private-note-box" },
-                                    h("label", { className: "form-label" },
-                                        h("svg", { width: "14", height: "14", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2" },
-                                            h("rect", { x: "3", y: "3", width: "18", height: "18", rx: "2" }),
-                                            h("path", { d: "M12 8v4m0 4h.01" })),
-                                        "Only you see this: it is never printed or sent"),
-                                    h("textarea", { rows: "2", className: "form-input note-textarea", value: internalNote, onChange: (e) => setInternalNote(e.target.value), style: { fontSize: '0.82rem' }, placeholder: "e.g. Client asked for 15-day credit, follow up on 20th, referred by Ravi..." }))),
-                            h(FoldSection, { title: "Additional pages / sections", testId: "fold-extra-sections", help: h(HelpButton, { title: "Additional Pages / Sections", doc: "invoices#extra-pages", size: 16 }), summary: extraSections.length ? `${extraSections.length} section${extraSections.length === 1 ? '' : 's'}${extraSections.some(s => s.title) ? `: ${extraSections.map(s => s.title).filter(Boolean).join(', ')}` : ''}` : 'none' },
-                                h("p", { className: "text-muted", style: { fontSize: '0.8rem', marginBottom: '1rem' } }, "Add extra sections that appear after the invoice footer. You can paste formatted HTML content (bold, lists, tables, etc.)."),
-                                extraSections.map((section, idx) => (h("div", { key: section.id, className: "extra-section-editor" },
-                                    h("div", { className: "flex gap-2 items-center mb-2" },
-                                        h("input", { type: "text", className: "form-input", value: section.title, onChange: (e) => setExtraSections(prev => prev.map(s => s.id === section.id ? { ...s, title: e.target.value } : s)), placeholder: "Section title (e.g. Scope of Work, Delivery Timeline)", style: { flex: 1 } }),
-                                        h("button", { className: "icon-btn", onClick: () => {
-                                                if (idx > 0)
-                                                    setExtraSections(prev => { const arr = [...prev]; [arr[idx - 1], arr[idx]] = [arr[idx], arr[idx - 1]]; return arr; });
-                                            }, title: "Move up", disabled: idx === 0 },
-                                            h(ChevronUp, { size: 14 })),
-                                        h("button", { className: "icon-btn", onClick: () => {
-                                                if (idx < extraSections.length - 1)
-                                                    setExtraSections(prev => { const arr = [...prev]; [arr[idx], arr[idx + 1]] = [arr[idx + 1], arr[idx]]; return arr; });
-                                            }, title: "Move down", disabled: idx === extraSections.length - 1 },
-                                            h(ChevronDown, { size: 14 })),
-                                        h("button", { className: "icon-btn icon-btn-red", onClick: () => setExtraSections(prev => prev.filter(s => s.id !== section.id)), title: "Remove" },
-                                            h(Trash2, { size: 14 }))),
-                                    h("div", { className: "form-group", style: { marginBottom: '0.5rem' } },
-                                        h(RichEditor, { value: section.content, onChange: (html) => setExtraSections(prev => prev.map(s => s.id === section.id ? { ...s, content: html } : s)), placeholder: "Type or paste formatted content here (supports bold, lists, tables from Word/Docs)..." }))))),
-                                h("button", { type: "button", className: "btn btn-secondary", style: { padding: '0.4rem 0.75rem', fontSize: '0.8rem' }, onClick: () => setExtraSections(prev => [...prev, { id: Date.now().toString(), title: '', content: '' }]) },
-                                    h(Plus, { size: 15 }),
-                                    " Add Section"))));
-                    return null;
-                })),
-            h("div", { ref: previewPaneRef, className: "preview-pane", style: previewCollapsed
+                                                return;
+                                            }
+                                            try {
+                                                sessionStorage.setItem('gst_termsPresetConfirmed', '1');
+                                            }
+                                            catch { /* ignore */ }
+                                        }
+                                    }
+                                    setCustomTerms(preset.body);
+                                    setSelectedTermsId('');
+                                    e.target.value = '';
+                                    if (preset.body)
+                                        toast(`Inserted "${preset.label}" preset`, 'success');
+                                }
+                            },
+                                h("option", { value: "" }, "\u2014 Pick a business type \u2014"),
+                                TERMS_PRESETS.map(p => h("option", { key: p.id, value: p.id }, p.label))),
+                            h("small", { style: { color: '#94a3b8', fontSize: '0.7rem' } }, "India-specific starter wording. Edit freely.")),
+                        termsTemplates.length > 0 && (h("div", { className: "form-group", style: { marginBottom: 0 } },
+                            h("label", { className: "form-label" }, "Load saved template"),
+                            h("select", { className: "form-input", value: selectedTermsId, onChange: (e) => handleTermsSelect(e.target.value) },
+                                h("option", { value: "" }, "\u2014 Custom \u2014"),
+                                termsTemplates.map(t => h("option", { key: t.id, value: t.id }, t.name)))))),
+                    h("div", { className: "form-group" },
+                        h("label", { className: "form-label" }, "Terms (appears on invoice \u2014 supports rich formatting)"),
+                        h(RichEditor, { toolbar: true, value: customTerms, onChange: (v) => { setCustomTerms(v); setSelectedTermsId(''); }, placeholder: "Enter or paste your terms & conditions..." })),
+                    h("div", { className: "form-group" },
+                        h("label", { className: "form-label" }, "Notes / Remarks (optional)"),
+                        h(RichEditor, { toolbar: true, value: customNotes, onChange: (v) => setCustomNotes(v), placeholder: "Project details, special instructions, additional notes..." })),
+                    h("div", { className: "form-group", style: { background: '#fefce8', border: '1px dashed #ca8a04', borderRadius: 8, padding: '0.75rem 1rem' } },
+                        h("label", { className: "form-label", style: { color: '#92400e', fontSize: '0.78rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 } },
+                            h("svg", { width: "14", height: "14", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2" },
+                                h("rect", { x: "3", y: "3", width: "18", height: "18", rx: "2" }),
+                                h("path", { d: "M12 8v4m0 4h.01" })),
+                            "Private Note (not shown on invoice)",
+                            h(HelpButton, { title: "Private Note", doc: "invoices#private-note", size: 16 })),
+                        h("textarea", { rows: "2", className: "form-input note-textarea", value: internalNote, onChange: (e) => setInternalNote(e.target.value), style: { fontSize: '0.82rem' }, placeholder: "e.g. Client asked for 15-day credit, follow up on 20th, referred by Ravi..." }))),
+                h("div", { className: "glass-panel p-6 mb-6" },
+                    h("div", { className: "flex justify-between items-center mb-4" },
+                        h("h3", { className: "section-title", style: { margin: 0 } },
+                            "Additional Pages / Sections ",
+                            h(HelpButton, { title: "Additional Pages / Sections", doc: "invoices#extra-pages", size: 16 })),
+                        h("button", { type: "button", className: "btn btn-secondary", style: { padding: '0.4rem 0.75rem', fontSize: '0.8rem' }, onClick: () => setExtraSections(prev => [...prev, { id: Date.now().toString(), title: '', content: '' }]) },
+                            h(Plus, { size: 15 }),
+                            " Add Section")),
+                    h("p", { className: "text-muted", style: { fontSize: '0.8rem', marginBottom: '1rem' } }, "Add extra sections that appear after the invoice footer. You can paste formatted HTML content (bold, lists, tables, etc.)."),
+                    extraSections.length === 0 ? (h("p", { className: "text-muted", style: { fontSize: '0.85rem' } }, "No extra sections. Click \"Add Section\" to create one.")) : (extraSections.map((section, idx) => (h("div", { key: section.id, className: "extra-section-editor" },
+                        h("div", { className: "flex gap-2 items-center mb-2" },
+                            h("input", { type: "text", className: "form-input", value: section.title, onChange: (e) => setExtraSections(prev => prev.map(s => s.id === section.id ? { ...s, title: e.target.value } : s)), placeholder: "Section title (e.g. Scope of Work, Delivery Timeline)", style: { flex: 1 } }),
+                            h("button", {
+                                className: "icon-btn", onClick: () => {
+                                    if (idx > 0)
+                                        setExtraSections(prev => { const arr = [...prev];[arr[idx - 1], arr[idx]] = [arr[idx], arr[idx - 1]]; return arr; });
+                                }, title: "Move up", disabled: idx === 0
+                            },
+                                h(ChevronUp, { size: 14 })),
+                            h("button", {
+                                className: "icon-btn", onClick: () => {
+                                    if (idx < extraSections.length - 1)
+                                        setExtraSections(prev => { const arr = [...prev];[arr[idx], arr[idx + 1]] = [arr[idx + 1], arr[idx]]; return arr; });
+                                }, title: "Move down", disabled: idx === extraSections.length - 1
+                            },
+                                h(ChevronDown, { size: 14 })),
+                            h("button", { className: "icon-btn icon-btn-red", onClick: () => setExtraSections(prev => prev.filter(s => s.id !== section.id)), title: "Remove" },
+                                h(Trash2, { size: 14 }))),
+                        h("div", { className: "form-group", style: { marginBottom: '0.5rem' } },
+                            h(RichEditor, { value: section.content, onChange: (html) => setExtraSections(prev => prev.map(s => s.id === section.id ? { ...s, content: html } : s)), placeholder: "Type or paste formatted content here (supports bold, lists, tables from Word/Docs)..." })))))))),
+            h("div", {
+                ref: previewPaneRef, className: "preview-pane", style: previewCollapsed
                     ? { position: 'absolute', left: '-99999px', top: 0, width: '794px', pointerEvents: 'none', opacity: 0 }
-                    : undefined },
-                h("div", { className: "preview-pane-label", style: {
+                    : undefined
+            },
+                h("div", {
+                    className: "preview-pane-label", style: {
                         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                         padding: '0.55rem 0.85rem',
                         background: 'var(--card-bg)',
@@ -5281,35 +4601,41 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                         marginBottom: '0.5rem',
                         boxShadow: '0 2px 8px rgba(0, 0, 0, 0.03)',
                         gap: '0.75rem',
-                    } },
+                    }
+                },
                     h("span", { style: { display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
                         h("span", { style: { fontSize: '0.85rem' } }, "\uD83D\uDC41"),
                         "Live preview",
                         h(HelpButton, { title: "The live preview", doc: "invoices#preview", size: 16 })),
                     h("span", { style: { display: 'flex', alignItems: 'center', gap: '0.35rem' } },
-                        h("div", { style: {
+                        h("div", {
+                            style: {
                                 display: 'inline-flex', alignItems: 'center',
                                 background: 'var(--bg-secondary)',
                                 border: '1px solid var(--border)',
                                 borderRadius: 999,
                                 overflow: 'hidden',
-                            } },
-                            h("button", { type: "button", title: "Zoom out", onClick: () => zoomBy(-10), style: { padding: '0.25rem 0.7rem', border: 'none', background: 'transparent', cursor: 'pointer', fontSize: '0.9rem', fontWeight: 700, color: 'var(--text)', lineHeight: 1 } }, "\u2212"),
+                            }
+                        },
+                            h("button", { type: "button", title: "Zoom out", onClick: () => setPreviewZoom(z => Math.max(50, z - 10)), style: { padding: '0.25rem 0.7rem', border: 'none', background: 'transparent', cursor: 'pointer', fontSize: '0.9rem', fontWeight: 700, color: 'var(--text)', lineHeight: 1 } }, "\u2212"),
                             h("span", { style: { padding: '0.25rem 0.55rem', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text)', minWidth: 42, textAlign: 'center', borderLeft: '1px solid var(--border)', borderRight: '1px solid var(--border)' } },
                                 previewZoom,
                                 "%"),
-                            h("button", { type: "button", title: "Zoom in", onClick: () => zoomBy(10), style: { padding: '0.25rem 0.7rem', border: 'none', background: 'transparent', cursor: 'pointer', fontSize: '0.9rem', fontWeight: 700, color: 'var(--text)', lineHeight: 1 } }, "+")),
-                        h("button", { type: "button", "aria-pressed": previewFit, title: previewFit ? 'The preview fits the pane (− or + to zoom by hand)' : 'Fit the preview to the pane, and keep it fitted', onClick: () => { setPreviewFit(true); handleFitToWidth(); }, style: {
+                            h("button", { type: "button", title: "Zoom in", onClick: () => setPreviewZoom(z => Math.min(200, z + 10)), style: { padding: '0.25rem 0.7rem', border: 'none', background: 'transparent', cursor: 'pointer', fontSize: '0.9rem', fontWeight: 700, color: 'var(--text)', lineHeight: 1 } }, "+")),
+                        h("button", {
+                            type: "button", title: "Fit preview to the pane width", onClick: handleFitToWidth, style: {
                                 padding: '0.28rem 0.75rem',
-                                border: previewFit ? '1px solid var(--primary)' : '1px solid var(--border)',
-                                background: previewFit ? 'var(--primary-light, rgba(30,64,175,0.08))' : 'var(--card-bg)',
-                                color: previewFit ? 'var(--primary)' : 'var(--text)',
+                                border: '1px solid var(--primary)',
+                                background: 'var(--primary-light, rgba(30,64,175,0.08))',
+                                color: 'var(--primary)',
                                 cursor: 'pointer',
                                 fontSize: '0.72rem', fontWeight: 700,
                                 borderRadius: 999,
                                 letterSpacing: '0.02em',
-                            } }, "Fit"),
-                        h("button", { type: "button", title: "See the whole page as it will print", onClick: () => setShowPrintPreview(true), style: {
+                            }
+                        }, "Fit"),
+                        h("button", {
+                            type: "button", title: "See the whole page as it will print", onClick: () => setShowPrintPreview(true), style: {
                                 padding: '0.28rem 0.75rem',
                                 border: '1px solid var(--border)',
                                 background: 'var(--card-bg)',
@@ -5318,19 +4644,24 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                                 fontSize: '0.72rem', fontWeight: 700,
                                 borderRadius: 999,
                                 display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
-                            } },
+                            }
+                        },
                             h(Maximize2, { size: 12 }),
                             " Full view"))),
-                h("div", { className: "preview-scaler-frame", style: previewNatural.w ? {
+                h("div", {
+                    className: "preview-scaler-frame", style: previewNatural.w ? {
                         width: previewNatural.w * (previewZoom / 100),
                         height: previewNatural.h * (previewZoom / 100),
-                    } : undefined },
-                    h("div", { className: "preview-scaler", style: {
+                    } : undefined
+                },
+                    h("div", {
+                        className: "preview-scaler", style: {
                             transform: `scale(${previewZoom / 100})`,
                             transformOrigin: 'top left',
-                        } },
-                        h(InvoicePreview, { ref: printRef, profile: profile, client: client, details: details, items: billItems, totals: totals, invoiceType: invoiceType, customTerms: customTerms, customNotes: customNotes, extraSections: extraSections, options: invoiceOptions, cancelled: editingBill?.status === 'cancelled', einvoice: einvoice }))))),
-        h(PrintPreviewModal, { isOpen: showPrintPreview, onClose: () => setShowPrintPreview(false), onPrint: printFromPreview, onDownloadPdf: generatePDF, cancelled: editingBill?.status === 'cancelled', einvoice: einvoice, profile: profile, client: client, details: details, items: billItems, totals: totals, invoiceType: invoiceType, customTerms: customTerms, customNotes: customNotes, extraSections: extraSections, invoiceOptions: invoiceOptions }),
+                        }
+                    },
+                        h(InvoicePreview, { ref: printRef, profile: profile, client: client, details: details, items: items, totals: totals, invoiceType: invoiceType, customTerms: customTerms, customNotes: customNotes, extraSections: extraSections, options: invoiceOptions, cancelled: editingBill?.status === 'cancelled', einvoice: einvoice }))))),
+        h(PrintPreviewModal, { isOpen: showPrintPreview, onClose: () => setShowPrintPreview(false), onPrint: printFromPreview, onDownloadPdf: generatePDF, cancelled: editingBill?.status === 'cancelled', einvoice: einvoice, profile: profile, client: client, details: details, items: items, totals: totals, invoiceType: invoiceType, customTerms: customTerms, customNotes: customNotes, extraSections: extraSections, invoiceOptions: invoiceOptions }),
         leaveModal && (h("div", { className: "modal-overlay", onClick: leaveActions.cancel },
             h("div", { className: "modal-content", onClick: e => e.stopPropagation(), style: { maxWidth: '460px' } },
                 h("h3", { style: { marginTop: 0 } },

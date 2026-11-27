@@ -226,7 +226,7 @@ function setEvent(el, propName, handler) {
 function removeProperty(el, name, oldValue) {
   if (name.startsWith('on') && typeof oldValue === 'function') { setEvent(el, name, null); return; }
   if (name === 'style') { updateStyle(el, oldValue, {}); return; }
-  if (name === 'ref' || name === 'children' || name === 'key' || name === 'dangerouslySetInnerHTML') return;
+  if (name === 'ref' || name === 'children' || name === 'key' || name === 'dangerouslySetInnerHTML' || name === 'suppressContentEditableWarning') return;
   if (name === 'value' || name === 'checked') {
     el.removeAttribute(name);
     el.removeAttribute('data-vcontrolled');
@@ -238,7 +238,7 @@ function removeProperty(el, name, oldValue) {
 }
 
 function setProperty(el, name, value, oldValue) {
-  if (name === 'key' || name === 'children' || name === 'ref' || name === 'dangerouslySetInnerHTML') return;
+  if (name === 'key' || name === 'children' || name === 'ref' || name === 'dangerouslySetInnerHTML' || name === 'suppressContentEditableWarning') return;
   if (name === 'style') { updateStyle(el, oldValue, value); return; }
   if (name === 'className') { el.setAttribute('class', value == null ? '' : String(value)); return; }
   if (name === 'htmlFor') { el.setAttribute('for', value == null ? '' : String(value)); return; }
@@ -288,7 +288,7 @@ function setProperty(el, name, value, oldValue) {
     if (['title','id','name','type','placeholder','href','src','target','rel','role','alt','width','height','min','max','step','accept','action','method','pattern','tabIndex','contentEditable','spellcheck','draggable'].includes(name)) {
       try { el[name] = value; } catch { /* property may be readonly */ }
     }
-    el.setAttribute(attr, value === true ? '' : String(value));
+    el.setAttribute(attr, value === true ? (name === 'contentEditable' ? 'true' : '') : String(value));
   } catch { /* unsupported attribute */ }
 }
 
@@ -338,10 +338,14 @@ function renderDom(vnode, path, root, parentNs) {
   if (!el.hasAttribute('data-vpath')) el.setAttribute('data-vpath', path);
   updateDomProps(el, entry, props || {});
 
+  const isContentEditable = props?.contentEditable === true || props?.contentEditable === '' || props?.contentEditable === 'true' || props?.contentEditable === 'plaintext-only';
   const html = props?.dangerouslySetInnerHTML?.__html;
   if (html != null) {
     if (entry.html !== html) el.innerHTML = String(html);
     entry.html = html;
+  } else if (isContentEditable && props?.children == null) {
+    // Preserve user/imperative DOM inside uncontrolled contentEditable nodes (e.g. RichEditor)
+    if (entry.html != null) { el.replaceChildren(); entry.html = null; }
   } else {
     if (entry.html != null) { el.replaceChildren(); entry.html = null; }
     const children = renderChildren(props?.children, path, root, type === 'foreignObject' ? HTML_NS : ns);
