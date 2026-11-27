@@ -46,6 +46,7 @@ const CashBook = lazy(() => import('./components/CashBook.js'));
 const GSTReturns = lazy(() => import('./components/GSTReturns.js'));
 const IncomeTax = lazy(() => import('./components/IncomeTax.js'));
 const PurchaseBills = lazy(() => import('./components/PurchaseBills.js'));
+const PaymentFollowUp = lazy(() => import('./components/PaymentFollowUp.js'));
 import StarBanner from './components/StarBanner.js';
 import AppFooter from './components/AppFooter.js';
 import OfflineModeButton from './components/OfflineModeButton.js';
@@ -89,7 +90,7 @@ function App() {
             const params = new URLSearchParams(window.location.search);
             const v = params.get('view');
             // v1.10.74 - 'controlpanel' added so ?view=controlpanel deep links work too.
-            const valid = ['dashboard', 'new', 'clients', 'inventory', 'expenses', 'purchases', 'recurring', 'receipts', 'cashbook', 'reports', 'filing', 'incometax', 'settings'];
+            const valid = ['dashboard', 'new', 'clients', 'inventory', 'expenses', 'purchases', 'recurring', 'receipts', 'cashbook', 'reports', 'filing', 'incometax', 'paymentfollowup', 'settings'];
             if (v && valid.includes(v)) {
                 // Strip the query string so a refresh doesn't keep snapping back to
                 // the shortcut target — only the *first* navigation honours it.
@@ -606,6 +607,7 @@ function App() {
         cashbook: { icon: Banknote, label: 'Cash book' },
         reports: { icon: BarChart3, label: 'Reports' },
         filing: { icon: BookOpen, label: 'GST Returns' },
+        paymentfollowup: { icon: MessageCircle, label: 'Payment Follow-up' },
         incometax: { icon: Calculator, label: 'Income Tax' },
     };
     const navItems = menu.filter(m => m.section === 'main').map(m => ({ id: m.id, ...NAV_EXTRAS[m.id] }));
@@ -882,6 +884,7 @@ function App() {
                         currentView === 'reports' && (h(ReportsView, { key: businessKey })),
                         currentView === 'filing' && (h(GSTReturns, { key: businessKey, onOpenPurchases: () => setCurrentView('purchases') })),
                         currentView === 'incometax' && (h(IncomeTax, { key: businessKey })),
+                    currentView === 'paymentfollowup' && (h(PaymentFollowUp, { key: businessKey, activeProfile: profile })),
                         currentView === 'settings' && (h(SettingsView, { onSaved: (p) => setProfile(p) })),
                         currentView === 'support' && (null)),
                     currentView === 'dashboard' && null))),
