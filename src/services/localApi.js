@@ -1,11 +1,11 @@
 // Browser-only replacement for the former Express /api server.
-// Business records live in this browser profile's IndexedDB. No OAuth,
-// Google account, Node.js process, or remote application database is used.
+// Business records live in this browser profile's IndexedDB. No sign-in is
+// needed for local use; optional Google Drive backup is handled separately.
 
 import { templateTotals, clientYearToDate, businessKeyOf, numberSeriesFor, counterKeyFor, nextCounterValue, startFor, formatDocNumber, getFinancialYearLabel, parseLocalDate, INVOICE_TYPES } from '../utils.js';
 import { lockProblem, isLockDate } from '../utils/periodLock.js';
 
-const APP_VERSION = '1.10.86';
+const APP_VERSION = '1.10.92';
 // Legacy database name is intentionally preserved so existing browser data remains available.
 const DB_NAME = 'free-gst-billing-local';
 const DB_VERSION = 1;

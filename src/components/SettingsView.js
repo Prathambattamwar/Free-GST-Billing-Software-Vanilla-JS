@@ -9,7 +9,7 @@ import { normaliseLutArn, isLikelyLutArn, lutFyOptions, fyOf } from '../utils/lu
 // `new Image()` inside handleImageUpload was trying to construct a
 // image icon. Aliased to `ImageIcon` so `new Image()` resolves to
 // the browser primitive again.
-import { Save, Upload, Download, Plus, Trash2, Edit3, Image as ImageIcon, PenTool, Building2, Hash, RefreshCw, Save as SaveIcon } from '../vanilla/icons.js';
+import { Save, Upload, Download, Plus, Trash2, Edit3, Image as ImageIcon, PenTool, Building2, Hash, RefreshCw, Save as SaveIcon, Cloud } from '../vanilla/icons.js';
 import { toast } from './Toast.js';
 import { confirmAction } from './ConfirmModal.js';
 import PrintSettings from './PrintSettings.js';
@@ -17,6 +17,7 @@ import HelpButton from './HelpButton.js';
 import AppLockSettings from './AppLockSettings.js';
 import BooksLockSettings from './BooksLockSettings.js';
 import PrivacyInternet from './PrivacyInternet.js';
+import GoogleDriveBackup from './GoogleDriveBackup.js';
 import CostCentreSettings from './CostCentreSettings.js';
 import { BusinessTypePanel, FeaturesPanel, useFeatureDraft } from './FeatureSettings.js';
 import { rekeyCentres } from '../utils/costCentres.js';
@@ -42,6 +43,7 @@ const JUMP_NAV_SECTIONS = [
     ['section-backups', 'Backups'],
     ['section-books', 'Close books & edit history'],
     ['section-cloud', 'Local storage'],
+    ['section-drive', 'Google Drive'],
     ['section-data', 'Import/Export'],
     ['section-updates', 'Updates'],
 ];
@@ -53,7 +55,7 @@ const SETTINGS_TAB_DOCS = {
     'section-company': 'settings#company-details', 'section-profiles': 'settings#business-profiles',
     'section-terms': 'settings#terms', 'section-print': 'print-settings', 'section-modules': 'settings#features',
     'section-stock': 'settings#stock', 'section-region': 'settings#region', 'section-lock': 'settings#lock', 'section-privacy': 'security#offline-mode',
-    'section-backups': 'backup#automatic-backups', 'section-cloud': 'backup#export-import', 'section-data': 'backup#export-import',
+    'section-backups': 'backup#automatic-backups', 'section-cloud': 'backup#export-import', 'section-drive': 'backup#export-import', 'section-data': 'backup#export-import',
     'section-updates': 'settings#updates',
 };
 export default function SettingsView({ onSaved }) {
@@ -527,6 +529,24 @@ export default function SettingsView({ onSaved }) {
             toast('Export failed: ' + (err.message || 'unknown error'), 'error');
         }
     };
+    const handleDriveRestore = (text, file) => {
+        try {
+            const inspection = inspectBackup(text);
+            if (!inspection.valid) {
+                toast("The file in Google Drive is not a valid GST Billing backup.", 'error');
+                return;
+            }
+            setImportInspection(inspection);
+            setImportJsonText(text);
+            const auto = {};
+            ALL_BACKUP_PARTS.forEach(p => { auto[p.id] = (inspection.counts[p.id] || 0) > 0; });
+            setImportSel(auto);
+            setShowImportModal(true);
+        }
+        catch (error) {
+            toast(error.message || 'Could not read the Google Drive backup.', 'error');
+        }
+    };
     const handleImportPick = async (e) => {
         const file = e.target.files?.[0];
         if (!file)
@@ -768,7 +788,7 @@ export default function SettingsView({ onSaved }) {
                 borderRadius: 12,
                 marginBottom: '1.25rem',
             } },
-            h("div", { style: { display: 'flex', alignItems: 'center', gap: '0.85rem' } },
+            h("div", { style: { display: 'flex', alignItems: 'center', gap: '0.85rem', flexWrap: 'wrap' } },
                 h("div", { style: {
                         width: 44, height: 44,
                         borderRadius: 12,
@@ -786,7 +806,9 @@ export default function SettingsView({ onSaved }) {
                         "Business profile, branding, integrations & data",
                         h("span", { style: { fontSize: '0.7rem', padding: '0.1rem 0.5rem', borderRadius: 999, background: 'var(--bg-secondary)', border: '1px solid var(--border)', marginLeft: '0.55rem', fontWeight: 600 } },
                             JUMP_NAV_SECTIONS.length,
-                            " sections"))))),
+                            " sections"))),
+                h("button", { type: "button", className: "btn btn-primary", onClick: () => { setActiveSection('section-drive'); window.scrollTo({ top: 0 }); }, style: { flexShrink: 0, marginLeft: 'auto' } },
+                    h(Cloud, { size: 16 }), " Google Drive"))),
         h("div", { ref: saveBarRef, className: "settings-bar", style: {
                 position: 'sticky',
                 zIndex: 30,
@@ -1288,13 +1310,19 @@ export default function SettingsView({ onSaved }) {
                 })))),
             h("div", { id: "section-cloud", className: "glass-panel p-6 mb-6", style: { order: 9 } },
                 h("h3", { className: "section-title" }, "Local browser storage"),
-                h("p", { className: "page-subtitle mb-4" }, "Your business records are saved on this computer in this browser profile. No Google sign-in, OAuth, app server or cloud account is required."),
+                h("p", { className: "page-subtitle mb-4" }, "Your business records are saved on this computer in this browser profile by default. Google Drive connection is optional and used only when you choose a backup action."),
                 h("div", { style: { background: 'var(--bg-secondary, #f8fafc)', borderRadius: '10px', padding: '1.25rem', marginBottom: '1rem', border: '1px solid var(--border)' } },
                     h("h4", { style: { fontSize: '0.95rem', marginBottom: '0.5rem' } }, "Private to this browser profile"),
                     h("p", { style: { fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.7, margin: 0 } },
                         "Invoices, customers, products, GST records, settings, saved PDFs and automatic snapshots are stored in IndexedDB on this device. They remain in this browser profile and are not sent to an application server."),
                     h("p", { style: { fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.75rem', marginBottom: 0 } },
                         "Important: browser data can be cleared by browser cleanup or a device reset. Use Import / Export to download a backup regularly. To move data to another device, export a backup here and import it there."))),
+            h("div", { id: "section-drive", className: "glass-panel p-6 mb-6", style: { order: 9.5 } },
+                h("div", { style: { display: 'flex', alignItems: 'center', gap: '0.7rem', marginBottom: '0.35rem' } },
+                    h(Cloud, { size: 21, style: { color: 'var(--primary)' } }),
+                    h("h3", { className: "section-title", style: { margin: 0 } }, "Google Drive")),
+                h("p", { className: "page-subtitle mb-4" }, "Connect your Google account to save and restore GST Billing backups in your own Drive. This is optional; your records continue to work locally."),
+                h(GoogleDriveBackup, { onRestoreBackup: handleDriveRestore })),
             h("div", { id: "section-terms", className: "glass-panel p-6 mb-6", style: { order: 3 } },
                 h("div", { className: "flex justify-between items-center mb-4" },
                     h("h3", { className: "section-title", style: { margin: 0 } },
@@ -1359,8 +1387,8 @@ export default function SettingsView({ onSaved }) {
                         h("strong", null, "Your business data is stored locally in this browser."),
                         " Invoices, clients, products, GST records, settings and automatic backups are saved in the private ",
                         h("code", null, "GST Billing Software"),
-                        " browser profile using IndexedDB. The app does not require a Google account and does not send business records to an application server. See Privacy & internet for the complete data flow.")),
-                h("p", { className: "page-subtitle mb-6" }, "Choose what to back up or restore \u2014 invoices, clients, products, settings, custom units, or just specific parts. Backup files are plain JSON and download directly to your computer."),
+                        " browser profile using IndexedDB. The app does not require a Google account; Drive uploads happen only when you explicitly request them. Business records are not sent to an application server. See Privacy & internet for the complete data flow.")),
+                h("p", { className: "page-subtitle mb-6" }, "Choose what to back up or restore \u2014 invoices, clients, products, settings, custom units, or just specific parts. Backups can be downloaded to your computer."),
                 h("div", { className: "flex gap-4", style: { flexWrap: 'wrap' } },
                     h("button", { type: "button", className: "btn btn-primary", onClick: () => setShowExportModal(true) },
                         h(Download, { size: 18 }),

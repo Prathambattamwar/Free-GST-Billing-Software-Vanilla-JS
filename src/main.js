@@ -66,7 +66,7 @@ window.addEventListener('unhandledrejection', (e) => {
     }
     catch { /* never throw from here */ }
 });
-// Local-first startup. No Google sign-in, OAuth Client ID, Node.js backend or npm runtime.
+// Local-first startup. No Google sign-in or OAuth Client ID is required to use the app; Drive backup is opt-in.
 const rootElement = document.getElementById('root');
 
 function renderApplication() {
