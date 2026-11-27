@@ -193,12 +193,12 @@ function updateStyle(el, oldStyle, newStyle) {
     try {
       if (name.startsWith('--')) el.style.setProperty(name, String(value));
       else if (name.startsWith('Webkit') || name.startsWith('ms')) el.style.setProperty(`-${kebabCase(name)}`, String(value));
-      else el.style[name] = typeof value === 'number' && value !== 0 && !['opacity','zIndex','fontWeight','lineHeight','flex','order','zoom','gridRow','gridColumn','scale'].includes(name) ? `${value}px` : String(value);
+      else el.style[name] = typeof value === 'number' && value !== 0 && !['opacity', 'zIndex', 'fontWeight', 'lineHeight', 'flex', 'order', 'zoom', 'gridRow', 'gridColumn', 'scale'].includes(name) ? `${value}px` : String(value);
     } catch { /* ignore invalid style declarations */ }
   }
 }
 
-const BOOL_PROPS = new Set(['disabled','checked','selected','multiple','required','readOnly','autoFocus','hidden','open','controls','loop','muted','playsInline','noValidate','formNoValidate','reversed','itemScope','allowFullScreen']);
+const BOOL_PROPS = new Set(['disabled', 'checked', 'selected', 'multiple', 'required', 'readOnly', 'autoFocus', 'hidden', 'open', 'controls', 'loop', 'muted', 'playsInline', 'noValidate', 'formNoValidate', 'reversed', 'itemScope', 'allowFullScreen']);
 const ATTR_MAP = { className: 'class', htmlFor: 'for', tabIndex: 'tabindex', readOnly: 'readonly', autoFocus: 'autofocus', srcSet: 'srcset', colSpan: 'colspan', rowSpan: 'rowspan', maxLength: 'maxlength', minLength: 'minlength', dateTime: 'datetime', crossOrigin: 'crossorigin', contentEditable: 'contenteditable', spellCheck: 'spellcheck', autoComplete: 'autocomplete', autoCapitalize: 'autocapitalize', encType: 'enctype', acceptCharset: 'accept-charset', formAction: 'formaction', formMethod: 'formmethod', formNoValidate: 'formnovalidate', noValidate: 'novalidate', playsInline: 'playsinline', allowFullScreen: 'allowfullscreen', xlinkHref: 'xlink:href', strokeWidth: 'stroke-width', strokeLinecap: 'stroke-linecap', strokeLinejoin: 'stroke-linejoin', fillRule: 'fill-rule', clipRule: 'clip-rule', stopColor: 'stop-color', stopOpacity: 'stop-opacity', textAnchor: 'text-anchor', dominantBaseline: 'dominant-baseline', preserveAspectRatio: 'preserveAspectRatio' };
 const EVENT_NAME = { onDoubleClick: 'dblclick', onFocus: 'focusin', onBlur: 'focusout', onMouseEnter: 'mouseenter', onMouseLeave: 'mouseleave', onPointerEnter: 'pointerenter', onPointerLeave: 'pointerleave', onChange: 'change', onKeyDown: 'keydown', onKeyUp: 'keyup', onKeyPress: 'keypress', onMouseDown: 'mousedown', onMouseUp: 'mouseup', onMouseMove: 'mousemove', onContextMenu: 'contextmenu', onDragStart: 'dragstart', onDragOver: 'dragover', onDrop: 'drop', onTouchStart: 'touchstart', onTouchMove: 'touchmove', onTouchEnd: 'touchend', onAnimationEnd: 'animationend', onTransitionEnd: 'transitionend', onLoad: 'load', onError: 'error', onScroll: 'scroll' };
 
@@ -285,7 +285,7 @@ function setProperty(el, name, value, oldValue) {
   if (typeof value === 'object') return;
   const attr = ATTR_MAP[name] || name;
   try {
-    if (['title','id','name','type','placeholder','href','src','target','rel','role','alt','width','height','min','max','step','accept','action','method','pattern','tabIndex','contentEditable','spellcheck','draggable'].includes(name)) {
+    if (['title', 'id', 'name', 'type', 'placeholder', 'href', 'src', 'target', 'rel', 'role', 'alt', 'width', 'height', 'min', 'max', 'step', 'accept', 'action', 'method', 'pattern', 'tabIndex', 'contentEditable', 'spellcheck', 'draggable'].includes(name)) {
       try { el[name] = value; } catch { /* property may be readonly */ }
     }
     el.setAttribute(attr, value === true ? (name === 'contentEditable' ? 'true' : '') : String(value));
@@ -323,6 +323,22 @@ function patchChildren(parent, desiredNodes) {
     if (current !== node) parent.insertBefore(node, current);
   }
   while (parent.childNodes.length > desiredNodes.length) parent.removeChild(parent.lastChild);
+}
+
+function patchPortalChildren(target, prevNodes, nextNodes) {
+  const nextSet = new Set(nextNodes);
+  for (const node of prevNodes) {
+    if (!nextSet.has(node) && node.parentNode === target) target.removeChild(node);
+  }
+  for (let index = nextNodes.length - 1; index >= 0; index--) {
+    const node = nextNodes[index];
+    const anchor = nextNodes[index + 1] || null;
+    if (anchor === null) {
+      if (node.parentNode !== target) target.appendChild(node);
+    } else if (node.parentNode !== target || node.nextSibling !== anchor) {
+      target.insertBefore(node, anchor);
+    }
+  }
 }
 
 function renderDom(vnode, path, root, parentNs) {
@@ -454,9 +470,11 @@ function renderNode(node, path, root, parentNs = HTML_NS) {
   if (type === PORTAL) {
     const target = props?.container;
     if (!target || typeof target.appendChild !== 'function') return null;
-    root.nextPortalContainers.add(target);
+    let list = root.nextPortalNodesByContainer.get(target);
+    if (!list) { list = []; root.nextPortalNodesByContainer.set(target, list); }
+    const insertAt = list.length;
     const portalNodes = renderChildren(props?.children, `portal:${path}`, root, HTML_NS);
-    patchChildren(target, portalNodes);
+    list.splice(insertAt, 0, ...portalNodes);
     return null;
   }
   if (type?.__vanillaContextProvider) {
@@ -520,8 +538,8 @@ class NativeRoot {
     this.nextDomByPath = new Map();
     this.pendingEffects = [];
     this.visited = new Set();
-    this.portalContainers = new Set();
-    this.nextPortalContainers = new Set();
+    this.portalNodesByContainer = new Map();
+    this.nextPortalNodesByContainer = new Map();
     this.queued = false;
     this.destroyed = false;
   }
@@ -540,13 +558,16 @@ class NativeRoot {
     this.nextDomByPath = new Map();
     this.visited = new Set();
     this.pendingEffects = [];
-    this.nextPortalContainers = new Set();
+    this.nextPortalNodesByContainer = new Map();
     try {
       const rendered = renderNode(this.vnode, 'root', this, HTML_NS);
       const nodes = Array.isArray(rendered) ? rendered : rendered ? [rendered] : [];
       patchChildren(this.container, nodes);
-      for (const target of this.portalContainers) if (!this.nextPortalContainers.has(target)) target.replaceChildren();
-      this.portalContainers = this.nextPortalContainers;
+      const portalTargets = new Set([...this.portalNodesByContainer.keys(), ...this.nextPortalNodesByContainer.keys()]);
+      for (const target of portalTargets) {
+        patchPortalChildren(target, this.portalNodesByContainer.get(target) || [], this.nextPortalNodesByContainer.get(target) || []);
+      }
+      this.portalNodesByContainer = this.nextPortalNodesByContainer;
       cleanRemoved(this, oldDom);
       this.domByPath = this.nextDomByPath;
       runEffects(this);
@@ -562,6 +583,10 @@ class NativeRoot {
     this.destroyed = true;
     for (const hooks of this.hooks.values()) hooks.forEach((cell) => { try { cell.cleanup?.(); } catch { /* ignore */ } });
     for (const entry of this.domByPath.values()) if (entry.ref) assignRef(entry.ref, null);
+    for (const [target, nodes] of this.portalNodesByContainer) {
+      for (const node of nodes) if (node.parentNode === target) target.removeChild(node);
+    }
+    this.portalNodesByContainer.clear();
     this.hooks.clear();
     this.classes.clear();
     this.domByPath.clear();
