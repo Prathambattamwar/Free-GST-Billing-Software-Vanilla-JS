@@ -62,7 +62,7 @@ export class Component {
 }
 
 function depsEqual(a, b) {
-  if (a === undefined || b === undefined) return false;
+  if (a === undefined && b === undefined) return true;
   if (a === b) return true;
   if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
   return a.every((value, index) => Object.is(value, b[index]));

@@ -1047,7 +1047,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         getAllProfiles().then(p => {
             setAllProfiles(p); if (!activeProfile && p.length > 0)
                 setActiveProfile(profileProp);
-        }).catch(() => { });
+        }).catch(() => { toast('Could not load business profiles.', 'warning'); });
         getTermsTemplates().then(templates => {
             setTermsTemplates(templates);
             if (templates.length > 0 && blankNewInvoice.current && !selectedTermsId) {
@@ -1168,7 +1168,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                     peekedNumber.current = num;
                     setDetails({ ...d.details, invoiceNumber: num, invoiceDate: localToday() });
                     numberReserved.current = false;
-                });
+                }).catch(() => { });
             }
             else {
                 setDetails(d.details);
@@ -1187,7 +1187,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                 peekedNumber.current = num;
                 setDetails(prev => ({ ...prev, invoiceNumber: num }));
                 numberReserved.current = false;
-            });
+            }).catch(() => { });
         }
     }, [editingBill]);
     // v1.10.79 (#95) - the number shown on an unsaved invoice follows the
@@ -1803,7 +1803,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                 }
                 numberReserved.current = true;
             }
-            catch { /* fall back to the peeked value; server will 409 if it collides */ }
+            catch { toast('Could not reserve an invoice number. Save may fail.', 'warning'); }
         }
         // v1.10.18 — reported: "if i change bank account for the customer to one
         // bank then other also changed to that — it should show the bank was
@@ -2037,7 +2037,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                             // Refresh the in-memory clients list so subsequent
                             // handleSelectClient calls see the new preference.
                             setSavedClients(prev => prev.map(c => c.id === cli.id ? updatedClient : c));
-                        }).catch(() => { });
+                        }).catch(() => { toast('Could not save client print preference.', 'warning'); });
                     }
                 }
             }
