@@ -644,7 +644,7 @@ function App() {
     const brand = profile || menuBrandCache;
     const ownBrand = !!brand?.showInMenu && !!String(brand?.businessName || '').trim();
     // The window's title bar shows the page and the business, like a desktop
-    // program ("Invoices - Dice Codes"), not the long search-engine title.
+    // program ("Invoices - Optenix"), not the long search-engine title.
     const pageLabel = (NAV_EXTRAS[currentView] || menu.find(m => m.id === currentView))?.label;
     const windowName = String(brand?.businessName || '').trim() || 'GST Billing';
     // v1.10.84 - and says so when an update is waiting (the taskbar shows it too).
@@ -814,7 +814,7 @@ function App() {
                         : h(FileText, { size: 22 })),
                 h("div", { className: "sidebar-brand-text" },
                     h("h2", { className: `sidebar-title${ownBrand ? ' sidebar-title-own' : ''}`, title: ownBrand ? `${brand.businessName} - GST Billing` : undefined }, ownBrand ? brand.businessName : 'GST Billing'),
-                    h("p", { className: "sidebar-subtitle" }, "by DiceCodes")),
+                    h("p", { className: "sidebar-subtitle" }, "by Optenix")),
                 h("button", { type: "button", className: `sidebar-autohide-toggle${sidebarAutoHide ? ' on' : ''}`, "aria-pressed": sidebarAutoHide, "aria-label": "Auto-hide menu", title: sidebarAutoHide ? 'Keep this menu open' : 'Auto-hide this menu: icons only, it opens when you point at it', onClick: (e) => { e.stopPropagation(); toggleSidebarAutoHide(!sidebarAutoHide); } },
                     h(Menu, { size: 18 }))),
             h("div", { className: "profile-switcher", ref: profileMenuRef, style: { position: 'relative' } },

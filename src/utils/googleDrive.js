@@ -8,6 +8,7 @@ const LEGACY_CLIENT_ID_KEY = 'gst_google_drive_client_id';
 const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 const BACKUP_FOLDER_NAME = 'GST Billing Backups';
 const BACKUP_FILE_NAME = 'gst-billing-backup-latest.json';
+const INVOICE_FOLDER_NAME = 'GST Billing Invoices';
 
 let identityScriptPromise = null;
 let currentAccessToken = '';
@@ -258,4 +259,92 @@ export async function getLatestBackupFromGoogleDrive(clientId) {
 
 export function getGoogleDriveBackupFolderName() {
   return BACKUP_FOLDER_NAME;
+}
+
+
+function escapeDriveQueryValue(value) {
+  return String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+async function ensureInvoiceFolder(token) {
+  const query = `name='${escapeDriveQueryValue(INVOICE_FOLDER_NAME)}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+  const params = new URLSearchParams({ q: query, fields: 'files(id,name)', pageSize: '10', spaces: 'drive' });
+  const found = await driveJson(`https://www.googleapis.com/drive/v3/files?${params}`, token);
+  if (found.files?.[0]?.id) return found.files[0].id;
+
+  const created = await driveJson('https://www.googleapis.com/drive/v3/files?fields=id,name', token, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: INVOICE_FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder' }),
+  });
+  if (!created?.id) throw new Error('Google Drive did not create the GST Billing Invoices folder.');
+  return created.id;
+}
+
+async function findInvoiceFile(folderId, fileName, token) {
+  const query = `name='${escapeDriveQueryValue(fileName)}' and '${escapeDriveQueryValue(folderId)}' in parents and trashed=false`;
+  const params = new URLSearchParams({
+    q: query,
+    fields: 'files(id,name,modifiedTime,webViewLink,size,mimeType)',
+    pageSize: '10',
+    spaces: 'drive',
+    orderBy: 'modifiedTime desc',
+  });
+  const result = await driveJson(`https://www.googleapis.com/drive/v3/files?${params}`, token);
+  return result.files?.[0] || null;
+}
+
+/** Upload a generated invoice PDF into the user's GST Billing Invoices folder.
+ *  If an invoice with the same filename already exists, its PDF is replaced
+ *  instead of creating duplicate copies (useful when an invoice is edited).
+ */
+export async function uploadInvoicePdfToGoogleDrive(pdfBlob, fileName, details = {}, clientId) {
+  if (!(pdfBlob instanceof Blob)) throw new Error('The invoice PDF could not be prepared for Google Drive.');
+  const safeName = String(fileName || '').trim();
+  if (!safeName || !/\.pdf$/i.test(safeName)) throw new Error('A valid PDF filename is required.');
+
+  const token = await getAccessToken(clientId);
+  const folderId = await ensureInvoiceFolder(token);
+  const existing = await findInvoiceFile(folderId, safeName, token);
+  const fields = 'id,name,mimeType,modifiedTime,webViewLink,size';
+
+  if (existing?.id) {
+    const updated = await driveJson(
+      `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(existing.id)}?uploadType=media&fields=${fields}`,
+      token,
+      { method: 'PATCH', headers: { 'Content-Type': 'application/pdf' }, body: pdfBlob },
+    );
+    return { ...updated, name: updated?.name || safeName, created: false, folderName: INVOICE_FOLDER_NAME };
+  }
+
+  const descriptionParts = [
+    details.invoiceNumber ? `Invoice ${details.invoiceNumber}` : 'GST Billing invoice',
+    details.clientName ? `Client: ${details.clientName}` : '',
+    details.invoiceDate ? `Date: ${details.invoiceDate}` : '',
+    details.businessName ? `Business: ${details.businessName}` : '',
+  ].filter(Boolean);
+  const metadata = {
+    name: safeName,
+    mimeType: 'application/pdf',
+    parents: [folderId],
+    description: descriptionParts.join(' | '),
+  };
+  const boundary = `gst_invoice_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  const multipartBody = new Blob([
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n`,
+    `--${boundary}\r\nContent-Type: application/pdf\r\n\r\n`,
+    pdfBlob,
+    `\r\n--${boundary}--`,
+  ], { type: `multipart/related; boundary=${boundary}` });
+  const created = await driveJson(
+    `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=${fields}`,
+    token,
+    { method: 'POST', headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body: multipartBody },
+  );
+  if (!created?.id) throw new Error('Google Drive did not return the uploaded invoice file.');
+  return { ...created, created: true, folderName: INVOICE_FOLDER_NAME };
+}
+
+export function getGoogleDriveInvoiceFolderName() {
+  return INVOICE_FOLDER_NAME;
 }

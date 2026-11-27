@@ -1703,7 +1703,7 @@ export const findSameBusiness = (list, p, loaded = null) => {
 //     the worst failure available.
 //   * Every invoice, however old, stores the seller's details at save time
 //     under `data.profile`, so the GSTIN is always there to match on.
-//   * It survives a rename. This user has invoices reading "Dice Codes" and
+//   * It survives a rename. This user has invoices reading "Optenix" and
 //     "Anahat Exclusive" under one GSTIN — the same business, renamed. GSTIN
 //     keeps them together; matching on name would have split them in two.
 //

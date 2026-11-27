@@ -7,7 +7,7 @@
 export const SUPPORTERS_URL = 'https://raw.githubusercontent.com/IamRamgarhia/Free-GST-Billing-Software/main/supporters.json';
 
 // The note UPI apps fill in when the QR is scanned, so the maintainer can see
-// who paid: "Free GST Billing support - DiceCodes". Kept to letters,
+// who paid: "Free GST Billing support - Optenix". Kept to letters,
 // digits, spaces, "." and "-" (some UPI apps refuse anything else) and to 50
 // characters, which every app accepts.
 const NOTE_BASE = 'Free GST Billing support';

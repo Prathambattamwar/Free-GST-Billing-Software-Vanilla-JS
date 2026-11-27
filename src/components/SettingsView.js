@@ -21,6 +21,8 @@ import GoogleDriveBackup from './GoogleDriveBackup.js';
 import CostCentreSettings from './CostCentreSettings.js';
 import { BusinessTypePanel, FeaturesPanel, useFeatureDraft } from './FeatureSettings.js';
 import { rekeyCentres } from '../utils/costCentres.js';
+import { getGoogleDriveClientId, connectGoogleDrive, getLatestBackupFromGoogleDrive } from '../utils/googleDrive.js';
+import { isOfflineMode } from '../utils/offlineMode.js';
 import InvoiceNumberSettings from './InvoiceNumberSettings.js';
 import SignatureImages, { SIGN_LAYOUTS } from './SignatureImages.js';
 import { PURPOSE_CODES } from '../utils/purposeCodes.js';
@@ -512,6 +514,7 @@ export default function SettingsView({ onSaved }) {
     const [importSel, setImportSel] = useState(() => Object.fromEntries(ALL_BACKUP_PARTS.map(p => [p.id, true])));
     const [importInspection, setImportInspection] = useState(null);
     const [importJsonText, setImportJsonText] = useState('');
+    const [driveImportBusy, setDriveImportBusy] = useState(false);
     const toggleExport = (id) => setExportSel(prev => ({ ...prev, [id]: !prev[id] }));
     const toggleImport = (id) => setImportSel(prev => ({ ...prev, [id]: !prev[id] }));
     const exportToggleAll = (val) => setExportSel(Object.fromEntries(ALL_BACKUP_PARTS.map(p => [p.id, val])));
@@ -553,6 +556,28 @@ export default function SettingsView({ onSaved }) {
         }
         catch (error) {
             toast(error.message || 'Could not read the Google Drive backup.', 'error');
+        }
+    };
+    const handleImportFromGoogleDrive = async () => {
+        if (isOfflineMode()) {
+            toast('Turn off Offline mode to import a backup from Google Drive.', 'info');
+            return;
+        }
+        const clientId = getGoogleDriveClientId();
+        if (!clientId) {
+            toast('Google Drive is not configured for this website. The app owner must finish the one-time Google setup.', 'warning', 7000);
+            return;
+        }
+        setDriveImportBusy(true);
+        try {
+            await connectGoogleDrive(clientId);
+            const result = await getLatestBackupFromGoogleDrive(clientId);
+            handleDriveRestore(result.text, result.file);
+        } catch (error) {
+            console.error('Import from Google Drive failed:', error);
+            toast(error.message || 'Could not import a backup from Google Drive.', 'error', 7000);
+        } finally {
+            setDriveImportBusy(false);
         }
     };
     const handleImportPick = async (e) => {
@@ -1317,7 +1342,7 @@ export default function SettingsView({ onSaved }) {
                 })))),
             h("div", { id: "section-cloud", className: "glass-panel p-6 mb-6", style: { order: 9 } },
                 h("h3", { className: "section-title" }, "Local browser storage"),
-                h("p", { className: "page-subtitle mb-4" }, "Your business records are saved on this computer in this browser profile by default. Google Drive connection is optional and used only when you choose a backup action."),
+                h("p", { className: "page-subtitle mb-4" }, "Your business records are saved on this computer in this browser profile by default. Google Drive is optional and used only when you choose an invoice upload or backup action."),
                 h("div", { style: { background: 'var(--bg-secondary, #f8fafc)', borderRadius: '10px', padding: '1.25rem', marginBottom: '1rem', border: '1px solid var(--border)' } },
                     h("h4", { style: { fontSize: '0.95rem', marginBottom: '0.5rem' } }, "Private to this browser profile"),
                     h("p", { style: { fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.7, margin: 0 } },
@@ -1403,6 +1428,9 @@ export default function SettingsView({ onSaved }) {
                     h("button", { type: "button", className: "btn btn-secondary", onClick: () => fileInputRef.current?.click() },
                         h(Upload, { size: 18 }),
                         " Import Backup\u2026"),
+                    h("button", { type: "button", className: "btn btn-secondary", onClick: handleImportFromGoogleDrive, disabled: driveImportBusy || isOfflineMode(), title: "Load the latest GST Billing backup from your Google Drive" },
+                        h(Cloud, { size: 18 }),
+                        driveImportBusy ? " Importing from Drive…" : " Import from Google Drive"),
                     h("input", { ref: fileInputRef, type: "file", accept: ".json", onChange: handleImportPick, style: { display: 'none' } }))),
             showExportModal && (h("div", { className: "modal-overlay", onClick: () => setShowExportModal(false) },
                 h("div", { className: "modal-content", style: { maxWidth: '600px' }, onClick: e => e.stopPropagation() },

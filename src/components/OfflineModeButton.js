@@ -8,7 +8,7 @@ import { Wifi, WifiOff, Check } from '../vanilla/icons.js';
 import HelpButton from './HelpButton.js';
 import { useOfflineMode } from '../utils/offlineMode.js';
 const STOPS = [
-    'The app does not automatically check for new releases or sync business records; Google Drive backup actions are also disabled.',
+    'The app does not automatically check for new releases or sync business records; Google Drive upload and backup actions are also disabled.',
     'Your invoices and saved PDFs remain in this browser profile.',
 ];
 const KEEPS = [
@@ -28,8 +28,8 @@ export default function OfflineModeButton({ className, onOpenSettings }) {
                     " Offline mode",
                     h(HelpButton, { title: "Offline mode", doc: "security#offline-mode", size: 16 })),
                 h("p", { style: { margin: '0 0 1rem', fontSize: '0.9rem', color: 'var(--text-secondary)' } }, on
-                    ? 'On. The app keeps business data in this browser, disables automatic release checks, and disables Google Drive backup actions.'
-                    : 'Off. Business data is still stored locally by default. Optional Google Drive backups are available when you choose them; first-time or uncached libraries may still require internet.'),
+                    ? 'On. The app keeps business data in this browser, disables automatic release checks, and disables Google Drive upload and backup actions.'
+                    : 'Off. Business data is still stored locally by default. Optional Google Drive invoice uploads and backups are available when you choose them; first-time or uncached libraries may still require internet.'),
                 h("div", { style: { fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.3rem' } }, on ? 'While it is on' : 'When it is on'),
                 h("ul", { style: { margin: '0 0 0.8rem', paddingLeft: '1.1rem', fontSize: '0.85rem', lineHeight: 1.55 } }, STOPS.map((t) => h("li", { key: t }, t))),
                 h("div", { style: { fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.3rem' } }, "What stays the same"),

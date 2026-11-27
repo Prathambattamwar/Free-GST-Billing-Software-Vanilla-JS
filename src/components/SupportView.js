@@ -1,11 +1,11 @@
 // v1.10.75 - Support & About. Who builds the app, how to help (free ways
-// first, then UPI), and what DiceCodes does for businesses. Decided with the
+// first, then UPI), and what Optenix does for businesses. Decided with the
 // maintainer: ask gently, never lock a feature, never print anything on a
 // user's invoice. UPI only for money: it works offline (the QR is drawn here)
 // and costs the giver nothing.
 import { useEffect, useState, h, Fragment } from '../vanilla/dom.js';
 import QRCode from 'qrcode';
-import { Heart, Star, Share2, Bug, Copy, Check, Mail, Globe, Code, Wrench, Database, LifeBuoy, Bot, Smartphone, Workflow, Users } from '../vanilla/icons.js';
+import { Heart, Star, Share2, Bug, Copy, Check, Globe, Code, Wrench, Database, LifeBuoy, Bot, Smartphone, Workflow, Users } from '../vanilla/icons.js';
 import { toast } from './Toast.js';
 import { getProfile } from '../store.js';
 import { upiNote } from '../utils/supporters.js';
@@ -18,10 +18,9 @@ import HelpButton from './HelpButton.js';
 import { SafePrivateSection } from './SafePrivateNote.js';
 const inr = (n) => `₹${Number(n).toLocaleString('en-IN')}`;
 const SUPPORT_UPI_ID = 'princeramgarhiaa-1@okaxis';
-const UPI_NAME = 'DiceCodes';
+const UPI_NAME = 'Optenix';
 const REPO = 'https://github.com/IamRamgarhia/Free-GST-Billing-Software';
-const EMAIL = 'contact@dicecodes.com';
-const SITE = 'https://dicecodes.com';
+const SITE = 'https://optenix.in';
 // v1.10.83 - ₹200 is the smallest suggested amount; "Any amount" (0) comes last.
 const AMOUNTS = [200, 500, 1000, 0];
 const SERVICES = [
@@ -89,7 +88,7 @@ export default function SupportView() {
                     h(HelpButton, { title: "Free, and it stays free", doc: "support#about", size: 16 })),
                 h("p", { style: { margin: 0, color: 'var(--text-secondary)', lineHeight: 1.6, maxWidth: '70ch' } },
                     "Free GST Billing is built and maintained by ",
-                    h("b", null, "DiceCodes"),
+                    h("b", null, "Optenix"),
                     " in India. No ads, no account, no locked features, and your business records are stored locally in your browser. If it saves you time every month, you can help keep the fixes and new features coming."))),
         h("div", { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1.25rem', marginBottom: '1.25rem' } },
             h("div", { className: "glass-panel", style: card },
@@ -114,7 +113,7 @@ export default function SupportView() {
                     h("b", { style: { color: 'var(--text-primary)' } }, note),
                     businessName && (h("label", { style: { display: 'flex', gap: '0.4rem', alignItems: 'center', marginTop: '0.35rem', cursor: 'pointer' } },
                         h("input", { type: "checkbox", checked: withName, onChange: (e) => setWithName(e.target.checked) }),
-                        "Include my business name, so DiceCodes can thank you")))),
+                        "Include my business name, so Optenix can thank you")))),
             h("div", { className: "glass-panel", style: card },
                 h("h3", { style: { margin: '0 0 0.25rem', fontSize: '1rem' } },
                     "Help without paying ",
@@ -159,8 +158,8 @@ export default function SupportView() {
         h(ProblemLog, null),
         h("div", { className: "glass-panel", style: card },
             h("h3", { style: { margin: '0 0 0.25rem', fontSize: '1rem' } },
-                "Work with DiceCodes ",
-                h(HelpButton, { title: "Work with DiceCodes", doc: "support#services", size: 16 })),
+                "Work with Optenix ",
+                h(HelpButton, { title: "Work with Optenix", doc: "support#services", size: 16 })),
             h("p", { style: { margin: '0 0 1rem', fontSize: '0.82rem', color: 'var(--text-muted)' } }, "The team behind this app builds software for businesses too."),
             h("div", { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.75rem', marginBottom: '1.1rem' } }, SERVICES.map((w) => (h("div", { key: w.title, style: { display: 'flex', gap: '0.7rem', padding: '0.85rem', borderRadius: 8, background: 'var(--bg-secondary)' } },
                 h(w.icon, { size: 20, style: { color: 'var(--primary)', flexShrink: 0, marginTop: 2 } }),
@@ -168,11 +167,7 @@ export default function SupportView() {
                     h("div", { style: { fontWeight: 600, fontSize: '0.88rem' } }, w.title),
                     h("div", { style: { fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.15rem', lineHeight: 1.45 } }, w.text)))))),
             h("div", { style: { display: 'flex', gap: '0.6rem', flexWrap: 'wrap' } },
-                h("a", { className: "btn btn-primary", href: `mailto:${EMAIL}?subject=${encodeURIComponent('Project enquiry (from Free GST Billing)')}` },
-                    h(Mail, { size: 16 }),
-                    " Email ",
-                    EMAIL),
                 h("a", { className: "btn btn-secondary", href: SITE, target: "_blank", rel: "noopener noreferrer" },
                     h(Globe, { size: 16 }),
-                    " dicecodes.com")))));
+                    " optenix.in")))));
 }

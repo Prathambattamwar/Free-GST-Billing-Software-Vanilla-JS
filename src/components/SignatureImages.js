@@ -17,7 +17,7 @@ export default function SignatureImages({ sigImg, stampImg, sigHeight = 60, stam
     if (!sigImg && !stampImg)
         return null;
     const justify = align === 'right' ? 'flex-end' : align === 'left' ? 'flex-start' : 'center';
-    const img = (src, alt, h, w, extra = {}) => (h("img", { src: src, alt: alt, style: { maxHeight: `${h}px`, maxWidth: `${w}px`, objectFit: 'contain', display: 'block', ...extra } }));
+    const img = (src, alt, imageHeight, imageWidth, extra = {}) => (h("img", { src: src, alt: alt, style: { maxHeight: `${imageHeight}px`, maxWidth: `${imageWidth}px`, objectFit: 'contain', display: 'block', ...extra } }));
     const stamp = stampImg && img(stampImg, 'Stamp', stampHeight, stampMaxWidth);
     const sign = sigImg && img(sigImg, 'Signature', sigHeight, sigMaxWidth);
     if (layout === 'stack' || (layout === 'over' && !(sigImg && stampImg))) {

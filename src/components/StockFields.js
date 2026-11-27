@@ -21,7 +21,7 @@ export function CategoryBrandFields({ form, products, onChange }) {
             h(ComboInput, { id: "product-category", type: "text", className: "form-input", options: categoryOptions(products), listLabel: "Categories used before", value: form.category, onChange: (e) => onChange('category', e.target.value), placeholder: "e.g. Garments > Men > Shirts", title: "A main category, and up to 3 sub-levels after >" })),
         h("div", { className: "form-group" },
             h("label", { className: "form-label", htmlFor: "product-brand" }, "Brand (optional)"),
-            h(ComboInput, { id: "product-brand", type: "text", className: "form-input", options: brandOptions(products), listLabel: "Brands used before", value: form.brand, onChange: (e) => onChange('brand', e.target.value), placeholder: "e.g. DiceCodes" }))));
+            h(ComboInput, { id: "product-brand", type: "text", className: "form-input", options: brandOptions(products), listLabel: "Brands used before", value: form.brand, onChange: (e) => onChange('brand', e.target.value), placeholder: "e.g. Optenix" }))));
 }
 // #148 - "+ Second unit": one row, Box = 12 Pcs, and an optional box price.
 export function AltUnitFields({ form, units, onChange }) {
