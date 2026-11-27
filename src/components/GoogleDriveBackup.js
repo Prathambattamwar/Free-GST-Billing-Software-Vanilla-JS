@@ -29,6 +29,7 @@ export default function GoogleDriveBackup({ onRestoreBackup }) {
   const [identityError, setIdentityError] = useState(false);
   const [busy, setBusy] = useState('');
   const [lastBackup, setLastBackup] = useState('');
+  const [showSetupHelp, setShowSetupHelp] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -66,9 +67,15 @@ export default function GoogleDriveBackup({ onRestoreBackup }) {
   const handleConnect = async () => {
     if (offline) { toast('Turn off Offline mode to connect Google Drive.', 'info'); return; }
     if (!clientId) {
-      toast('Google Drive is not enabled for this website yet. Please contact the app administrator.', 'info', 6000);
+      setShowSetupHelp(true);
+      toast('Google Drive is not configured for this website yet. The app owner must finish the one-time Google setup.', 'warning', 7000);
       return;
     }
+    if (!identityReady) {
+      toast('Google sign-in is not ready yet. Use Retry and then connect again.', 'info', 6000);
+      return;
+    }
+    setShowSetupHelp(false);
     setBusy('connect');
     try {
       await connectGoogleDrive(clientId);
@@ -163,10 +170,19 @@ export default function GoogleDriveBackup({ onRestoreBackup }) {
         !connected
           ? h('button', {
             type: 'button', className: 'btn btn-primary', onClick: handleConnect,
-            disabled: offline || actionBusy || (!!clientId && !identityReady && !identityError),
+            disabled: offline || actionBusy || (!!clientId && !identityReady),
+            'aria-label': 'Connect Google Drive',
           }, h(Cloud, { size: 16 }), connectLabel)
           : h('button', { type: 'button', className: 'btn btn-secondary', onClick: handleDisconnect, disabled: actionBusy },
             'Disconnect'))),
+
+    showSetupHelp && !clientId && h('div', { role: 'status', style: {
+      marginTop: '0.85rem', padding: '0.8rem 0.9rem', borderRadius: 9,
+      border: '1px solid var(--border)', background: 'var(--bg-secondary)',
+    } },
+      h('strong', { style: { display: 'block', fontSize: '0.82rem', marginBottom: '0.25rem' } }, 'One-time Google Drive setup is required'),
+      h('p', { style: { margin: 0, color: 'var(--text-secondary)', fontSize: '0.78rem', lineHeight: 1.55 } },
+        'The app owner must add the Google OAuth Web Client ID in src/config/googleDrive.js and authorize this website address in Google Cloud Console. After that one-time setup, users can connect with this button without entering any credentials.')),
 
     identityError && h('div', { style: { marginTop: '0.75rem' } },
       h('p', { style: { margin: '0 0 0.45rem', color: 'var(--text-muted)', fontSize: '0.78rem' } },

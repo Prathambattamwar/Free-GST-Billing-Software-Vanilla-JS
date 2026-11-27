@@ -77,7 +77,10 @@ function requestGoogleAccessToken(clientId) {
         include_granted_scopes: true,
         callback: (response) => {
           if (response?.error) {
-            finish(reject, new Error(response.error_description || response.error));
+            const message = response.error === 'origin_mismatch'
+              ? 'This website address is not authorized for Google sign-in. Add the current origin to Authorized JavaScript origins in Google Cloud Console.'
+              : (response.error_description || response.error);
+            finish(reject, new Error(message));
             return;
           }
           if (!response?.access_token) {
@@ -109,7 +112,7 @@ function requestGoogleAccessToken(clientId) {
 async function getAccessToken(clientId) {
   const id = String(clientId || '').trim();
   if (!id || !id.endsWith('.apps.googleusercontent.com')) {
-    throw new Error('Enter a valid Google OAuth Web Client ID first.');
+    throw new Error('Google Drive is not configured for this website. The app owner must add a valid Web OAuth Client ID in src/config/googleDrive.js.');
   }
 
   if (currentClientId === id && currentAccessToken && Date.now() < tokenExpiresAt - 60_000) {

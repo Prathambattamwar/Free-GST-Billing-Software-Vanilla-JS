@@ -373,10 +373,10 @@ function PresumptiveTab({ presumptiveInputs, setPresumptiveInputs, presumptive, 
                             "Why presumptive taxation?",
                             h(HelpButton, { title: "Why presumptive taxation?", doc: "income-tax#why-presumptive", size: 16 })),
                         h("ul", { style: { margin: '0.25rem 0 0', paddingLeft: '1.2rem', lineHeight: 1.6 } },
-                            h("li", null, "Skip full books of account + audit (\u00A744AB)"),
+                            h("li", null, "Skip full books of account + audit (Section 44AB)"),
                             h("li", null, "Skip advance-tax installments \u2014 pay 100% by 15 March"),
                             h("li", null, "Simpler ITR-4 (Sugam) form instead of ITR-3"),
-                            h("li", null, "Once opted in, must continue for 5 assessment years \u2014 opting out early disqualifies you from \u00A744AD for the next 5 years"))))))));
+                            h("li", null, "Once opted in, must continue for 5 assessment years \u2014 opting out early disqualifies you from Section 44AD for the next 5 years"))))))));
 }
 // ============================================================================
 // Advance Tax sub-tab
@@ -456,17 +456,17 @@ function AdvanceTaxTab({ advanceInputs, setAdvanceInputs, schedule, totalTax, re
                     h("button", { className: "btn btn-secondary", style: { fontSize: '0.78rem', marginTop: '0.5rem' }, onClick: addPayment }, "+ Add payment")),
                 h("div", { className: "glass-panel p-4" },
                     h("h4", { style: { marginTop: 0, marginBottom: '0.5rem' } },
-                        "Interest under \u00A7234B / \u00A7234C",
+                        "Interest under Section 234B / Section 234C",
                         h(HelpButton, { title: "Interest under 234B / 234C", doc: "income-tax#interest-234", size: 16 })),
-                    h(Row, { label: "\u00A7234C \u2014 installment shortfall", value: interest234C, muted: !interest234C }),
-                    h(Row, { label: "\u00A7234B \u2014 post year-end delay (1% per month)", value: interest234B, muted: !interest234B }),
+                    h(Row, { label: "Section 234C \u2014 installment shortfall", value: interest234C, muted: !interest234C }),
+                    h(Row, { label: "Section 234B \u2014 post year-end delay (1% per month)", value: interest234B, muted: !interest234B }),
                     h(Row, { label: "Total interest", value: interest234B + interest234C, bold: true }),
                     h("div", { style: { marginTop: '0.75rem', padding: '0.5rem', background: 'var(--bg-secondary)', borderRadius: 6, fontSize: '0.75rem', color: 'var(--text-muted)' } },
-                        h("strong", null, "\u00A7234C"),
+                        h("strong", null, "Section 234C"),
                         ": 1% per month for shortfalls in Q1-Q3 (3 months each) and Q4 (1 month). Waived if you paid \u2265 12% by 15 Jun / 36% by 15 Sep.",
                         h("br", null),
                         h("br", null),
-                        h("strong", null, "\u00A7234B"),
+                        h("strong", null, "Section 234B"),
                         ": 1% per month from 1 April of AY if you paid less than 90% of tax by 31 March.")))))));
 }
 // ============================================================================
@@ -510,19 +510,19 @@ function RegimeCalculatorTab({ inputs, setInputs, comparison, onReset }) {
                     "I am a government employee")),
             h(NumberInput, { label: "Gross Salary (Form 16 box 1)", hint: "Enter zero if you don't have salary income. Standard Deduction is applied automatically.", value: inputs.salary, onChange: v => set({ salary: v }) }),
             h(NumberInput, { label: "Business / Professional Income", hint: inputs._autofillHint ? '✨ Auto-filled from your invoices minus purchases + expenses this FY. Override if needed.' : 'Net profit from your books.', value: inputs.businessIncome, onChange: v => set({ businessIncome: v, _autofillHint: false }) }),
-            h(NumberInput, { label: "House Property (rent received)", hint: "Rent received less municipal tax and the 30% standard deduction. Enter home-loan interest separately under \u00A724b below.", value: inputs.housePropertyIncome, onChange: v => set({ housePropertyIncome: v }) }),
+            h(NumberInput, { label: "House Property (rent received)", hint: "Rent received less municipal tax and the 30% standard deduction. Enter home-loan interest separately under Section 24b below.", value: inputs.housePropertyIncome, onChange: v => set({ housePropertyIncome: v }) }),
             h(NumberInput, { label: "Other Sources (bank interest, dividends, etc.)", hint: "Includes savings-account interest; 80TTA claims that separately.", value: inputs.otherSources, onChange: v => set({ otherSources: v }) }),
             h("h4", { style: { marginTop: '1rem', marginBottom: '0.5rem', fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-muted)' } },
                 "Capital gains (special rates)",
                 h(HelpButton, { title: "Capital gains (special rates)", doc: "income-tax#capital-gains", size: 16 })),
-            h(NumberInput, { label: "STCG on listed equity (\u00A7111A)", hint: "Taxed flat at 20%. Excludes debt / property STCG (those go into slab).", value: inputs.stcgAtSpecialRate, onChange: v => set({ stcgAtSpecialRate: v }) }),
-            h(NumberInput, { label: "LTCG on listed equity (\u00A7112A)", hint: "First \u20B91.25 lakh exempt; the rest taxed flat at 12.5%.", value: inputs.ltcgAtSpecialRate, onChange: v => set({ ltcgAtSpecialRate: v }) }),
+            h(NumberInput, { label: "STCG on listed equity (Section 111A)", hint: "Taxed flat at 20%. Excludes debt / property STCG (those go into slab).", value: inputs.stcgAtSpecialRate, onChange: v => set({ stcgAtSpecialRate: v }) }),
+            h(NumberInput, { label: "LTCG on listed equity (Section 112A)", hint: "First \u20B91.25 lakh exempt; the rest taxed flat at 12.5%.", value: inputs.ltcgAtSpecialRate, onChange: v => set({ ltcgAtSpecialRate: v }) }),
             h("h4", { style: { marginTop: '1rem', marginBottom: '0.5rem', fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-muted)' } },
                 "Deductions (Old Regime only)",
                 h(HelpButton, { title: "Deductions (Old Regime only)", doc: "income-tax#deductions", size: 16 })),
             h("p", { style: { fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: 0, marginBottom: '0.5rem' } }, "Under New Regime (default from FY 2023-24), only Section 80CCD(2) \u2014 employer NPS contribution \u2014 is allowed. These deductions ONLY reduce your Old-Regime tax."),
             Object.entries(DEDUCTION_CAPS).map(([section, cap]) => (h(NumberInput, { key: section, label: `Section ${section}`, hint: `Cap: ${effectiveCapLabel(section, cap)} · ${SECTION_DESCRIPTIONS[section] || ''}`, value: inputs.deductions?.[section] || 0, onChange: v => setDed(section, v) }))),
-            h(NumberInput, { label: "\u00A780CCD(2) \u2014 employer NPS", hint: "Allowed under BOTH regimes, up to 10% of salary (14% for government employees).", value: inputs.deductions?.['80CCD2'] || 0, onChange: v => setDed('80CCD2', v) })),
+            h(NumberInput, { label: "Section 80CCD(2) \u2014 employer NPS", hint: "Allowed under BOTH regimes, up to 10% of salary (14% for government employees).", value: inputs.deductions?.['80CCD2'] || 0, onChange: v => setDed('80CCD2', v) })),
         h("div", null,
             h("div", { className: "glass-panel p-4", style: { marginBottom: '1rem' } },
                 h("h3", { className: "section-title", style: { marginTop: 0 } },
@@ -545,7 +545,7 @@ function RegimeCalculatorTab({ inputs, setInputs, comparison, onReset }) {
                     h(Info, { size: 16, style: { flexShrink: 0, marginTop: 2, color: 'var(--primary)' } }),
                     h("div", null,
                         h("strong", null, "How this is computed:"),
-                        " slabs \u2192 \u00A787A rebate \u2192 surcharge (income > \u20B950L) \u2192 4% Health & Ed Cess. STCG (\u00A7111A) at 20%, LTCG (\u00A7112A) at 12.5% over \u20B91.25 lakh exempt. Numbers auto-save; refresh the page and they persist."))))));
+                        " slabs \u2192 Section 87A rebate \u2192 surcharge (income > \u20B950L) \u2192 4% Health & Ed Cess. STCG (Section 111A) at 20%, LTCG (Section 112A) at 12.5% over \u20B91.25 lakh exempt. Numbers auto-save; refresh the page and they persist."))))));
 }
 function RegimeCard({ title, result, highlighted, color }) {
     return (h("div", { className: "glass-panel p-4", style: {
@@ -564,7 +564,7 @@ function RegimeCard({ title, result, highlighted, color }) {
         (result.stcgTax > 0 || result.ltcgTax > 0) && (h(Fragment, null,
             h(Row, { label: "STCG (20%)", value: result.stcgTax, muted: !result.stcgTax }),
             h(Row, { label: "LTCG (12.5%)", value: result.ltcgTax, muted: !result.ltcgTax }))),
-        result.rebate87A > 0 && h(Row, { label: "\u00A787A Rebate", value: -result.rebate87A }),
+        result.rebate87A > 0 && h(Row, { label: "Section 87A Rebate", value: -result.rebate87A }),
         result.surcharge > 0 && h(Row, { label: "Surcharge", value: result.surcharge }),
         h(Row, { label: "Health & Ed Cess (4%)", value: result.cess }),
         h("hr", { style: { opacity: 0.2, margin: '0.5rem 0' } }),
@@ -863,7 +863,7 @@ function SummaryTab({ bills, expenses, purchases, profile, comparison, inputs, p
                     h("strong", null, "Note:"),
                     " ",
                     formatCurrency(assets),
-                    " in Asset Purchases isn't deducted here. Assets are capitalised then depreciated under \u00A732 \u2014 enter depreciation as a business expense in the year it's claimed (not the year of purchase)."))),
+                    " in Asset Purchases isn't deducted here. Assets are capitalised then depreciated under Section 32 \u2014 enter depreciation as a business expense in the year it's claimed (not the year of purchase)."))),
             h("div", { className: "glass-panel p-4" },
                 h("h3", { className: "section-title" },
                     "Tax snapshot",
@@ -914,7 +914,7 @@ function SummaryTab({ bills, expenses, purchases, profile, comparison, inputs, p
                     " \u2014 Zerodha / Groww / ICICI Direct CSV import"),
                 h("li", null,
                     h("strong", null, "House Property module"),
-                    " \u2014 multi-property, home-loan interest \u00A724(b)"),
+                    " \u2014 multi-property, home-loan interest Section 24(b)"),
                 h("li", null,
                     h("strong", null, "ITR-1 / ITR-2 / ITR-3 support"),
                     " \u2014 for salaried + rental + capital-gains assessees"),

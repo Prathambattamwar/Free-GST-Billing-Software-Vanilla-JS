@@ -86,6 +86,14 @@ export default function SettingsView({ onSaved }) {
         }
         catch { /* storage blocked */ }
     };
+    // Settings lives inside the app's .main-content scroll container, not
+    // the window. Scroll that container when switching tabs so the selected
+    // settings section is visible even after the user has scrolled down.
+    const scrollSettingsToTop = () => {
+        const content = document.querySelector('.main-content');
+        if (content) content.scrollTo({ top: 0, behavior: 'smooth' });
+        else window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
     // v1.10.55 — reported (#43, @sangwanmail-eng): "Some time details not save
     // after update in setting tab", and the title said there was no save button
     // at all.
@@ -807,8 +815,7 @@ export default function SettingsView({ onSaved }) {
                         h("span", { style: { fontSize: '0.7rem', padding: '0.1rem 0.5rem', borderRadius: 999, background: 'var(--bg-secondary)', border: '1px solid var(--border)', marginLeft: '0.55rem', fontWeight: 600 } },
                             JUMP_NAV_SECTIONS.length,
                             " sections"))),
-                h("button", { type: "button", className: "btn btn-primary", onClick: () => { setActiveSection('section-drive'); window.scrollTo({ top: 0 }); }, style: { flexShrink: 0, marginLeft: 'auto' } },
-                    h(Cloud, { size: 16 }), " Google Drive"))),
+                )),
         h("div", { ref: saveBarRef, className: "settings-bar", style: {
                 position: 'sticky',
                 zIndex: 30,
@@ -830,7 +837,7 @@ export default function SettingsView({ onSaved }) {
                 return (h("a", { key: id, href: `#${id}`, "aria-current": active ? 'page' : undefined, onClick: (e) => {
                         e.preventDefault();
                         setActiveSection(id);
-                        window.scrollTo({ top: 0 });
+                        scrollSettingsToTop();
                     }, style: {
                         fontSize: '0.76rem',
                         fontWeight: active ? 700 : 600,
