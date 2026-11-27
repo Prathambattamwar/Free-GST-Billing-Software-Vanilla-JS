@@ -1,6 +1,6 @@
 import { h, Fragment } from './vanilla/dom.js';
 import { useState, useEffect, useRef, useMemo, lazy, Suspense } from './vanilla/dom.js';
-import { Home, FileText, Settings, Plus, Users, Package, BarChart3, Wallet, RefreshCw, Receipt, BookOpen, Moon, Sun, Download, X, ShoppingCart, ChevronDown, Building2, Pencil, Search, Command, Bell, Calculator, Menu, Heart, Banknote } from './vanilla/icons.js';
+import { Home, FileText, Settings, Plus, Users, Package, BarChart3, Wallet, RefreshCw, Receipt, BookOpen, Moon, Sun, Download, X, ShoppingCart, ChevronDown, Building2, Pencil, Search, Command, Bell, Calculator, Menu, Heart, Banknote, MessageCircle } from './vanilla/icons.js';
 import { getAllProfilesWithHidden, saveProfile, getEnabledModules, getMenuOrder, getMenuHidden, getMenuDots, onMenuChanged, getAllBills, getAllProducts, getAllRecurring, getStockAlertSettings, runUpdateNow, getLockStatus, visibleProfiles, hasHiddenProfiles, openHiddenCompanies, hideCompaniesAgain, isOpenedHidden, DATA_SAVED_EVENT } from './store.js';
 import { isModuleEnabled, localToday, trackedStock } from './utils.js';
 import { orderedMenu } from './utils/businessTypes.js';
